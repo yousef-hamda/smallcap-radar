@@ -1,0 +1,1 @@
+ALTER TABLE `strategy_runs` ADD `retry_queue` text DEFAULT '[]' NOT NULL;
