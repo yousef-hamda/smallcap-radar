@@ -29,7 +29,7 @@ Status is implementation evidence, not an assertion of historical strategy profi
 - `npm run test:engine`: 30/30 passed, plus 3 SQLite transaction/concurrency tests.
 - `npm run typecheck`: passed.
 - Production Sites build: passed.
-- No physical-phone installation test, browser visual QA, full market scan or historical benchmark reproduction was completed.
+- Local browser QA completed for initial, synthetic, Bounce, company evidence, Lab and exit-simulation flows. No physical-phone installation test, full market scan or historical benchmark reproduction was completed.
 
 ## Known constraints
 
