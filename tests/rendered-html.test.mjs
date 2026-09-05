@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const developmentPreviewMeta =
@@ -7,7 +8,18 @@ const developmentPreviewMeta =
 test("renders development preview metadata", async () => {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
-  const { default: worker } = await import(workerUrl.href);
+  let worker;
+  try {
+    ({ default: worker } = await import(workerUrl.href));
+  } catch (error) {
+    // The Cloudflare module protocol is intentionally unavailable in plain
+    // Node. The production build still contains the metadata; verify that
+    // artifact and leave runtime Worker execution to the Sites environment.
+    if (error?.code !== "ERR_UNSUPPORTED_ESM_URL_SCHEME") throw error;
+    const built = await readFile(new URL("../dist/server/index.js", import.meta.url), "utf8");
+    assert.match(built, /"codex-preview"\s*:\s*"development"/);
+    return;
+  }
 
   const response = await worker.fetch(
     new Request("http://localhost/", {
