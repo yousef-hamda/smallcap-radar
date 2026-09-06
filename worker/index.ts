@@ -71,28 +71,34 @@ async function sendCompletionPush(env: Env, run: any) {
   return true;
 }
 
-async function scheduleNext(requestUrl: string, runId: string, env: Env) {
-  const target = new URL("/__radar-background", requestUrl);
+async function scheduleNext(request: Request, runId: string, env: Env) {
+  const target = new URL("/__radar-background", request.url);
+  const cookie = request.headers.get("Cookie");
   for (let attempt = 0; attempt < 3; attempt++) {
-    const response = await fetch(target, { method: "POST", headers: { "Authorization": `Bearer ${env.BACKGROUND_SCAN_SECRET}`, "Content-Type": "application/json" }, body: JSON.stringify({ runId }) });
+    const headers: Record<string, string> = { "Authorization": `Bearer ${env.BACKGROUND_SCAN_SECRET}`, "Content-Type": "application/json" };
+    // Private Sites authenticate before the Worker runs. Preserve the owner's
+    // session on the internal baton so the next batch reaches this Worker.
+    if (cookie) headers.Cookie = cookie;
+    const response = await fetch(target, { method: "POST", headers, body: JSON.stringify({ runId }) });
     if (response.ok) return;
+    await log(runId, "background", `Background baton attempt ${attempt + 1}: HTTP ${response.status}`);
     await delay(400 * (attempt + 1));
   }
   await log(runId, "background", "تعذّر تمرير مهمة الفحص إلى الدفعة التالية بعد ثلاث محاولات.");
 }
 
-async function runBackgroundBatch(requestUrl: string, runId: string, env: Env) {
+async function runBackgroundBatch(request: Request, runId: string, env: Env) {
   try {
     const result = await processScanBatch(runId);
     if (result.busy) return;
     if (result.done) {
       const delivered = await sendCompletionPush(env, result.run);
-      if (!delivered) { await delay(1_000); await scheduleNext(requestUrl, runId, env) }
-    } else await scheduleNext(requestUrl, runId, env);
+      if (!delivered) { await delay(1_000); await scheduleNext(request, runId, env) }
+    } else await scheduleNext(request, runId, env);
   } catch (error) {
     await log(runId, "background", error instanceof Error ? error.message : "خطأ في المهمة الخلفية").catch(() => {});
     await delay(1_000);
-    await scheduleNext(requestUrl, runId, env).catch(() => {});
+    await scheduleNext(request, runId, env).catch(() => {});
   }
 }
 
@@ -119,12 +125,31 @@ const worker = {
       } catch (error: any) { return json({ error: error.message || "تعذّر تفعيل الإشعارات" }, error.status || 500) }
     }
 
+    if (url.pathname === "/api/push/test" && request.method === "POST") {
+      try {
+        sameOrigin(request);
+        await ensureSchema();
+        const input = await request.json() as any;
+        if (typeof input?.endpoint !== "string") return json({ error: "اشتراك غير صالح" }, 400);
+        const row = await db().prepare("SELECT subscription FROM push_subscriptions WHERE endpoint=?").bind(input.endpoint).first() as any;
+        if (!row) return json({ error: "هذا الجهاز غير مسجل للإشعارات" }, 404);
+        webpush.setVapidDetails("mailto:yousef-hamda@users.noreply.github.com", env.VAPID_PUBLIC_KEY, env.VAPID_PRIVATE_KEY);
+        const payload = JSON.stringify({ title: "إشعارات رادار جاهزة", body: "تم ربط هذا الهاتف بنجاح. سنرسل لك تنبيهًا عند اكتمال الفحص.", url: "/" });
+        const subscription = JSON.parse(row.subscription);
+        const details = webpush.generateRequestDetails(subscription, payload, { TTL: 300, urgency: "high" });
+        const pushBody = typeof details.body === "string" ? details.body : new Uint8Array(details.body);
+        const response = await fetch(details.endpoint, { method: details.method, headers: details.headers, body: pushBody });
+        if (!response.ok) throw Error(`Push HTTP ${response.status}`);
+        return json({ sent: true });
+      } catch (error: any) { return json({ error: error.message || "تعذّر إرسال إشعار الاختبار" }, 503) }
+    }
+
     if (url.pathname === "/api/background-scan/start" && request.method === "POST") {
       try {
         sameOrigin(request);
         const input = await request.json() as any;
         const run = await startScan(input.mode);
-        ctx.waitUntil(runBackgroundBatch(request.url, run.id, env));
+        ctx.waitUntil(runBackgroundBatch(request, run.id, env));
         return json({ run, background: true }, 202);
       } catch (error: any) { return json({ error: error.message || "تعذّر بدء الفحص" }, error.status || 503) }
     }
@@ -133,7 +158,7 @@ const worker = {
       if (request.headers.get("Authorization") !== `Bearer ${env.BACKGROUND_SCAN_SECRET}`) return json({ error: "غير مصرح" }, 401);
       const input = await request.json() as any;
       if (typeof input.runId !== "string") return json({ error: "معرّف غير صالح" }, 400);
-      ctx.waitUntil(runBackgroundBatch(request.url, input.runId, env));
+      ctx.waitUntil(runBackgroundBatch(request, input.runId, env));
       return json({ accepted: true }, 202);
     }
 

@@ -1,8 +1,19 @@
 import { createRun, currentHash, db, ensureSchema, insertSnapshot, log } from './storage';
 import { companySnapshot, quickSymbols, universe } from './providers';
 
-const BATCH_SIZE = 8;
-export const SCAN_SOURCE_VERSION = 'Nasdaq/SEC v4';
+const BATCH_SIZE = 12;
+export const SCAN_SOURCE_VERSION = 'Nasdaq/SEC v5';
+
+const nonTradable = /\b(etf|fund|trust|warrant|right|unit|preferred|depositary|senior note|bond|debenture|limited partnership)\b|,\s*L\.P\./i;
+
+function preliminaryCandidates(companies: any[]) {
+  return companies.filter((company) => {
+    if (nonTradable.test(String(company.name || ''))) return false;
+    const marketCap = Number(company.marketCap);
+    const price = Number(company.price);
+    return Number.isFinite(marketCap) && marketCap >= 25_000_000 && marketCap <= 2_000_000_000 && Number.isFinite(price) && price > 0;
+  });
+}
 
 export const publicRun = (run: any) => ({
   ...run,
@@ -25,12 +36,14 @@ export async function startScan(modeInput: unknown) {
   try {
     let companies = await universe();
     if (!companies.length) throw new Error('دليل الشركات المحلي فارغ');
+    const universeTotal = companies.length;
     if (mode === 'quick') {
       const bySymbol = new Map(companies.map((company: any) => [company.ticker, company]));
       companies = quickSymbols.map((symbol) => bySymbol.get(symbol)).filter(Boolean) as any[];
-    }
-    await database.prepare('UPDATE strategy_runs SET universe=?,total=?,stage=1 WHERE id=?').bind(JSON.stringify(companies), companies.length, id).run();
-    await log(id, 'universe', `Loaded ${companies.length} exchange-listed symbols from bundled/live Nasdaq directory (${mode})`);
+    } else companies = preliminaryCandidates(companies);
+    const screenedOut = universeTotal - companies.length;
+    await database.prepare('UPDATE strategy_runs SET universe=?,total=?,universe_total=?,screened_out=?,stage=3 WHERE id=?').bind(JSON.stringify(companies), companies.length, universeTotal, screenedOut, id).run();
+    await log(id, 'universe', `Loaded ${universeTotal} exchange-listed symbols; ${companies.length} passed security type, price and $25M-$2B preliminary gates (${mode})`);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'تعذّر تجهيز دليل الشركات';
     await database.prepare("UPDATE strategy_runs SET status='failed',error=? WHERE id=?").bind(message, id).run();
