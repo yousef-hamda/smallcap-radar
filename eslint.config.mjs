@@ -14,6 +14,14 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
   ]),
   {
+    files: ["app/**/*.{ts,tsx}", "lib/**/*.ts"],
+    rules: {
+      // Provider payloads and Cloudflare bindings are runtime-validated at the
+      // boundary; their upstream JSON shapes are intentionally open-ended.
+      "@typescript-eslint/no-explicit-any": "off",
+    },
+  },
+  {
     files: ["components/ui/**/*.{ts,tsx}", "hooks/use-mobile.ts"],
     rules: {
       // These files are vendored verbatim from shadcn@4.17.0. Keep the

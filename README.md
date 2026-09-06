@@ -1,16 +1,16 @@
-# Small-Cap Radar V2 — research preview
+# Small-Cap Radar V2 — professional research terminal
 
 Arabic RTL mobile-first PWA, hosted privately on Cloudflare Workers through Sites. **This is not the completed/validated V2 described in the supplied plan.** It is a working research foundation with a deliberately disabled final ranking. Do not interpret synthetic fixtures or referenced historical benchmark rates as market results.
 
 ## Implemented
 
-- Arabic responsive dashboard, Core/Bounce filters, company gate/evidence detail and five-range historical chart, persistent favorites, JSON snapshot import and audit export.
-- Cloudflare D1 migrations, immutable run identifiers and per-run snapshots/evaluations, explicit provider errors and resumable symbol cursor with lease/offset concurrency protection.
-- Live experimental SEC universe / Company Facts and Yahoo price history adapters. Each user-initiated step fetches at most two symbols. Scanning requires the app to remain open; closing it preserves the cursor. The complete market scan has **not** been load-tested or completed.
+- Professional Arabic RTL research terminal with a dense desktop table, responsive mobile layout, Core/Bounce filters, company gate/evidence detail, five-range historical chart, persistent favorites, JSON snapshot import and audit export.
+- Cloudflare D1 self-initializing schema and migrations, immutable run identifiers and per-run snapshots/evaluations, explicit provider errors and resumable symbol cursor with lease/offset concurrency protection.
+- Live experimental SEC universe / Company Facts and Yahoo price history adapters. Quick mode samples 64 symbols across the listed universe; full mode preserves the complete universe. Each step processes up to eight symbols concurrently and keeps a durable cursor/retry queue. The complete market scan has **not** been load-tested or completed.
 - Shared versioned gate engine, Core/Legacy documented weights, no fabricated normalization/score. Bounce documented gates; unresolved liquidity requires explicit review.
 - Conservative SEC annual + current YTD − prior YTD normalization, provenance, foreign-filer flag, unavailable-data handling. Some issuers require custom taxonomy support and remain incomplete.
 - PIT availability filter, deterministic firm holdout assignment, firm bootstrap, Bonferroni correction, conservative Bounce exit simulation and costs.
-- Web manifest and icons; offline fallback reads last snapshot saved on this device. Browser installation support has not been verified on a physical phone.
+- Web manifest and icons; offline fallback reads the last snapshot saved on the device. Browser installation support has not been verified on a physical phone.
 - 30 meaningful engine/normalization tests, TypeScript checking, production build.
 
 ## Not complete / not validated
@@ -36,13 +36,13 @@ Current implementation uses **Vinext/React instead of the plan's TanStack Start*
 
 `lib/engine.ts` is the single strategy configuration/evaluator source. All absent critical metrics become UNKNOWN. Positive net income OR FCF passes the definitive profitability branch. Inflection has no invented substitute. Core/Legacy score returns null; Bounce returns gates only. UI candidate qualification is not a final research rank. Version suffix `draft.1` identifies unvalidated implementation conventions.
 
-Operational conventions: 20-day median dollar volume for Core; 3 calendar days quote freshness; 200-day fundamental period freshness; 30 fully completed consecutive weekly closing prices; calendar-month expiry clamped at month end, then first observed tradable open. These are conservative implementation choices, **not reproduced original settings**. SEC date-only filing records become available at end of filing day, intentionally conservative.
+Operational conventions: 20-day median dollar volume for Core and Bounce (Bounce requires at least $150k); 3 calendar days quote freshness; 200-day fundamental period freshness; 30 fully completed consecutive weekly closing prices; calendar-month expiry clamped at month end, then first observed tradable open. These are conservative implementation choices, **not reproduced original settings**. SEC date-only filing records become available at end of filing day, intentionally conservative.
 
 ## Data and API
 
 - `GET /api/radar`: most recent run and last available snapshots; explicit `dataRunId` identifies displayed data.
 - `POST /api/radar`: same-origin `{action:'favorite',symbol}` or `{action:'import',records: Snapshot[]}`. Import max 500 records / 4MB; rejects duplicate symbols and malformed provenance.
-- `POST /api/scan`: `{action:'start'}` resumes an unfinished scan; `{action:'step',runId}` processes bounded batches. Failed symbols enter a persistent queue with up to three total attempts; exhausted failures keep the run partial.
+- `POST /api/scan`: `{action:'start',mode:'quick'|'full'}` resumes an unfinished scan in the selected mode; `{action:'step',runId}` processes bounded batches. Failed symbols enter a persistent queue with up to three total attempts; exhausted failures keep the run partial.
 - `GET /api/export?kind=spec` and `?kind=schema`: strategy JSON or documented synthetic schema example.
 
 Do not import the schema wrapper itself: import the actual array of sourced snapshots. Data are research inputs, not independently verified simply because they have been imported.
