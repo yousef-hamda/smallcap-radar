@@ -9,14 +9,14 @@ Status is implementation evidence, not an assertion of historical strategy profi
 | 21–31 | Bounce | Gate evaluator/exits implemented and tested; explicit operational 20-day median dollar-volume threshold ($150k); historic rates unverified; no invented Bounce score |
 | 32–35 | Raw/normalized/metrics/provenance | Company Facts/price adapters and provenance implemented; quote-only records survive SEC fundamental failures; split events are used when deriving comparable share-count dilution; raw cache persistence, SEC Frames and taxonomy completeness pending |
 | 36–38 | Two-source, confidence, four angles | Missing/conflict surfaced; final ranking disabled; no actual secondary-source enrichment |
-| 39 | Universe cleaning | SEC exchange filter + conservative Yahoo/name classification; not a fully verified security master; MLP/K-1 missing |
-| 40–45 | Database, snapshots, stages, hashes | 8 functional/supporting tables, self-initializing schema, snapshots/run checks/hash, cursor/lease implemented. Quick scan samples 64 symbols and full scan is resumable in concurrent eight-symbol batches. Full 14-stage batch architecture NOT implemented. Persistent retry queue implemented (3 total attempts); exhausted failures remain partial |
+| 39 | Universe cleaning | Bundled 7,675-symbol SEC/Nasdaq directory, exchange filter and conservative name classification; quick cache excludes funds, trusts, units, warrants, preferred instruments and limited partnerships. Not yet a fully verified security master |
+| 40–45 | Database, snapshots, stages, hashes | 8 functional/supporting tables, self-initializing schema, snapshots/run checks/hash, cursor/lease implemented. Quick scan completes a dated 12-symbol small-cap sample without live-provider dependency; full scan is resumable in concurrent eight-symbol batches. Full 14-stage batch architecture NOT implemented. Persistent retry queue implemented (3 total attempts); exhausted failures remain partial |
 | 46–50 | Dashboard/cards/excluded/incomplete | Professional dark RTL terminal, dense table, explicit status language and synthetic mode clearly separated. No padding |
 | 51–53 | Deep company views/charts/translation | Gate/evidence details and five-range chart implemented; insiders, analyst, news, sector data and translation caching pending |
 | 54–59 | Statistical lab/PIT/holdouts/multiple tests/bootstrap | Tested utilities and synthetic exit example; experiment/holdout tables only, no complete research orchestration |
 | 60–66 | Survivorship/costs/stress/metrics/disasters | Costs and basic exits implemented. Delisted dataset, full backtest, liquidity stress, Core/Bounce dashboards and disaster analysis pending |
 | 67–70 | Adversarial/boundary/invariant tests | 6 explicit synthetic companies; 30 tests passing |
-| 71 | Real-source integration | SEC/Yahoo access probe succeeded. Live adapter smoke passed for MSFT/GPRO; expected-value financial audit incomplete |
+| 71 | Real-source integration | Nasdaq screener/history and SEC Company Facts adapters implemented. A production `www.sec.gov` 403 reported on mobile no longer blocks the universe or quick scan. Browser QA completed 12/12 quick records with price, market cap, 12-month return and cached fundamentals where available; expected-value financial audit remains incomplete |
 | 72–75 | Freshness/failure/migrations/performance | Conservative freshness gates; generated migration; no comprehensive failure injection or 1k–15k benchmark. Build/typecheck pass |
 | 76 | Secrets | No supplied secrets persisted; replacement needed before using user's separate Cloudflare credentials |
 | 77–79 | Diagnostics/coverage/audit | Run counts/errors and persisted evaluations; rich source-coverage UI/immutable historic UI pending |
@@ -33,6 +33,6 @@ Status is implementation evidence, not an assertion of historical strategy profi
 
 ## Known constraints
 
-Current market-cap estimate multiplies reported SEC shares by current Yahoo price and is labeled low confidence; stale share periods or intervening splits are rejected. It is not a verified current share count. EV/S and dilution remain unavailable in live feed until a suitable reliable provider is integrated. Therefore live Core/Bounce candidates will often remain incomplete. That is intentional and safer than manufacturing financial facts.
+Market cap begins with the dated Nasdaq screener value and may be replaced by SEC reported shares multiplied by the latest Nasdaq close when the share period is recent. The derived figure is labeled low confidence and is not a verified current share count. EV/S and split-adjusted dilution remain unavailable until reliable debt and corporate-action feeds are integrated. Therefore Core/Bounce candidates can remain incomplete. That is intentional and safer than manufacturing financial facts.
 
 The user requested a new GitHub repo and continuous pushes. Tool capability lacks repository creation; this requirement is not satisfied by the separate Sites source repository. User must create an empty private repository or supply access to an existing intended repository before GitHub synchronization can occur.

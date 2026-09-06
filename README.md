@@ -6,7 +6,7 @@ Arabic RTL mobile-first PWA, hosted privately on Cloudflare Workers through Site
 
 - Professional Arabic RTL research terminal with a dense desktop table, responsive mobile layout, Core/Bounce filters, company gate/evidence detail, five-range historical chart, persistent favorites, JSON snapshot import and audit export.
 - Cloudflare D1 self-initializing schema and migrations, immutable run identifiers and per-run snapshots/evaluations, explicit provider errors and resumable symbol cursor with lease/offset concurrency protection.
-- Live experimental SEC universe / Company Facts and Yahoo price history adapters. Quick mode samples 64 symbols across the listed universe; full mode preserves the complete universe. Each step processes up to eight symbols concurrently and keeps a durable cursor/retry queue. The complete market scan has **not** been load-tested or completed.
+- Nasdaq is the primary market-data source. A bundled official SEC/Nasdaq directory prevents a `403` or temporary provider outage from blocking scan startup. Quick mode evaluates 12 representative small-cap symbols from a bundled, dated Nasdaq history/SEC fundamentals cache; full mode preserves the complete 7,675-symbol universe and attempts live Nasdaq history plus SEC Company Facts. Each step processes up to eight symbols concurrently and keeps a durable cursor/retry queue. The complete market scan has **not** been load-tested or completed.
 - Shared versioned gate engine, Core/Legacy documented weights, no fabricated normalization/score. Bounce documented gates; unresolved liquidity requires explicit review.
 - Conservative SEC annual + current YTD − prior YTD normalization, provenance, foreign-filer flag, unavailable-data handling. Some issuers require custom taxonomy support and remain incomplete.
 - PIT availability filter, deterministic firm holdout assignment, firm bootstrap, Bonferroni correction, conservative Bounce exit simulation and costs.
@@ -59,4 +59,4 @@ No supplied Cloudflare token or R2 key is used or embedded. The user's plan §76
 
 ## Sources
 
-[SEC EDGAR API documentation](https://www.sec.gov/search-filings/edgar-application-programming-interfaces), [SEC developer resources](https://www.sec.gov/about/developer-resources). Yahoo endpoints are experimental and may fail/rate-limit; no paid data license or service guarantee is included.
+[SEC EDGAR API documentation](https://www.sec.gov/search-filings/edgar-application-programming-interfaces), [SEC developer resources](https://www.sec.gov/about/developer-resources), [Nasdaq Trader symbol directory](https://www.nasdaqtrader.com/trader.aspx?id=symboldirdefs). Live provider requests can still fail or rate-limit; dated fallback data are labeled and no paid data license or service guarantee is included.

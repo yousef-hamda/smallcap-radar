@@ -1,36 +1,125 @@
-import type {Snapshot,Provenance} from './engine';
-import {SPECS} from './engine';
-import {ma30Weeks} from './research';
-import {observations,latestInstant,trailingAnnual,provenance,REVENUE_TAGS} from './sec';
-const userAgent='SmallCapRadar/2.0 (research; github.com/yousef-hamda)';
-export async function fetchJson(url:string){let last:unknown;for(let attempt=0;attempt<2;attempt++){try{const r=await fetch(url,{headers:{'User-Agent':userAgent,Accept:'application/json'},signal:AbortSignal.timeout(18000)});if(!r.ok){if((r.status===429||r.status>=500)&&attempt===0){await new Promise(resolve=>setTimeout(resolve,300));continue}throw Error(`${new URL(url).hostname}: HTTP ${r.status}`)}return r.json()}catch(error){last=error;if(attempt===0){await new Promise(resolve=>setTimeout(resolve,300));continue}}}throw last instanceof Error?last:Error(`${new URL(url).hostname}: request failed`)}
-export async function universe(){try{const j:any=await fetchJson('https://www.sec.gov/files/company_tickers_exchange.json');const fields=j.fields;return j.data.map((r:any[])=>Object.fromEntries(fields.map((f:string,i:number)=>[f,r[i]]))).filter((r:any)=>['Nasdaq','NYSE','NYSE American'].includes(r.exchange)&&/^[A-Z0-9.-]{1,12}$/.test(r.ticker))}catch(primary){try{const j:any=await fetchJson('https://www.sec.gov/files/company_tickers.json');return Object.values(j).map((r:any)=>({cik:r.cik_str,ticker:r.ticker,name:r.title,exchange:'unknown'})).filter((r:any)=>/^[A-Z0-9.-]{1,12}$/.test(r.ticker))}catch{throw primary}}}
-export async function companySnapshot(company:any):Promise<Snapshot>{
- const now=new Date().toISOString(),symbol=company.ticker,cik=String(company.cik).padStart(10,'0'),url=`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=5y&interval=1d&events=splits`;
- const j:any=await fetchJson(url),result=j.chart?.result?.[0];if(!result)throw Error(`${symbol}: quote unavailable`);const meta=result.meta,q=result.indicators?.quote?.[0],timestamps=result.timestamp||[];
- const history=timestamps.map((t:number,i:number)=>({date:new Date(t*1000).toISOString().slice(0,10),close:q?.close?.[i],open:q?.open?.[i],high:q?.high?.[i],low:q?.low?.[i],volume:q?.volume?.[i]})).filter((r:any)=>r.close>0&&r.low>0);
- const quoteTime=new Date(meta.regularMarketTime*1000).toISOString();const quoteEvidence:Provenance={source:'Yahoo chart (experimental)',url,periodEnd:quoteTime.slice(0,10),availableAt:quoteTime,retrievedAt:now,currency:meta.currency,confidence:'medium'};
- const exchange=company.exchange==='unknown'?(meta.exchangeName||meta.fullExchangeName||'unknown'):company.exchange;
- const s:Snapshot={symbol,name:company.name,asOf:now,exchange,securityType:meta.instrumentType==='EQUITY'&&!/preferred|warrant|depositary.*share|fund|trust|\betf\b/i.test(company.name)?'common':'unknown',price:meta.currency==='USD'?meta.regularMarketPrice:null,confidence:'F',deathSpiral:'unknown',provenance:{price:quoteEvidence},history};
- if(meta.currency!=='USD')return s;
- const dv=history.slice(-20).map((r:any)=>r.close*r.volume).filter(Number.isFinite).sort((a:number,b:number)=>a-b);if(dv.length===20){s.medianDollarVolume20d=(dv[9]+dv[10])/2;s.provenance.medianDollarVolume20d=quoteEvidence;}
- const yearStart=Date.parse(quoteTime)-365*864e5,year=history.filter((r:any)=>Date.parse(r.date)>=yearStart),prior=history.filter((r:any)=>Date.parse(r.date)<=yearStart).at(-1);
- if(prior&&Date.parse(prior.date)>=yearStart-7*864e5&&s.price){s.return12m=s.price/prior.close-1;s.provenance.return12m=quoteEvidence;}
- if(year.length>=240){s.low52w=Math.min(...year.map((r:any)=>r.low));s.provenance.low52w=quoteEvidence;}
- s.ma30w=ma30Weeks(history,now);if(s.ma30w)s.provenance.ma30w=quoteEvidence;
- const factsUrl=`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`;let facts:any;try{facts=await fetchJson(factsUrl)}catch(e:any){s.dataIssues=[`تعذّر جلب بيانات SEC: ${e.message}`];s.research={financials:false,valuation:false,analysts:false,sector:false};return s}const f=facts.facts;
- const shares=latestInstant(observations(f,['EntityCommonStockSharesOutstanding','CommonStockSharesOutstanding'],'shares'),now);
- // A filing share count is historical; mark cap estimate and do not silently treat as current verified market cap.
- if(shares&&s.price&&Date.parse(now)-Date.parse(shares.end)<120*864e5&&!Object.values(result.events?.splits||{}).some((split:any)=>split.date*1000>Date.parse(shares.end))){s.marketCap=shares.val*s.price;s.provenance.marketCap={...provenance(shares,factsUrl,now),source:'Derived: SEC reported shares × Yahoo price',availableAt:[provenance(shares,factsUrl,now).availableAt,quoteEvidence.availableAt].sort().at(-1)!,confidence:'low'};}
- if(s.marketCap!=null&&(s.marketCap<SPECS.core.marketCap.min||s.marketCap>SPECS.core.marketCap.max))return s;
- const shareRows=observations(f,['EntityCommonStockSharesOutstanding','CommonStockSharesOutstanding'],'shares').filter(r=>!r.start&&Date.parse(r.filed+'T23:59:59Z')<=Date.parse(now)&&Number.isFinite(r.val)).sort((a,b)=>b.end.localeCompare(a.end)||b.filed.localeCompare(a.filed));
- const currentShares=shareRows[0],priorShares=currentShares&&shareRows.find(r=>{const days=(Date.parse(currentShares.end)-Date.parse(r.end))/864e5;return days>=330&&days<=430});
- if(currentShares&&priorShares){const start=Date.parse(priorShares.end),end=Date.parse(currentShares.end);const splits=Object.values(result.events?.splits||{}).filter((event:any)=>event.date*1000>start&&event.date*1000<=end);const factor=splits.reduce((product:number,event:any)=>{const ratio=Number(event.numerator)/Number(event.denominator);return Number.isFinite(ratio)&&ratio>0?product*ratio:product},1);s.dilution=currentShares.val/(priorShares.val*factor)-1;s.splitAdjusted=true;s.provenance.dilution={source:'Derived: SEC shares, adjusted by Yahoo split events',url:factsUrl,periodStart:priorShares.end,periodEnd:currentShares.end,availableAt:[currentShares.filed+'T23:59:59Z',quoteEvidence.availableAt].sort().at(-1)!,retrievedAt:now,currency:'shares',tag:'EntityCommonStockSharesOutstanding',confidence:'medium'};}
- for(const [key,tags] of Object.entries({revenue:REVENUE_TAGS,netIncome:['NetIncomeLoss','ProfitLoss'],ocf:['NetCashProvidedByUsedInOperatingActivities'],capex:['PaymentsToAcquirePropertyPlantAndEquipment']})){
- const annual=trailingAnnual(observations(f,tags),now);if(annual){(s as any)[key]=annual.val;s.provenance[key]=provenance(annual,factsUrl,now);if(['20-F','40-F'].includes(annual.form))s.foreignFiler=true;}
- }
- const ocf=(s as any).ocf,capex=(s as any).capex;if(ocf!=null&&capex!=null&&s.provenance.ocf.periodEnd===s.provenance.capex.periodEnd){s.fcf=ocf-capex;s.provenance.fcf={...s.provenance.ocf,tag:'OperatingCashFlow − PaymentsToAcquirePropertyPlantAndEquipment',availableAt:[s.provenance.ocf.availableAt,s.provenance.capex.availableAt].sort().at(-1)!};}
- // EV and split-corrected dilution stay missing until a reliable debt/current-share feed is configured.
- if(s.marketCap&&s.revenue&&s.revenue>0){s.ps=s.marketCap/s.revenue;s.provenance.ps={...s.provenance.revenue,source:'Derived: estimated market cap / SEC revenue',availableAt:[s.provenance.marketCap.availableAt,s.provenance.revenue.availableAt].sort().at(-1)!,confidence:'low'}}
- s.confidence='C';s.research={financials:!!s.revenue,valuation:false,analysts:false,sector:false};delete (s as any).ocf;delete (s as any).capex;return s;
+import type { Snapshot, Provenance } from './engine';
+import { SPECS } from './engine';
+import { ma30Weeks } from './research';
+import { observations, latestInstant, trailingAnnual, provenance, REVENUE_TAGS } from './sec';
+import bundledUniverse from './universe.generated.json';
+import quickCache from './quick-cache.generated.json';
+
+type Company = { cik: number; name: string; ticker: string; exchange: string; price?: number; marketCap?: number; volume?: number; sector?: string; industry?: string };
+type NasdaqRow = { symbol: string; name?: string; lastsale?: string; marketCap?: string; volume?: string; sector?: string; industry?: string };
+type CachedQuick = { history: NonNullable<Snapshot['history']>; financials: Record<string, number>; provenance: Record<string, Provenance>; issues: string[] };
+
+const NASDAQ_SCREENER = 'https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=5000&download=true';
+export const quickSymbols = Object.keys(quickCache.symbols);
+const browserAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124 Safari/537.36';
+const secAgent = 'SmallCapRadar/2.1 research-contact:yousef-hamda@users.noreply.github.com';
+const numeric = (value: unknown) => { const parsed = Number(String(value ?? '').replace(/[$,%+,]/g, '').trim()); return Number.isFinite(parsed) ? parsed : null };
+
+function requestHeaders(url: string): Record<string, string> {
+  return new URL(url).hostname.endsWith('sec.gov')
+    ? { 'User-Agent': secAgent, Accept: 'application/json', 'Accept-Encoding': 'gzip, deflate' }
+    : { 'User-Agent': browserAgent, Accept: 'application/json, text/plain, */*', 'Accept-Language': 'en-US,en;q=0.9', Referer: 'https://www.nasdaq.com/' };
+}
+
+export async function fetchJson(url: string) {
+  const response = await fetch(url, { headers: requestHeaders(url), signal: AbortSignal.timeout(8_000) });
+  if (!response.ok) throw Error(`${new URL(url).hostname}: HTTP ${response.status}`);
+  return response.json();
+}
+
+function quotePatch(row?: NasdaqRow) {
+  if (!row) return {};
+  const price = numeric(row.lastsale), marketCap = numeric(row.marketCap), volume = numeric(row.volume);
+  return { ...(price != null && price > 0 ? { price } : {}), ...(marketCap != null && marketCap > 0 ? { marketCap } : {}), ...(volume != null && volume >= 0 ? { volume } : {}), ...(row.sector ? { sector: row.sector } : {}), ...(row.industry ? { industry: row.industry } : {}) };
+}
+
+export async function universe(): Promise<Company[]> {
+  const base = (bundledUniverse.companies as Company[]).map((company) => ({ ...company }));
+  try {
+    const latest = await fetchJson(NASDAQ_SCREENER) as { data?: { rows?: NasdaqRow[] } };
+    const quotes = new Map((latest.data?.rows ?? []).map((row) => [row.symbol, row]));
+    return base.map((company) => ({ ...company, ...quotePatch(quotes.get(company.ticker)) }));
+  } catch { return base }
+}
+
+function isoDate(date: string) { const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(date); return match ? `${match[3]}-${match[1]}-${match[2]}` : '' }
+function dateOffset(iso: string, days: number) { const date = new Date(iso); date.setUTCDate(date.getUTCDate() + days); return date.toISOString().slice(0, 10) }
+function commonSecurity(name: string) { return !/\b(etf|fund|trust|warrant|right|unit|preferred|depositary|senior note|bond|debenture|limited partnership)\b|,\s*L\.P\./i.test(name) }
+
+async function nasdaqHistory(symbol: string, asOf: string) {
+  const cached = (quickCache.symbols as Record<string, CachedQuick>)[symbol];
+  if (cached?.history?.length) return { url: 'https://api.nasdaq.com/api/quote', history: cached.history };
+  const to = asOf.slice(0, 10), from = dateOffset(asOf, -550);
+  const url = `https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/historical?assetclass=stocks&fromdate=${from}&todate=${to}&limit=5000`;
+  const payload = await fetchJson(url) as { data?: { tradesTable?: { rows?: Array<Record<string, string>> } } };
+  const history = (payload.data?.tradesTable?.rows ?? []).map((row) => ({ date: isoDate(row.date), close: numeric(row.close), open: numeric(row.open), high: numeric(row.high), low: numeric(row.low), volume: numeric(row.volume) }))
+    .filter((row) => row.date && row.close != null && row.close > 0 && row.low != null && row.low > 0).sort((a, b) => a.date.localeCompare(b.date));
+  return { url, history };
+}
+
+export async function companySnapshot(company: Company): Promise<Snapshot> {
+  const now = new Date().toISOString(), symbol = company.ticker, cik = String(company.cik).padStart(10, '0'), issues: string[] = [];
+  let history: NonNullable<Snapshot['history']> = [], historyUrl = NASDAQ_SCREENER;
+  try {
+    const result = await nasdaqHistory(symbol, now); historyUrl = result.url;
+    history = result.history.map((row) => ({ date: row.date, close: row.close!, open: row.open ?? undefined, high: row.high ?? undefined, low: row.low ?? undefined, volume: row.volume ?? undefined }));
+  } catch (error) { issues.push(`تعذّر تحميل تاريخ Nasdaq: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`) }
+
+  const last = history.at(-1), quoteDate = last?.date ?? bundledUniverse.generatedAt.slice(0, 10), quoteAvailableAt = last ? `${last.date}T21:00:00.000Z` : bundledUniverse.generatedAt;
+  const quoteEvidence: Provenance = { source: last ? 'Nasdaq Historical (official)' : 'Nasdaq screener snapshot (official)', url: historyUrl, periodEnd: quoteDate, availableAt: quoteAvailableAt > now ? now : quoteAvailableAt, retrievedAt: now, currency: 'USD', confidence: last ? 'high' : 'medium' };
+  const price = last?.close ?? company.price ?? null;
+  const snapshot: Snapshot = { symbol, name: company.name, asOf: now, exchange: company.exchange, securityType: commonSecurity(company.name) ? 'common' : 'unknown', price, marketCap: company.marketCap ?? null, confidence: 'C', deathSpiral: 'unknown', provenance: {}, history, dataIssues: issues, research: { financials: false, valuation: false, analysts: false, sector: !!company.sector } };
+
+  if (price != null) snapshot.provenance.price = quoteEvidence;
+  if (snapshot.marketCap != null) snapshot.provenance.marketCap = { source: 'Nasdaq stock screener (official)', url: NASDAQ_SCREENER, periodEnd: bundledUniverse.generatedAt.slice(0, 10), availableAt: bundledUniverse.generatedAt, retrievedAt: now, currency: 'USD', confidence: 'medium' };
+  if (history.length >= 20) {
+    const values = history.slice(-20).map((row) => row.close * (row.volume ?? Number.NaN)).filter(Number.isFinite).sort((a, b) => a - b);
+    if (values.length === 20) { snapshot.medianDollarVolume20d = (values[9] + values[10]) / 2; snapshot.provenance.medianDollarVolume20d = quoteEvidence }
+  }
+  const yearStart = Date.parse(quoteDate) - 365 * 86_400_000, year = history.filter((row) => Date.parse(row.date) >= yearStart), prior = history.filter((row) => Date.parse(row.date) <= yearStart).at(-1);
+  if (prior && Date.parse(prior.date) >= yearStart - 7 * 86_400_000 && price) { snapshot.return12m = price / prior.close - 1; snapshot.provenance.return12m = quoteEvidence }
+  if (year.length >= 240) { snapshot.low52w = Math.min(...year.map((row) => row.low ?? row.close)); snapshot.provenance.low52w = quoteEvidence }
+  snapshot.ma30w = ma30Weeks(history, now); if (snapshot.ma30w) snapshot.provenance.ma30w = quoteEvidence;
+  if (snapshot.marketCap != null && (snapshot.marketCap < SPECS.core.marketCap.min || snapshot.marketCap > SPECS.core.marketCap.max)) return snapshot;
+
+  const cached = (quickCache.symbols as Record<string, CachedQuick>)[symbol];
+  if (cached) {
+    Object.assign(snapshot as unknown as Record<string, unknown>, cached.financials);
+    Object.assign(snapshot.provenance, cached.provenance);
+    const operational = snapshot as Snapshot & { ocf?: number; capex?: number };
+    delete operational.ocf; delete operational.capex;
+    if (snapshot.marketCap && snapshot.revenue && snapshot.revenue > 0) {
+      snapshot.ps = snapshot.marketCap / snapshot.revenue;
+      snapshot.provenance.ps = { ...snapshot.provenance.revenue, source: 'Derived: market cap / SEC cached revenue', availableAt: [snapshot.provenance.marketCap.availableAt, snapshot.provenance.revenue.availableAt].sort().at(-1)!, confidence: 'low' };
+    }
+    snapshot.research = { financials: !!snapshot.revenue, valuation: false, analysts: false, sector: !!company.sector };
+    return snapshot;
+  }
+
+  const factsUrl = `https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`;
+  let facts: Record<string, unknown>;
+  try { facts = ((await fetchJson(factsUrl)) as { facts: Record<string, unknown> }).facts }
+  catch (error) { snapshot.dataIssues?.push(`تعذّر جلب البيانات المالية من SEC: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`); return snapshot }
+
+  const shares = latestInstant(observations(facts, ['EntityCommonStockSharesOutstanding', 'CommonStockSharesOutstanding'], 'shares'), now);
+  if (shares && price && Date.parse(now) - Date.parse(shares.end) < 120 * 86_400_000) {
+    snapshot.marketCap = shares.val * price;
+    snapshot.provenance.marketCap = { ...provenance(shares, factsUrl, now), source: 'Derived: SEC reported shares × Nasdaq price', availableAt: [provenance(shares, factsUrl, now).availableAt, quoteEvidence.availableAt].sort().at(-1)!, confidence: 'low' };
+  }
+  for (const [key, tags] of Object.entries({ revenue: REVENUE_TAGS, netIncome: ['NetIncomeLoss', 'ProfitLoss'], ocf: ['NetCashProvidedByUsedInOperatingActivities'], capex: ['PaymentsToAcquirePropertyPlantAndEquipment'] })) {
+    const annual = trailingAnnual(observations(facts, tags), now);
+    if (annual) { (snapshot as unknown as Record<string, unknown>)[key] = annual.val; snapshot.provenance[key] = provenance(annual, factsUrl, now); if (['20-F', '40-F'].includes(annual.form)) snapshot.foreignFiler = true }
+  }
+  const operational = snapshot as Snapshot & { ocf?: number; capex?: number };
+  if (operational.ocf != null && operational.capex != null && snapshot.provenance.ocf.periodEnd === snapshot.provenance.capex.periodEnd) {
+    snapshot.fcf = operational.ocf - operational.capex;
+    snapshot.provenance.fcf = { ...snapshot.provenance.ocf, tag: 'OperatingCashFlow − PaymentsToAcquirePropertyPlantAndEquipment', availableAt: [snapshot.provenance.ocf.availableAt, snapshot.provenance.capex.availableAt].sort().at(-1)! };
+  }
+  delete operational.ocf; delete operational.capex;
+  if (snapshot.marketCap && snapshot.revenue && snapshot.revenue > 0) {
+    snapshot.ps = snapshot.marketCap / snapshot.revenue;
+    snapshot.provenance.ps = { ...snapshot.provenance.revenue, source: 'Derived: market cap / SEC revenue', availableAt: [snapshot.provenance.marketCap.availableAt, snapshot.provenance.revenue.availableAt].sort().at(-1)!, confidence: 'low' };
+  }
+  snapshot.research = { financials: !!snapshot.revenue, valuation: false, analysts: false, sector: !!company.sector };
+  return snapshot;
 }
