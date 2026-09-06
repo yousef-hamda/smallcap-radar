@@ -1,22 +1,23 @@
 # Small-Cap Radar V2 — professional research terminal
 
-Arabic RTL mobile-first PWA, hosted privately on Cloudflare Workers through Sites. **This is not the completed/validated V2 described in the supplied plan.** It is a working research foundation with a deliberately disabled final ranking. Do not interpret synthetic fixtures or referenced historical benchmark rates as market results.
+Arabic RTL mobile-first PWA, published through Sites. It is a working research platform with a deliberately disabled final ranking until the remaining research requirements are validated. Do not interpret synthetic fixtures or referenced historical benchmark rates as market results.
 
 ## Implemented
 
 - Professional Arabic RTL research terminal with a dense desktop table, responsive mobile layout, Core/Bounce filters, company gate/evidence detail, five-range historical chart, persistent favorites, JSON snapshot import and audit export.
 - Cloudflare D1 self-initializing schema and migrations, immutable run identifiers and per-run snapshots/evaluations, explicit provider errors and a server-owned cursor with lease/offset concurrency protection. Chained Worker tasks continue after the browser closes; production verification on 2026-09-06 advanced the same run from offset 24 to 144 while the browser was closed.
 - Standards-based Web Push completion notifications with VAPID signing and an explicit subscribe-and-test panel. On iPhone, install the PWA on the Home Screen, open it from the icon, and press **تفعيل واختبار** once.
-- Nasdaq is the primary market-data source. A bundled official SEC/Nasdaq directory prevents a `403` or temporary provider outage from blocking scan startup. Quick mode evaluates 12 representative small-cap symbols from a bundled, dated Nasdaq history/SEC fundamentals cache. Full mode first applies security-type, valid-price and $25M–$2B size gates to the complete 7,675-symbol directory, then deep-scans only the surviving candidates (2,597 in the 2026-09-06 snapshot; 5,078 removed before expensive requests). Each step processes up to 12 symbols concurrently and keeps a durable cursor/retry queue. The complete end-to-end market run is still in progress and has not yet been benchmarked to completion.
+- The full scan now follows the legacy system's bulk-first architecture: Yahoo quotes in groups of 250 symbols, exactly 13 SEC XBRL Frames datasets, then deterministic local evaluation in pages of 600 companies. Detailed price history and SEC Company Facts are fetched only when a company is opened. A bundled official SEC/Nasdaq directory and a dated official Frames snapshot keep the scan deterministic when a provider blocks the Worker egress range.
+- Production benchmark on 2026-09-06: 7,675 exchange-listed securities loaded; 6,320 had quote coverage; 4,765 were removed by preliminary gates; all 2,910 candidates were evaluated in 27.1 seconds with zero processing failures. The 13 Frames datasets covered 2,381 candidates (81.8%). The browser was closed mid-run for 36 seconds; the same server run completed at stage 13 and appeared after reopening.
 - Shared versioned gate engine, Core/Legacy documented weights, no fabricated normalization/score. Bounce documented gates; unresolved liquidity requires explicit review.
 - Conservative SEC annual + current YTD − prior YTD normalization, provenance, foreign-filer flag, unavailable-data handling. Some issuers require custom taxonomy support and remain incomplete.
 - PIT availability filter, deterministic firm holdout assignment, firm bootstrap, Bonferroni correction, conservative Bounce exit simulation and costs.
 - Web manifest and icons; offline fallback reads the last snapshot saved on the device. Installation and notification receipt still require final verification on the owner's physical phone; server-side VAPID request generation is covered by automated tests.
-- 30 meaningful engine/normalization tests, TypeScript checking, production build.
+- 33 meaningful engine/normalization tests plus 6 UI/Web-Push component tests, TypeScript checking, ESLint and a verified production build.
 
 ## Not complete / not validated
 
-Read [the requirement ledger](docs/ACCEPTANCE.md). Major gaps: full 14-stage bulk pipeline, SEC Frames integration, current verified shares and EV data, complete Form 4 ingestion (P-only utility exists), second source comparisons, company news/analyst/sector enrichment, production factor normalization, paper portfolio, full historical backtesting/reporting UI, immutable consumed holdout workflow, performance/failure-injection gates, and shadow run.
+Read [the requirement ledger](docs/ACCEPTANCE.md). Major remaining gaps: complete Form 4 ingestion (P-only utility exists), a licensed secondary fundamentals source, company news/analyst enrichment, production factor normalization, paper portfolio, full historical backtesting/reporting UI, immutable consumed holdout workflow, failure-injection gates and shadow run. Current SEC Frames provide debt/cash/share fields where reported, but coverage is not universal and split-adjusted dilution remains review-only.
 
 The original historical dataset and PDF are absent. Original 47.2%/37.2%/54.8% figures cannot be reproduced or asserted. Inflection, death spiral, factor normalization and several operating conventions were explicitly unresolved in the supplied plan. Final ranking is unconditionally disabled until these requirements are implemented and validated.
 
@@ -42,8 +43,9 @@ Operational conventions: 20-day median dollar volume for Core and Bounce (Bounce
 ## Data and API
 
 - `GET /api/radar`: most recent run and last available snapshots; explicit `dataRunId` identifies displayed data.
+- `GET /api/company?symbol=...`: on-demand deep verification using detailed history and SEC Company Facts, cached for 30 minutes; this deliberately stays outside the market-wide hot path.
 - `POST /api/radar`: same-origin `{action:'favorite',symbol}` or `{action:'import',records: Snapshot[]}`. Import max 500 records / 4MB; rejects duplicate symbols and malformed provenance.
-- `POST /api/background-scan/start`: starts or revives a server-owned quick/full scan and returns immediately. The Worker passes a signed internal baton between bounded batches, so browser suspension does not control progress.
+- `POST /api/background-scan/start`: starts or revives a server-owned quick/full scan and returns immediately. The Worker passes a signed internal baton between bounded stages/pages, so browser suspension does not control progress.
 - `GET /api/push/key` and `POST /api/push/subscribe`: create the device subscription used for the completion alert. Expired subscriptions are removed automatically.
 - `POST /api/scan`: retained as a bounded diagnostic/manual recovery API. Failed symbols enter a persistent queue with up to three total attempts; exhausted failures keep the run partial.
 - `GET /api/export?kind=spec` and `?kind=schema`: strategy JSON or documented synthetic schema example.
