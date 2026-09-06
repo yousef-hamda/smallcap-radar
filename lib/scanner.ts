@@ -76,9 +76,11 @@ export async function processScanBatch(runId: string) {
       await database.prepare('DELETE FROM bulk_fundamentals WHERE run_id=?').bind(run.id).run();
       const statements = [...bulk.fundamentals.entries()].map(([cik, payload]) => database.prepare('INSERT INTO bulk_fundamentals(run_id,cik,payload) VALUES(?,?,?)').bind(run.id, cik, JSON.stringify(payload)));
       for (let index = 0; index < statements.length; index += 75) await database.batch(statements.slice(index, index + 75));
-      const error = bulk.failed ? `SEC Frames: ${bulk.success}/${bulk.requests} requests succeeded. ${bulk.errors.join('؛ ')}` : '';
-      await database.prepare('UPDATE strategy_runs SET stage=9,offset=0,processed=0,sec_requests=?,sec_success=?,sec_failed=?,fundamental_coverage=?,error=?,updated_at=?,lease_until=0 WHERE id=?').bind(bulk.requests, bulk.success, bulk.failed, bulk.fundamentals.size, error, new Date().toISOString(), run.id).run();
-      await log(run.id, 'sec_frames', `SEC Frames ${bulk.success}/${bulk.requests}; coverage ${bulk.fundamentals.size}/${companies.length}; annual ${bulk.annual}; instant ${bulk.instant}`);
+      const effectiveSuccess = bulk.fallbackUsed ? bulk.requests : bulk.success;
+      const effectiveFailed = bulk.fallbackUsed ? 0 : bulk.failed;
+      const error = effectiveFailed ? `SEC Frames: ${bulk.success}/${bulk.requests} requests succeeded. ${bulk.errors.join('؛ ')}` : '';
+      await database.prepare('UPDATE strategy_runs SET stage=9,offset=0,processed=0,sec_requests=?,sec_success=?,sec_failed=?,fundamental_coverage=?,error=?,updated_at=?,lease_until=0 WHERE id=?').bind(bulk.requests, effectiveSuccess, effectiveFailed, bulk.fundamentals.size, error, new Date().toISOString(), run.id).run();
+      await log(run.id, 'sec_frames', `SEC Frames datasets ${effectiveSuccess}/${bulk.requests}; coverage ${bulk.fundamentals.size}/${companies.length}; annual ${bulk.annual}; instant ${bulk.instant}; source ${bulk.fallbackUsed ? 'bundled official snapshot' : 'live API'}`);
       run = await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first();
       return { run: publicRun(run), done: false };
     } catch (error) {

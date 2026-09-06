@@ -1,8 +1,9 @@
 import type { Company } from './providers';
 import { fetchJson } from './providers';
 import type { Provenance, Snapshot } from './engine';
+import bundledFrames from './sec-frames.generated.json';
 
-type FrameFact = { cik: number; entityName?: string; start?: string; end: string; val: number; filed: string; form?: string; accn?: string; frame?: string };
+type FrameFact = { cik: number; entityName?: string; start?: string; end: string; val: number; filed?: string; form?: string; accn?: string; frame?: string };
 type StoredFact = FrameFact & { tag: string; priority: number; url: string };
 export type BulkFundamentals = {
   revenue?: StoredFact;
@@ -33,7 +34,9 @@ function lastCompletedQuarter(date = new Date()) {
 
 function newer(candidate: StoredFact, existing?: StoredFact) {
   if (!existing) return true;
-  return candidate.end > existing.end || (candidate.end === existing.end && (candidate.filed > existing.filed || (candidate.filed === existing.filed && candidate.priority < existing.priority)));
+  const candidateFiled = candidate.filed ?? '';
+  const existingFiled = existing.filed ?? '';
+  return candidate.end > existing.end || (candidate.end === existing.end && (candidateFiled > existingFiled || (candidateFiled === existingFiled && candidate.priority < existing.priority)));
 }
 
 export async function fetchBulkFundamentals(candidateCiks: number[], asOf = new Date()) {
@@ -56,6 +59,7 @@ export async function fetchBulkFundamentals(candidateCiks: number[], asOf = new 
   const allowed = new Set(candidateCiks.map(Number));
   const fundamentals = new Map<number, BulkFundamentals>();
   let success = 0, failed = 0;
+  let fallbackUsed = false;
   const errors: string[] = [];
 
   for (let index = 0; index < configs.length; index += 5) {
@@ -63,7 +67,7 @@ export async function fetchBulkFundamentals(candidateCiks: number[], asOf = new 
     const outcomes = await Promise.allSettled(group.map(async (config) => {
       const base = config.taxonomy === 'dei' ? 'https://data.sec.gov/api/xbrl/frames/dei' : FRAME_BASE;
       const url = `${base}/${config.tag}/${config.unit}/${config.period}.json`;
-      const payload = await fetchJson(url) as { data?: FrameFact[] };
+      const payload = await fetchJson(url, 25_000) as { data?: FrameFact[] };
       return { config, rows: payload.data ?? [], url };
     }));
     for (const outcome of outcomes) {
@@ -76,7 +80,7 @@ export async function fetchBulkFundamentals(candidateCiks: number[], asOf = new 
       const { config, rows, url } = outcome.value;
       for (const row of rows) {
         const cik = Number(row.cik);
-        if (!allowed.has(cik) || !Number.isFinite(row.val) || !row.end || !row.filed) continue;
+        if (!allowed.has(cik) || !Number.isFinite(row.val) || !row.end) continue;
         const stored: StoredFact = { ...row, tag: config.tag, priority: config.priority, url };
         const record = fundamentals.get(cik) ?? {};
         const current = record[config.key];
@@ -85,7 +89,17 @@ export async function fetchBulkFundamentals(candidateCiks: number[], asOf = new 
       }
     }
   }
-  return { fundamentals, requests: configs.length, success, failed, errors: [...new Set(errors)].slice(0, 8), annual, instant };
+  // SEC currently rejects some Cloudflare Worker egress ranges. Keep the
+  // official, date-stamped Frames snapshot bundled with the release as a
+  // deterministic fallback instead of turning missing fundamentals into zero.
+  if (fundamentals.size === 0 && bundledFrames.annual === annual) {
+    fallbackUsed = true;
+    for (const [cikText, record] of Object.entries(bundledFrames.fundamentals)) {
+      const cik = Number(cikText);
+      if (allowed.has(cik)) fundamentals.set(cik, record as BulkFundamentals);
+    }
+  }
+  return { fundamentals, requests: configs.length, success, failed, fallbackUsed, errors: [...new Set(errors)].slice(0, 8), annual, instant };
 }
 
 function frameProvenance(fact: StoredFact, retrievedAt: string): Provenance {
@@ -94,7 +108,9 @@ function frameProvenance(fact: StoredFact, retrievedAt: string): Provenance {
     url: fact.url,
     periodStart: fact.start,
     periodEnd: fact.end,
-    availableAt: `${fact.filed}T23:59:59.000Z`,
+    // Frames rows do not publish the filing timestamp. The fact is known to be
+    // available no later than this retrieval, so do not invent an earlier date.
+    availableAt: fact.filed ? `${fact.filed}T23:59:59.000Z` : retrievedAt,
     retrievedAt,
     currency: 'USD',
     tag: fact.tag,

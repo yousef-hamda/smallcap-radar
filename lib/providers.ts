@@ -14,6 +14,7 @@ export const quickSymbols = Object.keys(quickCache.symbols);
 const browserAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124 Safari/537.36';
 const secAgent = 'SmallCapRadar/2.1 research-contact:yousef-hamda@users.noreply.github.com';
 const numeric = (value: unknown) => { const parsed = Number(String(value ?? '').replace(/[$,%+,]/g, '').trim()); return Number.isFinite(parsed) ? parsed : null };
+export const yahooPercentAsRatio = (value: unknown) => Number.isFinite(value) ? Number(value) / 100 : undefined;
 
 export function companyBySymbol(symbol: string): Company | null {
   return (bundledUniverse.companies as Company[]).find((company) => company.ticker === symbol.toUpperCase()) ?? null;
@@ -25,8 +26,8 @@ function requestHeaders(url: string): Record<string, string> {
     : { 'User-Agent': browserAgent, Accept: 'application/json, text/plain, */*', 'Accept-Language': 'en-US,en;q=0.9', Referer: 'https://www.nasdaq.com/' };
 }
 
-export async function fetchJson(url: string) {
-  const response = await fetch(url, { headers: requestHeaders(url), signal: AbortSignal.timeout(8_000) });
+export async function fetchJson(url: string, timeoutMs = 8_000) {
+  const response = await fetch(url, { headers: requestHeaders(url), signal: AbortSignal.timeout(timeoutMs) });
   if (!response.ok) throw Error(`${new URL(url).hostname}: HTTP ${response.status}`);
   return response.json();
 }
@@ -87,7 +88,9 @@ async function yahooBulkQuotes(companies: Company[]): Promise<Company[]> {
         ...(Number.isFinite(quote.marketCap) ? { marketCap: quote.marketCap } : {}),
         ...(Number.isFinite(quote.regularMarketVolume) ? { volume: quote.regularMarketVolume } : {}),
         ...(Number.isFinite(quote.averageDailyVolume10Day) ? { averageVolume10d: quote.averageDailyVolume10Day } : {}),
-        ...(Number.isFinite(quote.fiftyTwoWeekChangePercent) ? { return52w: quote.fiftyTwoWeekChangePercent } : {}),
+        // Yahoo exposes this field in percentage points (for example 25.4 means
+        // 25.4%), while the scoring engine consistently stores returns as ratios.
+        ...(Number.isFinite(quote.fiftyTwoWeekChangePercent) ? { return52w: yahooPercentAsRatio(quote.fiftyTwoWeekChangePercent) } : {}),
         ...(Number.isFinite(quote.fiftyTwoWeekLow) ? { low52w: quote.fiftyTwoWeekLow } : {}),
         ...(Number.isFinite(quote.fiftyTwoWeekHigh) ? { high52w: quote.fiftyTwoWeekHigh } : {}),
         ...(Number.isFinite(quote.fiftyDayAverage) ? { ma50d: quote.fiftyDayAverage } : {}),
