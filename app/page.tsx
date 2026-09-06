@@ -3,7 +3,7 @@
 import {useEffect,useMemo,useState} from "react";
 import Link from "next/link";
 import {
- Activity,AlertTriangle,ArrowUpLeft,BarChart3,Check,ChevronLeft,Clock3,
+ Activity,AlertTriangle,ArrowUpLeft,BarChart3,Bell,Check,ChevronLeft,Clock3,
  Database,Download,FileUp,FlaskConical,Info,Layers,Menu,Radar,RefreshCw,
  Search,Server,ShieldCheck,Star,Wifi,X
 } from "lucide-react";
@@ -41,25 +41,38 @@ export default function RadarApp(){
  const [mobileNav,setMobileNav]=useState(false);
  const [lab,setLab]=useState<any>(null);
  const [storedEvaluations,setStoredEvaluations]=useState<any[]>([]);
+ const [notificationsEnabled,setNotificationsEnabled]=useState(false);
 
  const refresh=async()=>{const response=await fetch('/api/radar');const payload=await response.json();if(!response.ok)throw Error(payload.error||'تعذّر تحميل آخر فحص.');setData(payload.snapshots||[]);setStoredEvaluations(payload.storedEvaluations||[]);setRun(payload.run);setFavorites(payload.favorites||[]);setDemo(false);if(payload.dataRunId&&payload.run?.id!==payload.dataRunId)setNotice('نعرض آخر لقطة تحتوي بيانات؛ الجولة الأحدث لم تنتج نتائج بعد.');await saveOffline({savedAt:new Date().toISOString(),run:payload.dataRun,snapshots:(payload.snapshots||[]).map((s:any)=>({...s,history:undefined}))}).catch(()=>{});};
 
- useEffect(()=>{queueMicrotask(()=>refresh().catch(e=>setNotice(e.message||'لا توجد لقطة محفوظة بعد.')));const handler=(event:any)=>{event.preventDefault();setInstall(event)};window.addEventListener('beforeinstallprompt',handler);if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});return()=>window.removeEventListener('beforeinstallprompt',handler)},[]);
+ useEffect(()=>{queueMicrotask(()=>refresh().catch(e=>setNotice(e.message||'لا توجد لقطة محفوظة بعد.')));const handler=(event:any)=>{event.preventDefault();setInstall(event)};window.addEventListener('beforeinstallprompt',handler);if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js').then(registration=>registration.pushManager?.getSubscription().then(subscription=>setNotificationsEnabled(!!subscription))).catch(()=>{});return()=>window.removeEventListener('beforeinstallprompt',handler)},[]);
+
+ useEffect(()=>{if(!run||!['running','partial'].includes(run.status)||(run.offset>=run.total&&!run.retryPending))return;const timer=window.setInterval(()=>refresh().catch(()=>{}),4000);return()=>window.clearInterval(timer)},[run]);
 
  async function scan(mode:'quick'|'full'){
   setBusy(true);setError('');setNotice('');setDemo(false);setScanMenu(false);
   try{
-   let response=await fetch('/api/scan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'start',mode})});
-   let payload=await response.json();if(!response.ok)throw Error(payload.error||'تعذّر بدء الفحص.');setRun(payload.run);
-   const maxSteps=mode==='quick'?20:40;let steps=0;
-   while(payload.run&&['running','partial'].includes(payload.run.status)&&(payload.run.offset<payload.run.total||payload.run.retryPending)&&steps<maxSteps){
-    response=await fetch('/api/scan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'step',runId:payload.run.id})});
-    payload=await response.json();if(!response.ok)throw Error(payload.error||'تعذّر إكمال الدفعة.');setRun(payload.run);steps++;
-    if(payload.run.offset<payload.run.total||payload.run.retryPending)await new Promise(resolve=>setTimeout(resolve,140));
-   }
-   await refresh();
-   if(payload.run&&(payload.run.offset<payload.run.total||payload.run.retryPending))setNotice('حُفظ التقدم. اضغط «متابعة الفحص» لإكمال الجولة التالية دون فقد النتائج.');
+   const response=await fetch('/api/background-scan/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});
+   const payload=await response.json();if(!response.ok)throw Error(payload.error||'تعذّر بدء الفحص.');setRun(payload.run);
+   setNotice(notificationsEnabled?'بدأ الفحص على الخادم. يمكنك إغلاق التطبيق وسيصلك إشعار عند انتهائه.':'بدأ الفحص على الخادم وسيستمر بعد إغلاق التطبيق. فعّل الإشعارات ليصلك تنبيه عند الانتهاء.');
   }catch(e:any){setError(e.message||'تعذّر إكمال الفحص.')}finally{setBusy(false)}
+ }
+
+ async function enableNotifications(){
+  setError('');setNotice('');
+  try{
+   if(!('serviceWorker'in navigator)||!('PushManager'in window)||!('Notification'in window))throw Error('هذا المتصفح لا يدعم إشعارات الويب. على iPhone ثبّت الموقع على الشاشة الرئيسية وافتحه من هناك.');
+   const standalone=window.matchMedia('(display-mode: standalone)').matches||(navigator as any).standalone===true;
+   if(/iPhone|iPad|iPod/i.test(navigator.userAgent)&&!standalone)throw Error('على iPhone: أضف الموقع إلى الشاشة الرئيسية أولًا، ثم افتحه من الأيقونة وفعّل الإشعارات.');
+   const permission=await Notification.requestPermission();
+   if(permission!=='granted')throw Error('لم يتم السماح بالإشعارات. يمكنك تفعيلها من إعدادات الهاتف.');
+   const registration=await navigator.serviceWorker.ready;
+   const keyResponse=await fetch('/api/push/key');const keyPayload=await keyResponse.json();if(!keyResponse.ok||!keyPayload.publicKey)throw Error('تعذّر تجهيز مفتاح الإشعارات.');
+   const bytes=Uint8Array.from(atob(keyPayload.publicKey.replace(/-/g,'+').replace(/_/g,'/').padEnd(Math.ceil(keyPayload.publicKey.length/4)*4,'=')),character=>character.charCodeAt(0));
+   const subscription=await registration.pushManager.getSubscription()||await registration.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:bytes});
+   const response=await fetch('/api/push/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(subscription)});const payload=await response.json();if(!response.ok)throw Error(payload.error||'تعذّر حفظ اشتراك الإشعارات.');
+   setNotificationsEnabled(true);setNotice('تم تفعيل الإشعارات. سيصلك تنبيه عند انتهاء فحص السوق حتى لو أغلقت التطبيق.');
+  }catch(e:any){setError(e.message||'تعذّر تفعيل الإشعارات.')}
  }
 
  async function favorite(symbol:string){if(demo){setNotice('الحفظ متاح للبيانات الفعلية فقط.');return}try{const response=await fetch('/api/radar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'favorite',symbol})});const payload=await response.json();if(!response.ok)throw Error(payload.error||'تعذّر حفظ الشركة.');setFavorites(payload.favorites)}catch(e:any){setError(e.message)}}
@@ -71,7 +84,7 @@ export default function RadarApp(){
  const incomplete=evaluated.filter(x=>x.e.status==='UNKNOWN').length;
  const excluded=evaluated.filter(x=>x.e.status==='FAIL').length;
  const progress=run?.total?Math.min(100,100*(run.processed||0)/run.total):0;
- const resumable=run&&run.source?.includes('Nasdaq/SEC v3')&&['running','partial'].includes(run.status)&&(run.offset<run.total||run.retryPending);
+ const resumable=run&&run.source?.includes('Nasdaq/SEC v4')&&['running','partial'].includes(run.status)&&(run.offset<run.total||run.retryPending);
 
  function switchTab(id:string){setTab(id);setMobileNav(false);if(id==='core'||id==='bounce'){setStrategy(id);setFilter('all')}}
  function exportData(){const blob=new Blob([JSON.stringify({run,mode:demo?'synthetic':'observed',strategy:SPECS[strategy],results:evaluated,evaluationMode:'current-spec reevaluation',persistedEvaluations:demo?[]:storedEvaluations},null,2)],{type:'application/json'});const url=URL.createObjectURL(blob),anchor=document.createElement('a');anchor.href=url;anchor.download='small-cap-radar-audit.json';anchor.click();URL.revokeObjectURL(url)}
@@ -89,11 +102,11 @@ export default function RadarApp(){
   <main className="app-main">
    <header className="appbar"><button className="menu-button" onClick={()=>setMobileNav(true)} aria-label="فتح القائمة"><Menu size={21}/></button><div className="breadcrumb"><span>رادار</span><ChevronLeft size={14}/><b>{tabTitles[tab]}</b></div><div className="appbar-meta"><span className="market-state"><span className="live-dot"/> مصادر مباشرة</span><span className="avatar">YH</span></div></header>
    <div className="content">
-    <section className="command-header"><div><span className="kicker">مساحة البحث الاستثماري</span><h1>{tabTitles[tab]}</h1><p>{tab==='home'?'فلترة الأسهم الأمريكية الصغيرة بقواعد قابلة للتدقيق.':tab==='lab'?'اختبر القواعد والتكاليف قبل اعتماد أي نتيجة.':tab==='data'?'راقب مصادر كل رقم وجودته وتاريخ توفره.':'نتائج واضحة، أسباب معلنة، وفجوات لا تُخفى.'}</p></div><div className="scan-actions"><button className="scan-primary" onClick={()=>resumable?scan(run.source?.includes('quick')?'quick':'full'):setScanMenu(v=>!v)} disabled={busy}><RefreshCw size={17} className={busy?'spin':''}/>{busy?'جارٍ الفحص':resumable?'متابعة الفحص':'بدء فحص'}</button>{scanMenu&&<div className="scan-popover"><button onClick={()=>scan('quick')}><b>فحص سريع</b><span>12 سهمًا موزعة ضمن نطاق الشركات الصغيرة</span></button><button onClick={()=>scan('full')}><b>فحص السوق الكامل</b><span>جميع الأسهم المدرجة مع حفظ التقدم</span></button></div>}</div></section>
+    <section className="command-header"><div><span className="kicker">مساحة البحث الاستثماري</span><h1>{tabTitles[tab]}</h1><p>{tab==='home'?'فلترة الأسهم الأمريكية الصغيرة بقواعد قابلة للتدقيق.':tab==='lab'?'اختبر القواعد والتكاليف قبل اعتماد أي نتيجة.':tab==='data'?'راقب مصادر كل رقم وجودته وتاريخ توفره.':'نتائج واضحة، أسباب معلنة، وفجوات لا تُخفى.'}</p></div><div className="scan-actions"><button className={`notification-button ${notificationsEnabled?'enabled':''}`} onClick={enableNotifications} aria-label={notificationsEnabled?'الإشعارات مفعّلة':'تفعيل الإشعارات'}><Bell size={16}/><span>{notificationsEnabled?'الإشعارات مفعّلة':'تفعيل الإشعارات'}</span></button><button className="scan-primary" onClick={()=>resumable?scan(run.source?.includes('quick')?'quick':'full'):setScanMenu(v=>!v)} disabled={busy}><RefreshCw size={17} className={busy||resumable?'spin':''}/>{busy?'جارٍ البدء':resumable?'الفحص يعمل':'بدء فحص'}</button>{scanMenu&&<div className="scan-popover"><button onClick={()=>scan('quick')}><b>فحص سريع</b><span>12 سهمًا موزعة ضمن نطاق الشركات الصغيرة</span></button><button onClick={()=>scan('full')}><b>فحص السوق الكامل</b><span>جميع الأسهم المدرجة مع حفظ التقدم</span></button></div>}</div></section>
 
     {(error||notice||demo)&&<div className={`system-message ${error?'danger':demo?'synthetic':''}`}>{error?<AlertTriangle size={17}/>:demo?<FlaskConical size={17}/>:<Info size={17}/>}<span>{error||notice||(demo?'وضع العرض التجريبي: البيانات اصطناعية ولا تمثل شركات حقيقية.':'')}</span>{demo&&<button onClick={()=>refresh().catch(e=>setError(e.message))}>العودة للبيانات</button>}<button className="message-close" onClick={()=>{setError('');setNotice('')}} aria-label="إغلاق"><X size={15}/></button></div>}
 
-    {run&&<section className="scan-strip"><div className="scan-strip-head"><div><span className={`run-state ${run.status}`}>{run.status==='complete'?'مكتمل':run.status==='failed'?'فشل':resumable?'قيد التنفيذ':'جزئي'}</span><b>{run.source?.includes('quick')?'فحص سريع':'فحص السوق'}</b><small dir="ltr">{new Date(run.created_at).toLocaleString('en-GB')}</small></div><div className="scan-numbers"><span><b>{(run.processed||0).toLocaleString('en-US')}</b> تمت معالجتها</span><span><b>{(run.total||0).toLocaleString('en-US')}</b> الإجمالي</span><span className={run.failed?'negative':''}><b>{run.failed||0}</b> فشل</span></div></div><Progress value={progress}/><div className="progress-caption"><span>{progress.toFixed(1)}%</span><span>{resumable?'يمكن إغلاق التطبيق؛ التقدم محفوظ.':'آخر لقطة متاحة للعرض.'}</span></div></section>}
+    {run&&<section className="scan-strip"><div className="scan-strip-head"><div><span className={`run-state ${run.status}`}>{run.status==='complete'?'مكتمل':run.status==='failed'?'فشل':resumable?'قيد التنفيذ':'جزئي'}</span><b>{run.source?.includes('quick')?'فحص سريع':'فحص السوق'}</b><small dir="ltr">{new Date(run.created_at).toLocaleString('en-GB')}</small></div><div className="scan-numbers"><span><b>{(run.processed||0).toLocaleString('en-US')}</b> تمت معالجتها</span><span><b>{(run.total||0).toLocaleString('en-US')}</b> الإجمالي</span><span className={run.failed?'negative':''}><b>{run.failed||0}</b> فشل</span></div></div><Progress value={progress}/><div className="progress-caption"><span>{progress.toFixed(1)}%</span><span>{resumable?'الفحص مستمر على الخادم ويمكنك إغلاق التطبيق.':'آخر لقطة متاحة للعرض.'}</span></div></section>}
 
     <section className="metric-row">
      <Metric icon={Database} label="الأسهم المفحوصة" value={data.length} meta="UNIVERSE" tone="neutral"/>

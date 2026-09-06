@@ -5,7 +5,8 @@ Arabic RTL mobile-first PWA, hosted privately on Cloudflare Workers through Site
 ## Implemented
 
 - Professional Arabic RTL research terminal with a dense desktop table, responsive mobile layout, Core/Bounce filters, company gate/evidence detail, five-range historical chart, persistent favorites, JSON snapshot import and audit export.
-- Cloudflare D1 self-initializing schema and migrations, immutable run identifiers and per-run snapshots/evaluations, explicit provider errors and resumable symbol cursor with lease/offset concurrency protection.
+- Cloudflare D1 self-initializing schema and migrations, immutable run identifiers and per-run snapshots/evaluations, explicit provider errors and a server-owned cursor with lease/offset concurrency protection. Chained Worker tasks continue after the browser closes.
+- Standards-based Web Push completion notifications with VAPID signing. On iPhone, install the PWA on the Home Screen and enable notifications once inside the installed app.
 - Nasdaq is the primary market-data source. A bundled official SEC/Nasdaq directory prevents a `403` or temporary provider outage from blocking scan startup. Quick mode evaluates 12 representative small-cap symbols from a bundled, dated Nasdaq history/SEC fundamentals cache; full mode preserves the complete 7,675-symbol universe and attempts live Nasdaq history plus SEC Company Facts. Each step processes up to eight symbols concurrently and keeps a durable cursor/retry queue. The complete market scan has **not** been load-tested or completed.
 - Shared versioned gate engine, Core/Legacy documented weights, no fabricated normalization/score. Bounce documented gates; unresolved liquidity requires explicit review.
 - Conservative SEC annual + current YTD − prior YTD normalization, provenance, foreign-filer flag, unavailable-data handling. Some issuers require custom taxonomy support and remain incomplete.
@@ -42,7 +43,9 @@ Operational conventions: 20-day median dollar volume for Core and Bounce (Bounce
 
 - `GET /api/radar`: most recent run and last available snapshots; explicit `dataRunId` identifies displayed data.
 - `POST /api/radar`: same-origin `{action:'favorite',symbol}` or `{action:'import',records: Snapshot[]}`. Import max 500 records / 4MB; rejects duplicate symbols and malformed provenance.
-- `POST /api/scan`: `{action:'start',mode:'quick'|'full'}` resumes an unfinished scan in the selected mode; `{action:'step',runId}` processes bounded batches. Failed symbols enter a persistent queue with up to three total attempts; exhausted failures keep the run partial.
+- `POST /api/background-scan/start`: starts or revives a server-owned quick/full scan and returns immediately. The Worker passes a signed internal baton between bounded batches, so browser suspension does not control progress.
+- `GET /api/push/key` and `POST /api/push/subscribe`: create the device subscription used for the completion alert. Expired subscriptions are removed automatically.
+- `POST /api/scan`: retained as a bounded diagnostic/manual recovery API. Failed symbols enter a persistent queue with up to three total attempts; exhausted failures keep the run partial.
 - `GET /api/export?kind=spec` and `?kind=schema`: strategy JSON or documented synthetic schema example.
 
 Do not import the schema wrapper itself: import the actual array of sourced snapshots. Data are research inputs, not independently verified simply because they have been imported.
