@@ -30,9 +30,16 @@ export function evaluateStrategy(strategy:keyof typeof SPECS,s:Snapshot){
  const quote=s.provenance.price;add('freshness','حداثة بيانات السعر',quote&&Number.isFinite(Date.parse(quote.availableAt))?Date.parse(s.asOf)>=Date.parse(quote.availableAt)&&Date.parse(s.asOf)-Date.parse(quote.availableAt)<=3*864e5:null,'السعر الأقدم من 3 أيام يحتاج تحديثًا؛ حد تشغيلي محافظ غير مختبر.');
  const financial=s.provenance.revenue;if(strategy!=='bounce')add('filingFreshness','حداثة الفترة المالية',financial?Date.parse(s.asOf)-Date.parse(financial.periodEnd)<=200*864e5:null,'الفترة الأقدم من 200 يوم تحتاج مراجعة، بما فيها الإفصاحات الأجنبية.');
  add('conflict','تعارض المصادر',s.sourceConflicts?.length?false:s.confidence==='D'||s.confidence==='F'?false:null,s.sourceConflicts?.join('؛ ')||'التحقق من مصدرين لم يكتمل.');
- // Verification is a final-ranking gate, not a fabricated screening failure.
+ // Keep measurable screening separate from unresolved research review. UNKNOWN
+ // never becomes PASS; it remains visible as an explicit review state.
+ const hardGateIds=strategy==='bounce'?['security','cap','liquidity','collapse','low','dilution','reversal']:['security','cap','liquidity','revenue','valuation','profitability','deathSpiral'];
+ const measurableGateIds=hardGateIds.filter(id=>id!=='deathSpiral');
+ const hardGates=checks.filter(c=>hardGateIds.includes(c.id));
+ const measurableGates=checks.filter(c=>measurableGateIds.includes(c.id));
+ const measurableStatus:Status=measurableGates.some(c=>c.status==='FAIL')?'FAIL':measurableGates.some(c=>c.status==='UNKNOWN')?'UNKNOWN':'PASS';
+ const gateStatus:Status=hardGates.some(c=>c.status==='FAIL')?'FAIL':hardGates.some(c=>c.status==='UNKNOWN')?'UNKNOWN':'PASS';
  const screening=checks.filter(c=>c.id!=='conflict');
  const status:Status=screening.some(c=>c.status==='FAIL')?'FAIL':screening.some(c=>c.status==='UNKNOWN')?'UNKNOWN':'PASS';
  const researchComplete=['financials','valuation','analysts','sector'].every(k=>s.research?.[k as keyof NonNullable<Snapshot['research']>]===true);
- return {strategy:spec.id,version:spec.version,hash:specHash(strategy),status,qualified:status==='PASS',score:null as number|null,scoreStatus:spec.scoreStatus,checks,researchComplete,finalRanked:false,finalReason:'يلزم اعتماد المعادلات والتحقق من المصادر والزوايا الأربع'};
+ return {strategy:spec.id,version:spec.version,hash:specHash(strategy),status,qualified:status==='PASS',gateStatus,screeningQualified:measurableStatus==='PASS',measurableStatus,score:null as number|null,scoreStatus:spec.scoreStatus,checks,researchComplete,finalRanked:false,finalReason:'يلزم اعتماد المعادلات والتحقق من المصادر والزوايا الأربع'};
 }
