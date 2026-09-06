@@ -75,7 +75,7 @@ async function scheduleNext(request: Request, runId: string, env: Env) {
   const target = new URL("/__radar-background", request.url);
   const cookie = request.headers.get("Cookie");
   for (let attempt = 0; attempt < 3; attempt++) {
-    const headers: Record<string, string> = { "Authorization": `Bearer ${env.BACKGROUND_SCAN_SECRET}`, "Content-Type": "application/json" };
+    const headers: Record<string, string> = { "X-Radar-Background": env.BACKGROUND_SCAN_SECRET, "Content-Type": "application/json" };
     // Private Sites authenticate before the Worker runs. Preserve the owner's
     // session on the internal baton so the next batch reaches this Worker.
     if (cookie) headers.Cookie = cookie;
@@ -155,7 +155,7 @@ const worker = {
     }
 
     if (url.pathname === "/__radar-background" && request.method === "POST") {
-      if (request.headers.get("Authorization") !== `Bearer ${env.BACKGROUND_SCAN_SECRET}`) return json({ error: "غير مصرح" }, 401);
+      if (request.headers.get("X-Radar-Background") !== env.BACKGROUND_SCAN_SECRET) return json({ error: "غير مصرح" }, 401);
       const input = await request.json() as any;
       if (typeof input.runId !== "string") return json({ error: "معرّف غير صالح" }, 400);
       ctx.waitUntil(runBackgroundBatch(request, input.runId, env));
