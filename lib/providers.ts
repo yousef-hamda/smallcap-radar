@@ -5,7 +5,7 @@ import { observations, latestInstant, trailingAnnual, provenance, REVENUE_TAGS }
 import bundledUniverse from './universe.generated.json';
 import quickCache from './quick-cache.generated.json';
 
-type Company = { cik: number; name: string; ticker: string; exchange: string; price?: number; marketCap?: number; volume?: number; sector?: string; industry?: string };
+export type Company = { cik: number; name: string; ticker: string; exchange: string; price?: number; marketCap?: number; volume?: number; averageVolume10d?: number; return52w?: number; low52w?: number; high52w?: number; ma50d?: number; ma200d?: number; sector?: string; industry?: string };
 type NasdaqRow = { symbol: string; name?: string; lastsale?: string; marketCap?: string; volume?: string; sector?: string; industry?: string };
 type CachedQuick = { history: NonNullable<Snapshot['history']>; financials: Record<string, number>; provenance: Record<string, Provenance>; issues: string[] };
 
@@ -14,6 +14,10 @@ export const quickSymbols = Object.keys(quickCache.symbols);
 const browserAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124 Safari/537.36';
 const secAgent = 'SmallCapRadar/2.1 research-contact:yousef-hamda@users.noreply.github.com';
 const numeric = (value: unknown) => { const parsed = Number(String(value ?? '').replace(/[$,%+,]/g, '').trim()); return Number.isFinite(parsed) ? parsed : null };
+
+export function companyBySymbol(symbol: string): Company | null {
+  return (bundledUniverse.companies as Company[]).find((company) => company.ticker === symbol.toUpperCase()) ?? null;
+}
 
 function requestHeaders(url: string): Record<string, string> {
   return new URL(url).hostname.endsWith('sec.gov')
@@ -35,11 +39,66 @@ function quotePatch(row?: NasdaqRow) {
 
 export async function universe(): Promise<Company[]> {
   const base = (bundledUniverse.companies as Company[]).map((company) => ({ ...company }));
+  let nasdaq = base;
   try {
     const latest = await fetchJson(NASDAQ_SCREENER) as { data?: { rows?: NasdaqRow[] } };
     const quotes = new Map((latest.data?.rows ?? []).map((row) => [row.symbol, row]));
-    return base.map((company) => ({ ...company, ...quotePatch(quotes.get(company.ticker)) }));
-  } catch { return base }
+    nasdaq = base.map((company) => ({ ...company, ...quotePatch(quotes.get(company.ticker)) }));
+  } catch {}
+  return yahooBulkQuotes(nasdaq);
+}
+
+async function yahooAuth() {
+  const first = await fetch('https://fc.yahoo.com/', { redirect: 'manual', headers: { 'User-Agent': browserAgent, Accept: '*/*' }, signal: AbortSignal.timeout(8_000) });
+  const rawCookie = first.headers.get('set-cookie');
+  if (!rawCookie) throw Error('Yahoo cookie unavailable');
+  const cookie = rawCookie.split(';', 1)[0];
+  const crumbResponse = await fetch('https://query1.finance.yahoo.com/v1/test/getcrumb', { headers: { 'User-Agent': browserAgent, Cookie: cookie, Accept: 'text/plain' }, signal: AbortSignal.timeout(8_000) });
+  if (!crumbResponse.ok) throw Error(`Yahoo crumb HTTP ${crumbResponse.status}`);
+  const crumb = (await crumbResponse.text()).trim();
+  if (!crumb || crumb.includes('<')) throw Error('Yahoo crumb invalid');
+  return { cookie, crumb };
+}
+
+async function yahooBulkQuotes(companies: Company[]): Promise<Company[]> {
+  try {
+    const auth = await yahooAuth();
+    const chunks: Company[][] = [];
+    for (let index = 0; index < companies.length; index += 250) chunks.push(companies.slice(index, index + 250));
+    const quoteMap = new Map<string, any>();
+    for (let index = 0; index < chunks.length; index += 8) {
+      const group = chunks.slice(index, index + 8);
+      const payloads = await Promise.all(group.map(async (chunk) => {
+        const symbols = chunk.map((company) => company.ticker).join(',');
+        const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbols)}&crumb=${encodeURIComponent(auth.crumb)}`;
+        const response = await fetch(url, { headers: { 'User-Agent': browserAgent, Cookie: auth.cookie, Accept: 'application/json' }, signal: AbortSignal.timeout(10_000) });
+        if (!response.ok) throw Error(`Yahoo quote HTTP ${response.status}`);
+        return response.json() as Promise<{ quoteResponse?: { result?: any[] } }>;
+      }));
+      for (const payload of payloads) for (const quote of payload.quoteResponse?.result ?? []) quoteMap.set(quote.symbol, quote);
+    }
+    if (quoteMap.size < Math.min(100, companies.length / 2)) throw Error('Yahoo bulk coverage too low');
+    return companies.map((company) => {
+      const quote = quoteMap.get(company.ticker);
+      if (!quote) return company;
+      return {
+        ...company,
+        ...(Number.isFinite(quote.regularMarketPrice) ? { price: quote.regularMarketPrice } : {}),
+        ...(Number.isFinite(quote.marketCap) ? { marketCap: quote.marketCap } : {}),
+        ...(Number.isFinite(quote.regularMarketVolume) ? { volume: quote.regularMarketVolume } : {}),
+        ...(Number.isFinite(quote.averageDailyVolume10Day) ? { averageVolume10d: quote.averageDailyVolume10Day } : {}),
+        ...(Number.isFinite(quote.fiftyTwoWeekChangePercent) ? { return52w: quote.fiftyTwoWeekChangePercent } : {}),
+        ...(Number.isFinite(quote.fiftyTwoWeekLow) ? { low52w: quote.fiftyTwoWeekLow } : {}),
+        ...(Number.isFinite(quote.fiftyTwoWeekHigh) ? { high52w: quote.fiftyTwoWeekHigh } : {}),
+        ...(Number.isFinite(quote.fiftyDayAverage) ? { ma50d: quote.fiftyDayAverage } : {}),
+        ...(Number.isFinite(quote.twoHundredDayAverage) ? { ma200d: quote.twoHundredDayAverage } : {}),
+        ...(quote.sector ? { sector: quote.sector } : {}),
+        ...(quote.industry ? { industry: quote.industry } : {}),
+      };
+    });
+  } catch {
+    return companies;
+  }
 }
 
 function isoDate(date: string) { const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(date); return match ? `${match[3]}-${match[1]}-${match[2]}` : '' }

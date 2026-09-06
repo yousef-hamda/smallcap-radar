@@ -1,8 +1,10 @@
 import { createRun, currentHash, db, ensureSchema, insertSnapshot, log } from './storage';
 import { companySnapshot, quickSymbols, universe } from './providers';
+import { fetchBulkFundamentals, preliminarySnapshot, type BulkFundamentals } from './bulk';
 
 const BATCH_SIZE = 12;
-export const SCAN_SOURCE_VERSION = 'Nasdaq/SEC v5';
+const SCORE_BATCH_SIZE = 600;
+export const SCAN_SOURCE_VERSION = 'Bulk Quotes/SEC Frames v6';
 
 const nonTradable = /\b(etf|fund|trust|warrant|right|unit|preferred|depositary|senior note|bond|debenture|limited partnership)\b|,\s*L\.P\./i;
 
@@ -37,12 +39,13 @@ export async function startScan(modeInput: unknown) {
     let companies = await universe();
     if (!companies.length) throw new Error('دليل الشركات المحلي فارغ');
     const universeTotal = companies.length;
+    const quoteCoverage = companies.filter((company: any) => Number.isFinite(company.price) && Number.isFinite(company.marketCap)).length;
     if (mode === 'quick') {
       const bySymbol = new Map(companies.map((company: any) => [company.ticker, company]));
       companies = quickSymbols.map((symbol) => bySymbol.get(symbol)).filter(Boolean) as any[];
     } else companies = preliminaryCandidates(companies);
     const screenedOut = universeTotal - companies.length;
-    await database.prepare('UPDATE strategy_runs SET universe=?,total=?,universe_total=?,screened_out=?,stage=3 WHERE id=?').bind(JSON.stringify(companies), companies.length, universeTotal, screenedOut, id).run();
+    await database.prepare('UPDATE strategy_runs SET universe=?,total=?,universe_total=?,screened_out=?,quote_coverage=?,stage=? WHERE id=?').bind(JSON.stringify(companies), companies.length, universeTotal, screenedOut, quoteCoverage, mode === 'quick' ? 3 : 4, id).run();
     await log(id, 'universe', `Loaded ${universeTotal} exchange-listed symbols; ${companies.length} passed security type, price and $25M-$2B preliminary gates (${mode})`);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'تعذّر تجهيز دليل الشركات';
@@ -65,6 +68,43 @@ export async function processScanBatch(runId: string) {
   if (!lock.meta.changes) return { run: publicRun(run), done: false, busy: true };
 
   const companies = JSON.parse(run.universe || '[]');
+  const isQuick = String(run.source).includes('quick');
+
+  if (!isQuick && run.stage === 4) {
+    try {
+      const bulk = await fetchBulkFundamentals(companies.map((company: any) => Number(company.cik)));
+      await database.prepare('DELETE FROM bulk_fundamentals WHERE run_id=?').bind(run.id).run();
+      const statements = [...bulk.fundamentals.entries()].map(([cik, payload]) => database.prepare('INSERT INTO bulk_fundamentals(run_id,cik,payload) VALUES(?,?,?)').bind(run.id, cik, JSON.stringify(payload)));
+      for (let index = 0; index < statements.length; index += 75) await database.batch(statements.slice(index, index + 75));
+      const error = bulk.failed ? `SEC Frames: ${bulk.success}/${bulk.requests} requests succeeded. ${bulk.errors.join('؛ ')}` : '';
+      await database.prepare('UPDATE strategy_runs SET stage=9,offset=0,processed=0,sec_requests=?,sec_success=?,sec_failed=?,fundamental_coverage=?,error=?,updated_at=?,lease_until=0 WHERE id=?').bind(bulk.requests, bulk.success, bulk.failed, bulk.fundamentals.size, error, new Date().toISOString(), run.id).run();
+      await log(run.id, 'sec_frames', `SEC Frames ${bulk.success}/${bulk.requests}; coverage ${bulk.fundamentals.size}/${companies.length}; annual ${bulk.annual}; instant ${bulk.instant}`);
+      run = await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first();
+      return { run: publicRun(run), done: false };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'SEC Frames stage failed';
+      await database.prepare("UPDATE strategy_runs SET status='partial',error=?,updated_at=?,lease_until=0 WHERE id=?").bind(message, new Date().toISOString(), run.id).run();
+      await log(run.id, 'sec_frames', message);
+      run = await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first();
+      return { run: publicRun(run), done: false };
+    }
+  }
+
+  if (!isQuick && run.stage === 9) {
+    const rows = (await database.prepare('SELECT cik,payload FROM bulk_fundamentals WHERE run_id=?').bind(run.id).all()).results as any[];
+    const facts = new Map<number, BulkFundamentals>(rows.map((row) => [Number(row.cik), JSON.parse(row.payload)]));
+    const entries = companies.slice(run.offset, run.offset + SCORE_BATCH_SIZE);
+    const now = new Date().toISOString();
+    const writes = entries.map((company: any) => insertSnapshot(run.id, preliminarySnapshot(company, facts.get(Number(company.cik)), now)));
+    const offset = run.offset + entries.length;
+    const done = offset >= run.total;
+    const status = done ? (run.sec_failed ? 'partial' : 'complete') : 'running';
+    writes.push(database.prepare('UPDATE strategy_runs SET offset=?,processed=processed+?,stage=?,status=?,updated_at=?,lease_until=0 WHERE id=?').bind(offset, entries.length, done ? 13 : 9, status, now, run.id));
+    for (let index = 0; index < writes.length; index += 75) await database.batch(writes.slice(index, index + 75));
+    run = await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first();
+    return { run: publicRun(run), done };
+  }
+
   const retrying = run.offset >= run.total;
   const queue = JSON.parse(run.retry_queue || '[]');
   const entries = retrying ? queue.slice(0, BATCH_SIZE) : companies.slice(run.offset, run.offset + BATCH_SIZE).map((company: any) => ({ company, attempt: 0 }));
