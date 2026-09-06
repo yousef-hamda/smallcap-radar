@@ -5,13 +5,13 @@ Arabic RTL mobile-first PWA, hosted privately on Cloudflare Workers through Site
 ## Implemented
 
 - Professional Arabic RTL research terminal with a dense desktop table, responsive mobile layout, Core/Bounce filters, company gate/evidence detail, five-range historical chart, persistent favorites, JSON snapshot import and audit export.
-- Cloudflare D1 self-initializing schema and migrations, immutable run identifiers and per-run snapshots/evaluations, explicit provider errors and a server-owned cursor with lease/offset concurrency protection. Chained Worker tasks continue after the browser closes.
-- Standards-based Web Push completion notifications with VAPID signing. On iPhone, install the PWA on the Home Screen and enable notifications once inside the installed app.
-- Nasdaq is the primary market-data source. A bundled official SEC/Nasdaq directory prevents a `403` or temporary provider outage from blocking scan startup. Quick mode evaluates 12 representative small-cap symbols from a bundled, dated Nasdaq history/SEC fundamentals cache; full mode preserves the complete 7,675-symbol universe and attempts live Nasdaq history plus SEC Company Facts. Each step processes up to eight symbols concurrently and keeps a durable cursor/retry queue. The complete market scan has **not** been load-tested or completed.
+- Cloudflare D1 self-initializing schema and migrations, immutable run identifiers and per-run snapshots/evaluations, explicit provider errors and a server-owned cursor with lease/offset concurrency protection. Chained Worker tasks continue after the browser closes; production verification on 2026-09-06 advanced the same run from offset 24 to 144 while the browser was closed.
+- Standards-based Web Push completion notifications with VAPID signing and an explicit subscribe-and-test panel. On iPhone, install the PWA on the Home Screen, open it from the icon, and press **تفعيل واختبار** once.
+- Nasdaq is the primary market-data source. A bundled official SEC/Nasdaq directory prevents a `403` or temporary provider outage from blocking scan startup. Quick mode evaluates 12 representative small-cap symbols from a bundled, dated Nasdaq history/SEC fundamentals cache. Full mode first applies security-type, valid-price and $25M–$2B size gates to the complete 7,675-symbol directory, then deep-scans only the surviving candidates (2,597 in the 2026-09-06 snapshot; 5,078 removed before expensive requests). Each step processes up to 12 symbols concurrently and keeps a durable cursor/retry queue. The complete end-to-end market run is still in progress and has not yet been benchmarked to completion.
 - Shared versioned gate engine, Core/Legacy documented weights, no fabricated normalization/score. Bounce documented gates; unresolved liquidity requires explicit review.
 - Conservative SEC annual + current YTD − prior YTD normalization, provenance, foreign-filer flag, unavailable-data handling. Some issuers require custom taxonomy support and remain incomplete.
 - PIT availability filter, deterministic firm holdout assignment, firm bootstrap, Bonferroni correction, conservative Bounce exit simulation and costs.
-- Web manifest and icons; offline fallback reads the last snapshot saved on the device. Browser installation support has not been verified on a physical phone.
+- Web manifest and icons; offline fallback reads the last snapshot saved on the device. Installation and notification receipt still require final verification on the owner's physical phone; server-side VAPID request generation is covered by automated tests.
 - 30 meaningful engine/normalization tests, TypeScript checking, production build.
 
 ## Not complete / not validated
@@ -58,7 +58,7 @@ After an empty private `yousef-hamda/small-cap-radar-v2` exists, synchronize thi
 
 ## Secrets and access
 
-No supplied Cloudflare token or R2 key is used or embedded. The user's plan §76 specifically treats previously exposed credentials as compromised; replace those in Cloudflare before configuring a separate deployment. The Sites publication is owner-private. Mutations enforce same-origin requests. If the application is ever made multiuser/public, add application-level authorization and per-user database scope first. Favoriting is currently single-owner state.
+No supplied Cloudflare token or R2 key is used or embedded. The user's plan §76 specifically treats previously exposed credentials as compromised; replace those in Cloudflare before configuring a separate deployment. The Sites publication is public at the owner's explicit request so server-owned batches can re-enter the Worker without the private Sign in with ChatGPT gateway. Mutations enforce same-origin requests, but favorites and scan state are shared globally. Before using this as a multiuser service, add application-level authorization and per-user database scope.
 
 ## Sources
 
