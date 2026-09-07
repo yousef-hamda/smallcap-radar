@@ -1,4 +1,4 @@
-# Acceptance ledger — 2026-09-06
+# Acceptance ledger — 2026-09-07
 
 Status is implementation evidence, not an assertion of historical strategy profitability. Full user plan is preserved in USER_PLAN_AR.md. No section is silently treated as complete.
 
@@ -9,7 +9,7 @@ Provider/MCP selection and the safe integration gates are recorded in [TOOLING_R
 | 1–3 | Funnel, shared engine, 3 models | Shared gates/specs implemented; final funnel and Legacy normalization incomplete |
 | 4–20 | Core | Documented gates/weights implemented; inflection, death-spiral automation and all factor sub-scores BLOCKED on specification/validation |
 | 21–31 | Bounce | Gate evaluator/exits implemented and tested; explicit operational 20-day median dollar-volume threshold ($150k); historical metrics now derived from dated Nasdaq bars; transparent gate-completeness diagnostic is shown, not a predictive ranking score; historic rates remain unverified |
-| 32–35 | Raw/normalized/metrics/provenance | Bulk quote and SEC Frames adapters (including IFRS cash/borrowings), provenance and on-demand Company Facts/history implemented; quote-only records survive fundamental gaps; missing values remain UNKNOWN. Full custom-taxonomy coverage and verified split adjustment remain pending |
+| 32–35 | Raw/normalized/metrics/provenance | Bulk quote and SEC Frames adapters (including IFRS cash/borrowings), historical Bounce metrics, provenance and on-demand Company Facts/history implemented; quote-only records survive fundamental gaps; missing values remain UNKNOWN. Full custom-taxonomy coverage remains pending; material share-count jumps are conservatively held UNKNOWN |
 | 36–38 | Two-source, confidence, four angles | Missing/conflict surfaced; final ranking disabled; no actual secondary-source enrichment |
 | 39 | Universe cleaning | Bundled 7,675-symbol SEC/Nasdaq directory, exchange filter and conservative name classification; quick cache excludes funds, trusts, units, warrants, preferred instruments and limited partnerships. Not yet a fully verified security master |
 | 40–45 | Database, snapshots, stages, hashes | Self-initializing schema, immutable runs/snapshots/checks/hash and cursor/lease implemented. Full scan uses bulk quotes, 16 Frames datasets (including IFRS alternatives), then a historical enrichment pass for small-cap Bounce candidates (12-company bounded batches) to compute 12-month return, 52-week low and 30 completed weekly closes; quick mode retains bounded deep batches and a retry queue. Server tasks continue after the page closes. Research-only stages beyond the production screener remain incomplete |
@@ -35,6 +35,7 @@ Provider/MCP selection and the safe integration gates are recorded in [TOOLING_R
 - Coverage QA: 6,320/7,675 quote coverage; 13/13 official baseline Frames datasets available through the dated fallback, with 3 IFRS alternative datasets added to live requests; 2,381/2,910 candidate fundamental coverage. Yahoo 52-week percentage-point normalization is protected by a regression test.
 - Web Push payload encryption and VAPID signing: passed locally. The final iPhone permission prompt remains a required user gesture.
 - Browser QA completed for navigation, Core/Bounce switching, coverage, filters, restored results and background completion. JSON import remains schema/build-tested rather than claimed as a browser pass. No physical-phone push-receipt test or historical benchmark reproduction was completed.
+- Production re-scan after historical enrichment: 2,910/2,910 completed; 10 Bounce rows passed every measurable and provenance gate, 81 remained UNKNOWN, 1,499 had a valid 30-week MA, 2,903 had a valid 12-month return, and no durable radar row retained full history payloads. Worker `/api/radar` returned successfully after the history-compaction migration.
 
 ## Known constraints
 
