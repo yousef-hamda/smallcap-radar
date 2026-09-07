@@ -2,7 +2,6 @@
 
 import {useEffect,useMemo,useState} from "react";
 import Link from "next/link";
-import {Tabs,TabsList,TabsTrigger} from "@/components/ui/tabs";
 import {
  Activity,AlertTriangle,ArrowUpLeft,BarChart3,Bell,Check,ChevronLeft,Clock3,
  Database,Download,FileUp,FlaskConical,Info,Layers,Menu,Radar,RefreshCw,
@@ -26,8 +25,6 @@ const navItems=[['home','لوحة الفرص',BarChart3],['core','القيمة �
 export default function RadarApp(){
  const [tab,setTab]=useState('bounce');
  const [strategy,setStrategy]=useState<'core'|'bounce'>('bounce');
- const filter='PASS' as const;
- const setFilter=(_value:string)=>{void _value};
  const [query,setQuery]=useState('');
  const [data,setData]=useState<Snapshot[]>([]);
  const [demo,setDemo]=useState(false);
@@ -134,7 +131,7 @@ export default function RadarApp(){
      <section className={`mobile-strategy-brief ${strategy}`}><p>{strategy==='bounce'?'هدف مختلف عن بقية القوائم: احتمال أن يلمس السهم +20% قريبًا، لا أن يتضاعف. الملف هنا معكوس — أسهم مهزومة هبطت أكثر من 35% خلال سنة وبدأت ترتد من قاعها.':'شركات قوية الأساسيات وسعرها بالأرض — رخيصة على المبيعات والدفتري والربح التشغيلي معًا، ورابحة، ومنضبطة في إصدار الأسهم. أفق هذه الفئة 12–24 شهرًا لا أسابيع: إعادة التسعير بطيئة بطبيعتها.'}</p><div className="mobile-brief-stats"><div><b>{strategy==='bounce'?'65.6%':'+23%'}</b><span>{strategy==='bounce'?'تبلغ +20% خلال 6 أشهر':'وسيط العائد 24 شهرًا'}</span></div><div><b>{strategy==='bounce'?'43.9%':'+3%'}</b><span>{strategy==='bounce'?'السوق لنفس الهدف':'وسيط السوق'}</span></div><div><b>{strategy==='bounce'?'28':'25%'}</b><span>{strategy==='bounce'?'وسيط أيام البلوغ':'انهيار مقابل السوق'}</span></div></div><button>▸ {strategy==='bounce'?'الأدلة الكاملة والمخاطر':'كيف بُنيت وما حدودها'}</button></section>
      <section className="strategy-switch" aria-label="اختيار الاستراتيجية"><button className={strategy==='core'?'active':''} onClick={()=>setStrategy('core')}><span><ShieldCheck size={18}/><b>القيمة الأساسية</b></span><small>استثمار 12–24 شهرًا</small></button><button className={strategy==='bounce'?'active':''} onClick={()=>setStrategy('bounce')}><span><Activity size={18}/><b>فرص الارتداد</b></span><small>هدف قصير حتى 3 أشهر</small></button><div className="strategy-note"><Info size={16}/><span>تظهر هنا فقط الشركات التي اجتازت جميع بوابات القائمة المختارة.</span></div></section>
 
-     <section className="research-panel"><div className="panel-heading"><div><h2>{tab==='favorites'?'قائمة المتابعة':filter==='PASS'?'الشركات المؤهلة':'الشركات المستبعدة'} <em>{rows.length}</em></h2><p>{filter==='PASS'?'مرت البوابات القابلة للقياس؛ افتح أي شركة لمراجعة الدرجة من 100 والأدلة.':'مرفوضة بسبب بوابة واحدة أو أكثر؛ يظهر سبب الاستبعاد بوضوح داخل كل شركة.'}</p></div><button className="ghost-button" onClick={exportData}><Download size={16}/> تصدير</button></div><div className="control-row"><label className="search-field"><Search size={17}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="ابحث بالاسم أو الرمز" aria-label="بحث الشركات"/></label><Tabs value={filter} onValueChange={setFilter} dir="rtl"><TabsList><TabsTrigger value="PASS">مؤهلة</TabsTrigger><TabsTrigger value="FAIL">مستبعدة</TabsTrigger></TabsList></Tabs></div>
+     <section className="research-panel"><div className="panel-heading"><div><span className="section-eyebrow">{tab==='favorites'?'قائمة المتابعة':'نتائج مؤهلة'}</span><h2>{tab==='favorites'?'المفضلة':strategy==='core'?'القيمة الأساسية':'فرص الارتداد'} <em>{rows.length}</em></h2><p>{tab==='favorites'?'الشركات التي حفظتها للمتابعة السريعة.':'شركات اجتازت جميع بوابات الاستراتيجية؛ افتح أي بطاقة لمراجعة الدرجة من 100 والأدلة.'}</p></div><button className="ghost-button" onClick={exportData}><Download size={16}/> تصدير</button></div><div className="control-row"><label className="search-field"><Search size={17}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="ابحث بالاسم أو الرمز" aria-label="بحث الشركات"/></label></div>
       {rows.length?<StockTable rows={rows} strategy={strategy} favorites={favorites} onSelect={openCompany} onFavorite={favorite}/>:<EmptyState hasData={!!data.length} incomplete={incomplete} onQuick={()=>scan('quick')} onDemo={()=>{setData(fixtures);setDemo(true);setRun(null);setError('');setNotice('')}}/>}
      </section>
     </>}
