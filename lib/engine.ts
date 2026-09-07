@@ -56,7 +56,7 @@ export function evaluateStrategy(strategy:keyof typeof SPECS,s:Snapshot){
  add('provenance','المصادر والتوقيت',required.every(k=>{const p=s.provenance[k];return p&&p.source&&p.availableAt&&p.periodEnd&&Number.isFinite(Date.parse(p.availableAt))&&Date.parse(p.availableAt)<=Date.parse(s.asOf)} )?true:null,'كل مقياس حرج يحتاج مصدرًا وتوقيت توفر لا يتجاوز وقت اللقطة.');
  const quote=s.provenance.price;add('freshness','حداثة بيانات السعر',quote&&Number.isFinite(Date.parse(quote.availableAt))?Date.parse(s.asOf)>=Date.parse(quote.availableAt)&&Date.parse(s.asOf)-Date.parse(quote.availableAt)<=3*864e5:null,'السعر الأقدم من 3 أيام يحتاج تحديثًا؛ حد تشغيلي محافظ غير مختبر.');
  const financial=s.provenance.revenue;if(strategy!=='bounce')add('filingFreshness','حداثة الفترة المالية',financial?Date.parse(s.asOf)-Date.parse(financial.periodEnd)<=200*864e5:null,'الفترة الأقدم من 200 يوم تحتاج مراجعة، بما فيها الإفصاحات الأجنبية.');
- add('conflict','تعارض المصادر',s.sourceConflicts?.length?false:s.confidence==='D'||s.confidence==='F'?false:null,s.sourceConflicts?.join('؛ ')||'التحقق من مصدرين لم يكتمل.');
+ add('conflict','تعارض المصادر',s.sourceConflicts?.length?false:s.confidence==='A'||s.confidence==='B'?true:s.confidence==='D'||s.confidence==='F'?false:null,s.sourceConflicts?.join('؛ ')||((s.confidence==='A'||s.confidence==='B')?'لا يوجد اختلاف جوهري بين مساري البيانات.':'التحقق من مصدرين لم يكتمل.'));
  // Keep measurable screening separate from unresolved research review. UNKNOWN
  // never becomes PASS; it remains visible as an explicit review state.
  const hardGateIds=strategy==='bounce'?['security','cap','liquidity','collapse','low','dilution','reversal']:['security','cap','liquidity','revenue','valuation','profitability','deathSpiral'];
