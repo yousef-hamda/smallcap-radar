@@ -4,6 +4,7 @@ import { fetchBulkFundamentals, preliminarySnapshot, type BulkFundamentals } fro
 import { bounceHistoryMetrics } from './research';
 
 const BATCH_SIZE = 12;
+const HISTORY_BATCH_SIZE = 48;
 const SCORE_BATCH_SIZE = 600;
 export const SCAN_SOURCE_VERSION = 'Bulk Quotes/SEC Frames v6';
 
@@ -119,7 +120,7 @@ export async function processScanBatch(runId: string) {
   }
 
   if (!isQuick && run.stage === 10) {
-    const entries = companies.slice(run.offset, run.offset + BATCH_SIZE);
+    const entries = companies.slice(run.offset, run.offset + HISTORY_BATCH_SIZE);
     const now = new Date().toISOString();
     const writes: any[] = [];
     const outcomes = await Promise.all(entries.map(async (company: any) => {
