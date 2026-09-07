@@ -28,6 +28,9 @@ const configs = [
   { key: 'cash', tag: 'CashAndCashEquivalentsAtCarryingValue', unit: 'USD', period: instant, priority: 0, taxonomy: 'us-gaap' },
   { key: 'debtCurrent', tag: 'LongTermDebtCurrent', unit: 'USD', period: instant, priority: 0, taxonomy: 'us-gaap' },
   { key: 'debtNoncurrent', tag: 'LongTermDebtNoncurrent', unit: 'USD', period: instant, priority: 0, taxonomy: 'us-gaap' },
+  { key: 'cash', tag: 'CashAndCashEquivalents', unit: 'USD', period: instant, priority: 1, taxonomy: 'ifrs-full' },
+  { key: 'debtCurrent', tag: 'BorrowingsCurrent', unit: 'USD', period: instant, priority: 1, taxonomy: 'ifrs-full' },
+  { key: 'debtNoncurrent', tag: 'BorrowingsNoncurrent', unit: 'USD', period: instant, priority: 1, taxonomy: 'ifrs-full' },
 ];
 
 const records = {};

@@ -16,7 +16,7 @@ export type BulkFundamentals = {
   debtCurrent?: StoredFact;
   debtNoncurrent?: StoredFact;
 };
-type FrameConfig = { key: keyof BulkFundamentals; tag: string; taxonomy?: 'us-gaap' | 'dei'; unit: string; period: string; priority: number };
+type FrameConfig = { key: keyof BulkFundamentals; tag: string; taxonomy?: 'us-gaap' | 'ifrs-full' | 'dei'; unit: string; period: string; priority: number };
 
 const FRAME_BASE = 'https://data.sec.gov/api/xbrl/frames/us-gaap';
 const revenueTags = [
@@ -55,6 +55,11 @@ export async function fetchBulkFundamentals(candidateCiks: number[], asOf = new 
     { key: 'cash' as const, tag: 'CashAndCashEquivalentsAtCarryingValue', unit: 'USD', period: instant, priority: 0 },
     { key: 'debtCurrent' as const, tag: 'LongTermDebtCurrent', unit: 'USD', period: instant, priority: 0 },
     { key: 'debtNoncurrent' as const, tag: 'LongTermDebtNoncurrent', unit: 'USD', period: instant, priority: 0 },
+    // Foreign filers commonly use IFRS taxonomy names; keep these in the same
+    // bulk pass so a valid EV/S is not lost merely because a company is a 20-F.
+    { key: 'cash' as const, tag: 'CashAndCashEquivalents', taxonomy: 'ifrs-full', unit: 'USD', period: instant, priority: 1 },
+    { key: 'debtCurrent' as const, tag: 'BorrowingsCurrent', taxonomy: 'ifrs-full', unit: 'USD', period: instant, priority: 1 },
+    { key: 'debtNoncurrent' as const, tag: 'BorrowingsNoncurrent', taxonomy: 'ifrs-full', unit: 'USD', period: instant, priority: 1 },
   ];
   const allowed = new Set(candidateCiks.map(Number));
   const fundamentals = new Map<number, BulkFundamentals>();
@@ -65,7 +70,7 @@ export async function fetchBulkFundamentals(candidateCiks: number[], asOf = new 
   for (let index = 0; index < configs.length; index += 5) {
     const group = configs.slice(index, index + 5);
     const outcomes = await Promise.allSettled(group.map(async (config) => {
-      const base = config.taxonomy === 'dei' ? 'https://data.sec.gov/api/xbrl/frames/dei' : FRAME_BASE;
+      const base = config.taxonomy === 'dei' ? 'https://data.sec.gov/api/xbrl/frames/dei' : config.taxonomy === 'ifrs-full' ? 'https://data.sec.gov/api/xbrl/frames/ifrs-full' : FRAME_BASE;
       const url = `${base}/${config.tag}/${config.unit}/${config.period}.json`;
       const payload = await fetchJson(url, 25_000) as { data?: FrameFact[] };
       return { config, rows: payload.data ?? [], url };
@@ -92,11 +97,25 @@ export async function fetchBulkFundamentals(candidateCiks: number[], asOf = new 
   // SEC currently rejects some Cloudflare Worker egress ranges. Keep the
   // official, date-stamped Frames snapshot bundled with the release as a
   // deterministic fallback instead of turning missing fundamentals into zero.
-  if (fundamentals.size === 0 && bundledFrames.annual === annual) {
-    fallbackUsed = true;
-    for (const [cikText, record] of Object.entries(bundledFrames.fundamentals)) {
-      const cik = Number(cikText);
-      if (allowed.has(cik)) fundamentals.set(cik, record as BulkFundamentals);
+  if (bundledFrames.annual === annual && bundledFrames.instant === instant) {
+    const bundledCandidates = Object.keys(bundledFrames.fundamentals).filter((cik) => allowed.has(Number(cik))).length;
+    // A partially blocked SEC response is still incomplete. Overlay the
+    // dated official snapshot so one transient provider failure cannot erase
+    // the rest of the market's fundamentals (including foreign filers).
+    if (fundamentals.size === 0 || fundamentals.size < bundledCandidates * 0.8) {
+      fallbackUsed = true;
+      for (const [cikText, bundled] of Object.entries(bundledFrames.fundamentals)) {
+        const cik = Number(cikText);
+        if (!allowed.has(cik)) continue;
+        const current = fundamentals.get(cik) ?? {};
+        for (const key of Object.keys(bundled) as (keyof BulkFundamentals)[]) {
+          const candidate = (bundled as BulkFundamentals)[key];
+          if (!candidate) continue;
+          const existing = current[key];
+          if (!existing || newer(candidate, existing)) current[key] = candidate;
+        }
+        fundamentals.set(cik, current);
+      }
     }
   }
   return { fundamentals, requests: configs.length, success, failed, fallbackUsed, errors: [...new Set(errors)].slice(0, 8), annual, instant };
