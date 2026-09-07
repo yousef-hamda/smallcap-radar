@@ -101,3 +101,9 @@ button,a,input{font:inherit}button,a{-webkit-tap-highlight-color:transparent}but
 @media(max-width:520px){
  .content{padding:17px 12px 24px}.command-header{grid-template-columns:minmax(0,1fr) auto}.command-header h1{font-size:24px}.command-header p{display:none}.command-header .scan-primary{font-size:14px;padding-inline:12px}.command-header .scan-primary svg{width:16px}.scan-strip-head small{display:inline}.scan-strip-head>div:first-child{flex-wrap:wrap}.scan-main-number{display:block}.scan-main-number span{display:block;margin-top:6px}.scan-numbers{gap:14px;flex-wrap:wrap}.metric-icon{width:34px;height:34px}.metric span:not(.metric-icon){display:block}.panel-heading .ghost-button{width:40px;height:40px}.strategy-note{min-height:0;padding:11px}.dialog-summary{grid-template-columns:1fr 1fr}
 }
+/* Score column: keep the 100-point grade visible without widening the mobile cards. */
+.table-head,.table-row{grid-template-columns:minmax(210px,1.7fr) .75fr .95fr .7fr .7fr 1.25fr .85fr 34px}
+.score-cell b{color:#dce7ee}
+.score-cell small{display:block;color:#6f8190;font-size:9px;margin-top:4px}
+@media(max-width:1100px) and (min-width:821px){.table-head,.table-row{grid-template-columns:minmax(180px,1.5fr) .7fr .9fr .7fr .65fr 1.1fr .7fr 30px}}
+@media(max-width:820px){.table-row{grid-template-areas:"issuer issuer watch" "price cap return" "score score score" "status status quality"}.table-row>.cell-number:nth-of-type(5){grid-area:score}.score-cell{display:flex;align-items:baseline;justify-content:space-between;gap:12px}.score-cell::before{content:"الدرجة"!important}.score-cell small{margin-top:0}}

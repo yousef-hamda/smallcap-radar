@@ -1,9 +1,35 @@
 export type Provenance={source:string;url?:string;periodStart?:string;periodEnd:string;availableAt:string;retrievedAt:string;currency?:string;tag?:string;confidence:'high'|'medium'|'low'};
-export type Snapshot={symbol:string;name:string;asOf:string;securityType?:string;exchange?:string;foreignFiler?:boolean;price?:number|null;marketCap?:number|null;medianDollarVolume20d?:number|null;revenue?:number|null;evSales?:number|null;ps?:number|null;netIncome?:number|null;fcf?:number|null;return12m?:number|null;low52w?:number|null;ma30w?:number|null;dilution?:number|null;splitAdjusted?:boolean;deathSpiral?:'clean'|'mild'|'elevated'|'severe'|'unknown';riskEvidence?:string;liquidityReviewed?:boolean;confidence?:'A'|'B'|'C'|'D'|'F';research?:{financials?:boolean;valuation?:boolean;analysts?:boolean;sector?:boolean};sourceConflicts?:string[];dataIssues?:string[];provenance:Record<string,Provenance>;history?:{date:string;close:number;open?:number;high?:number;low?:number;volume?:number}[]};
+export type Snapshot={symbol:string;name:string;asOf:string;description?:string;sector?:string;industry?:string;securityType?:string;exchange?:string;foreignFiler?:boolean;price?:number|null;marketCap?:number|null;medianDollarVolume20d?:number|null;revenue?:number|null;revenueGrowth?:number|null;evSales?:number|null;ps?:number|null;netIncome?:number|null;fcf?:number|null;fcfYield?:number|null;grossMargin?:number|null;operatingMarginTrend?:number|null;insiderBuyValue?:number|null;analystCount?:number|null;analystTarget?:number|null;cash?:number|null;debt?:number|null;return12m?:number|null;low52w?:number|null;ma30w?:number|null;dilution?:number|null;splitAdjusted?:boolean;deathSpiral?:'clean'|'mild'|'elevated'|'severe'|'unknown';riskEvidence?:string;liquidityReviewed?:boolean;confidence?:'A'|'B'|'C'|'D'|'F';research?:{financials?:boolean;valuation?:boolean;analysts?:boolean;sector?:boolean};sourceConflicts?:string[];dataIssues?:string[];provenance:Record<string,Provenance>;history?:{date:string;close:number;open?:number;high?:number;low?:number;volume?:number}[]};
 export const SPECS={core:{id:'CORE_VALUE_V2',version:'2.0.0-draft.2',marketCap:{min:25e6,max:2e9},liquidity:150e3,liquidityMetric:'medianDollarVolume20d',evSalesMax:10,weights:{Valuation:24,Quality:19,'Share Discipline':15,'Small Size + Low Coverage':14,Growth:7,'Insider Buying':7,'Margin Trend':6,'Entry Point':5,'Balance Sheet':3},scoreStatus:'unvalidated',policy:'Liquidity median20d is an implementation convention, not validated original logic'},bounce:{id:'BOUNCE_V2',version:'2.0.0-draft.2',marketCap:{min:25e6,max:600e6},liquidity:150e3,liquidityMetric:'medianDollarVolume20d',returnMax:-.35,lowDistanceMin:.1,dilutionMax:.25,maMultiplier:1.05,exit:{target:.2,stop:-.15,months:3},weights:{},scoreStatus:'gates-only',policy:'150k median dollar volume is an explicit operating convention pending validation'},legacy:{id:'LEGACY_BENCHMARK',version:'1.0.0-reference',marketCap:{min:50e6,max:5e9},liquidity:300e3,psMax:10,weights:{Valuation:25,'Profitability/FCF':20,Momentum:20,Dilution:15,Size:10,Insider:10},scoreStatus:'normalization-unavailable'}} as const;
 export type Status='PASS'|'FAIL'|'UNKNOWN';
 export type Check={id:string;label:string;status:Status;explanation:string};
+export type Factor={id:string;label:string;maxPoints:number;points:number;available:boolean;rawValue:number|null;explanation:string};
 const finite=(n:unknown):n is number=>typeof n==='number'&&Number.isFinite(n);
+const clamp=(n:number,min=0,max=1)=>Math.max(min,Math.min(max,n));
+const scale=(value:number|null|undefined,min:number,max:number)=>finite(value)?clamp((value-min)/(max-min)):null;
+function coreFactors(s:Snapshot):Factor[]{
+ const valuation=(finite(s.evSales)?clamp(1-(s.evSales/10)):finite(s.ps)?clamp(1-(s.ps/10)):null);
+ const quality=finite(s.netIncome)||finite(s.fcf)?((finite(s.netIncome)&&s.netIncome>0?0.5:0)+(finite(s.fcf)&&s.fcf>0?0.5:0)):null;
+ const dilution=finite(s.dilution)?clamp(1-(s.dilution/0.25)):null;
+ const size=finite(s.marketCap)?clamp(1-(Math.log10(Math.max(s.marketCap,25e6))-Math.log10(25e6))/(Math.log10(2e9)-Math.log10(25e6))):null;
+ const growth=scale(s.revenueGrowth??null,-.1,.3);
+ const insider=finite(s.insiderBuyValue)&&finite(s.marketCap)&&s.marketCap>0?clamp(s.insiderBuyValue/s.marketCap/.01):null;
+ const margin=scale(s.operatingMarginTrend??null,-.1,.1);
+ const entry=finite(s.return12m)?clamp(1-Math.abs(s.return12m+.1)/.6):null;
+ const balance=finite(s.cash)&&finite(s.debt)?clamp((s.cash-s.debt)/Math.max(s.cash,s.debt,1)):null;
+ const make=(id:string,label:string,maxPoints:number,n:number|null,raw:number|null|undefined,explanation:string):Factor=>({id,label,maxPoints,points:n==null?0:n*maxPoints,available:n!=null,rawValue:raw??null,explanation});
+ return [
+  make('valuation','التقييم',24,valuation,s.evSales??s.ps??null,finite(s.evSales)?`EV/S ${s.evSales.toFixed(2)} ضمن حد 10`:'تقييم المبيعات مستخدم لعدم توفر EV/S'),
+  make('quality','الجودة والربحية',19,quality,s.netIncome??s.fcf??null,'Net Income أو FCF موجب'),
+  make('shareDiscipline','انضباط الأسهم',15,dilution,s.dilution,finite(s.dilution)?`التخفيف ${(s.dilution*100).toFixed(1)}%`:'التخفيف غير متاح'),
+  make('sizeCoverage','الحجم والتغطية',14,size,s.marketCap,'الحجم الأصغر يحصل على أفضلية محدودة، لا أفضلية مطلقة'),
+  make('growth','النمو',7,growth,s.revenueGrowth,'نمو الإيرادات ضمن نطاق محافظ'),
+  make('insider','الشراء الداخلي',7,insider,s.insiderBuyValue,'يحسب Form 4 P فقط عند توفره'),
+  make('marginTrend','اتجاه الهوامش',6,margin,s.operatingMarginTrend,'تحسن هامش التشغيل'),
+  make('entry','نقطة الدخول',5,entry,s.return12m,'ليس كل هبوط فرصة؛ يفضل ارتدادًا غير متطرف'),
+  make('balance','الميزانية',3,balance,s.cash!=null&&s.debt!=null?s.cash-s.debt:null,'صافي النقد/الدين')
+ ];
+}
 export function specHash(strategy:keyof typeof SPECS){let h=2166136261;for(const c of JSON.stringify(SPECS[strategy])){h^=c.charCodeAt(0);h=Math.imul(h,16777619)}return (h>>>0).toString(16)}
 export function evaluateStrategy(strategy:keyof typeof SPECS,s:Snapshot){
  const spec=SPECS[strategy],checks:Check[]=[];
@@ -41,5 +67,8 @@ export function evaluateStrategy(strategy:keyof typeof SPECS,s:Snapshot){
  const screening=checks.filter(c=>c.id!=='conflict');
  const status:Status=screening.some(c=>c.status==='FAIL')?'FAIL':screening.some(c=>c.status==='UNKNOWN')?'UNKNOWN':'PASS';
  const researchComplete=['financials','valuation','analysts','sector'].every(k=>s.research?.[k as keyof NonNullable<Snapshot['research']>]===true);
- return {strategy:spec.id,version:spec.version,hash:specHash(strategy),status,qualified:status==='PASS',gateStatus,screeningQualified:measurableStatus==='PASS',measurableStatus,score:null as number|null,scoreStatus:spec.scoreStatus,checks,researchComplete,finalRanked:false,finalReason:'يلزم اعتماد المعادلات والتحقق من المصادر والزوايا الأربع'};
+ const factors=strategy==='core'?coreFactors(s):[];
+ const score=strategy==='core'&&!hardGates.some(c=>c.status==='FAIL')?Math.round(factors.reduce((total,f)=>total+f.points,0)*10)/10:null;
+ const scoreCoverage=strategy==='core'?Math.round(100*factors.filter(f=>f.available).reduce((t,f)=>t+f.maxPoints,0)/100):0;
+ return {strategy:spec.id,version:spec.version,hash:specHash(strategy),status,qualified:status==='PASS',gateStatus,screeningQualified:measurableStatus==='PASS',measurableStatus,score,scoreCoverage,factors,scoreStatus:spec.scoreStatus,checks,researchComplete,finalRanked:false,finalReason:'الترتيب النهائي يتطلب اكتمال التحقق والزوايا الأربع'};
 }
