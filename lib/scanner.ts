@@ -131,6 +131,10 @@ export async function processScanBatch(runId: string) {
       try {
         const history = (await historicalMarketData(company.ticker, now)).history.filter((bar): bar is typeof bar & { close: number } => Number.isFinite(bar.close));
         const metrics = bounceHistoryMetrics(history, now);
+        // The historical observations were retrieved after the bulk row was
+        // created; advance the snapshot timestamp so provenance/freshness do
+        // not incorrectly label these newer facts as future data.
+        snapshot.asOf = now;
         const last = history.at(-1);
         if (metrics.return12m != null) {
           snapshot.return12m = metrics.return12m;
