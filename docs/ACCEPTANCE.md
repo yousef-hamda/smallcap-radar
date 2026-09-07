@@ -12,7 +12,7 @@ Status is implementation evidence, not an assertion of historical strategy profi
 | 39 | Universe cleaning | Bundled 7,675-symbol SEC/Nasdaq directory, exchange filter and conservative name classification; quick cache excludes funds, trusts, units, warrants, preferred instruments and limited partnerships. Not yet a fully verified security master |
 | 40–45 | Database, snapshots, stages, hashes | Self-initializing schema, immutable runs/snapshots/checks/hash and cursor/lease implemented. Full scan uses bulk quotes, 13 Frames datasets and 600-company local pages; quick mode retains bounded deep batches and a retry queue. Server tasks continue after the page closes. Research-only stages beyond the production screener remain incomplete |
 | 46–50 | Dashboard/cards/excluded/incomplete | Professional dark RTL terminal, dense table, explicit status language and synthetic mode clearly separated. No padding |
-| 51–53 | Deep company views/charts/translation | Gate/evidence details, five-range chart, financial summary, sector/industry, Nasdaq one-year target and Yahoo Finance RSS news are implemented on-demand; Form 4 detail and translation caching remain pending |
+| 51–53 | Deep company views/charts/translation | Gate/evidence details, five-range chart, financial summary, sector/industry, Nasdaq one-year target, Yahoo Finance RSS news and SEC Form 4 purchase detail are implemented on-demand; translation caching remains pending |
 | 54–59 | Statistical lab/PIT/holdouts/multiple tests/bootstrap | Tested utilities and synthetic exit example; experiment/holdout tables only, no complete research orchestration |
 | 60–66 | Survivorship/costs/stress/metrics/disasters | Costs and basic exits implemented. Delisted dataset, full backtest, liquidity stress, Core/Bounce dashboards and disaster analysis pending |
 | 67–70 | Adversarial/boundary/invariant tests | 6 explicit synthetic companies; 33 engine tests passing |
@@ -26,7 +26,7 @@ Status is implementation evidence, not an assertion of historical strategy profi
 
 ## Verification performed
 
-- `npm run test:engine`: 33/33 passed; 6 additional UI/Web-Push component tests passed.
+- `npm run test:engine`: 36/36 passed; 6 additional UI/Web-Push component tests passed.
 - `npm run typecheck`: passed.
 - Production Sites build: passed.
 - Production full-scan QA: run `99475366-a6d5-4a6d-8d61-34aa8d970117` started at 22:10:34.896Z and completed at 22:11:02.035Z (27.1s), evaluating 2,910 candidates with zero processing failures. The page was closed mid-run and reopened after 36 seconds; the completed stage-13 run and its results were restored from the server.
