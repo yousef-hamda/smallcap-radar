@@ -107,7 +107,7 @@ async function yahooBulkQuotes(companies: Company[]): Promise<Company[]> {
 
 function isoDate(date: string) { const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(date); return match ? `${match[3]}-${match[1]}-${match[2]}` : '' }
 function dateOffset(iso: string, days: number) { const date = new Date(iso); date.setUTCDate(date.getUTCDate() + days); return date.toISOString().slice(0, 10) }
-function commonSecurity(name: string) { return !/\b(etf|fund|trust|warrant|right|unit|preferred|depositary|senior note|bond|debenture|limited partnership)\b|,\s*L\.P\./i.test(name) }
+function commonSecurity(name: string) { return !/\b(etf|fund|trust|warrant|right|unit|preferred|depositary|senior note|bond|debenture|limited partnership)\b|(?:,\s*)?L\.?P\.?\b/i.test(name) }
 
 export async function historicalMarketData(symbol: string, asOf = new Date().toISOString()) {
   const cached = (quickCache.symbols as Record<string, CachedQuick>)[symbol];
@@ -120,7 +120,7 @@ export async function historicalMarketData(symbol: string, asOf = new Date().toI
   return { url, history };
 }
 
-async function fetchInsiderPurchases(cik: number, symbol: string, now: string) {
+async function fetchInsiderPurchases(cik: number) {
   const submissionsUrl = submissionsUrlFor(cik);
   try {
     const payload = await fetchJson(submissionsUrl, 8_000) as { filings?: { recent?: { form?: string[]; accessionNumber?: string[]; primaryDocument?: string[]; filingDate?: string[] } } };
@@ -169,7 +169,7 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
   if (snapshot.marketCap != null) snapshot.provenance.marketCap = { source: 'Nasdaq stock screener (official)', url: NASDAQ_SCREENER, periodEnd: bundledUniverse.generatedAt.slice(0, 10), availableAt: bundledUniverse.generatedAt, retrievedAt: now, currency: 'USD', confidence: 'medium' };
   const summaryPromise = fetchJson(`https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/summary?assetclass=stocks`, 8_000).catch(() => null) as Promise<any>;
   const newsPromise = fetch(`https://feeds.finance.yahoo.com/rss/2.0/headline?s=${encodeURIComponent(symbol)}&region=US&lang=en-US`, { headers: { 'User-Agent': browserAgent, Accept: 'application/rss+xml,text/xml' }, signal: AbortSignal.timeout(8_000) }).then(r => r.ok ? r.text() : '').catch(() => '');
-  const insiderPromise = fetchInsiderPurchases(company.cik, symbol, now);
+  const insiderPromise = fetchInsiderPurchases(company.cik);
   const [summaryResult, newsResult, insiderPurchases] = await Promise.all([summaryPromise, newsPromise, insiderPromise]);
   const summary = summaryResult?.data?.summaryData ?? {};
   const summaryValue = (key: string) => String(summary[key]?.value ?? '').trim();
