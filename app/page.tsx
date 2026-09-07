@@ -115,7 +115,7 @@ export default function RadarApp(){
      {run&&<section className="scan-strip"><div className="scan-strip-head"><div><span className={`run-state ${run.status}`}>{run.status==='complete'?'مكتمل':run.status==='failed'?'فشل':resumable?'قيد التنفيذ':'جزئي'}</span><b>{run.source?.includes('quick')?'الفحص السريع':'فحص السوق الكامل'}</b><small>{stageLabels[run.stage]||`المرحلة ${run.stage}`}</small></div><small className="scan-date" dir="ltr">{new Date(run.created_at).toLocaleString('en-GB')}</small></div><div className="scan-main-number"><b>{(run.offset||0).toLocaleString('en-US')}</b><span>من {(run.total||0).toLocaleString('en-US')} شركة تم تقييمها</span></div><Progress value={progress}/><div className="progress-caption"><span>{progress.toFixed(1)}%</span><span>{resumable?'الفحص مستمر على الخادم ويمكنك إغلاق التطبيق.':'النتائج محفوظة وجاهزة للمراجعة.'}</span></div><div className="scan-numbers"><span><b>{run.screened_out?.toLocaleString('en-US')||0}</b> استُبعدت مبكرًا</span><span className={run.failed||run.sec_failed?'negative':''}><b>{(run.failed||0)+(run.sec_failed||0)}</b> أخطاء</span></div></section>}
      <section className="metric-row">
       <Metric icon={Database} label="تم فحصها" value={data.length} meta="الكل" tone="neutral"/>
-      <Metric icon={ShieldCheck} label="مؤهلة مبدئيًا" value={screeningQualified} meta="اجتازت البوابات" tone="positive"/>
+      <Metric icon={ShieldCheck} label="مقبولة" value={screeningQualified} meta="اجتازت كل البوابات" tone="positive"/>
       <Metric icon={Clock3} label="بيانات ناقصة" value={incomplete} meta="في مركز البيانات" tone="warning"/>
       <Metric icon={Layers} label="مستبعدة" value={excluded} meta="خارج القائمة" tone="negative"/>
      </section>
