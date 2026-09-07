@@ -4,7 +4,7 @@ import { fetchBulkFundamentals, preliminarySnapshot, type BulkFundamentals } fro
 import { bounceHistoryMetrics } from './research';
 
 const BATCH_SIZE = 12;
-const HISTORY_BATCH_SIZE = 48;
+const HISTORY_BATCH_SIZE = 24;
 const SCORE_BATCH_SIZE = 600;
 export const SCAN_SOURCE_VERSION = 'Bulk Quotes/SEC Frames v6';
 
