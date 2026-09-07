@@ -36,7 +36,13 @@ export async function readState(){await ensureSchema();const d=db();const active
  // A quick sample may be newer than a full scan. It must not silently replace
  // the user's main result set; prefer the newest full-market snapshot whenever
  // one has produced rows, then fall back to the newest available run.
- const latest=await d.prepare("SELECT * FROM strategy_runs WHERE status IN ('complete','partial','running') AND processed>0 ORDER BY CASE WHEN source LIKE '%· full' THEN 0 ELSE 1 END, created_at DESC LIMIT 1").first();
+ // Keep an active scan visible in `run`, but never replace the user's usable
+ // result set with its still-enriching (and therefore often empty) rows.
+ // Prefer the newest completed/partial market run; only fall back to running
+ // when no finished result exists yet (first-ever scan).
+ const finished=await d.prepare("SELECT * FROM strategy_runs WHERE status IN ('complete','partial') AND processed>0 ORDER BY CASE WHEN source LIKE '%· full' THEN 0 ELSE 1 END, created_at DESC LIMIT 1").first();
+ const running=await d.prepare("SELECT * FROM strategy_runs WHERE status='running' AND processed>0 ORDER BY CASE WHEN source LIKE '%· full' THEN 0 ELSE 1 END, created_at DESC LIMIT 1").first();
+ const latest=finished||running;
  const rows=latest?(await d.prepare('SELECT payload,evaluation FROM fundamental_snapshots WHERE run_id=? ORDER BY symbol').bind(latest.id).all()).results:[];const fav=(await d.prepare('SELECT symbol FROM watchlist ORDER BY created_at DESC').all()).results;const compact=(payload:string)=>{const parsed=JSON.parse(payload);delete parsed.history;return parsed};return {run:active?{...active,universe:undefined,retry_queue:undefined,retryPending:JSON.parse(active.retry_queue||'[]').length,stale:(latest?.strategy_hash||active.strategy_hash)!==currentHash()}:null,dataRunId:latest?.id,dataRun:latest?{...latest,universe:undefined,retry_queue:undefined}:null,snapshots:rows.map((r:any)=>compact(r.payload)),storedEvaluations:rows.map((r:any)=>JSON.parse(r.evaluation)),favorites:fav.map((r:any)=>r.symbol)};}
 export function insertSnapshot(runId:string,s:Snapshot){return db().prepare('INSERT OR REPLACE INTO fundamental_snapshots(id,run_id,symbol,as_of,payload,evaluation) VALUES (?,?,?,?,?,?)').bind(`${runId}:${s.symbol}`,runId,s.symbol,s.asOf,JSON.stringify(s),JSON.stringify({core:evaluateStrategy('core',s),bounce:evaluateStrategy('bounce',s)}));}
 export async function createRun(source:string,total=0,universe:any[]=[],status='running'){await ensureSchema();const id=crypto.randomUUID(),now=new Date().toISOString();await db().prepare('INSERT INTO strategy_runs (id,created_at,updated_at,status,source,total,universe,strategy_hash) VALUES(?,?,?,?,?,?,?,?)').bind(id,now,now,status,source,total,JSON.stringify(universe),currentHash()).run();return id;}
