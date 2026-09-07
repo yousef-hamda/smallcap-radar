@@ -6,14 +6,14 @@ Provider/MCP selection and the safe integration gates are recorded in [TOOLING_R
 
 | Plan sections | Scope | Actual status |
 |---|---|---|
-| 1–3 | Funnel, shared engine, 3 models | Shared gates/specs implemented; final funnel and Legacy normalization incomplete |
+| 1–3 | Funnel, shared engine, 3 models | Shared gates/specs implemented; Legacy benchmark now has a deterministic 100-point reference score; it remains research-only |
 | 4–20 | Core | Documented gates/weights implemented; inflection, death-spiral automation and all factor sub-scores BLOCKED on specification/validation |
 | 21–31 | Bounce | Gate evaluator/exits implemented and tested; explicit operational 20-day median dollar-volume threshold ($150k); historical metrics now derived from dated Nasdaq bars; transparent gate-completeness diagnostic is shown, not a predictive ranking score; historic rates remain unverified |
 | 32–35 | Raw/normalized/metrics/provenance | Bulk quote and SEC Frames adapters (including IFRS cash/borrowings), historical Bounce metrics, provenance and on-demand Company Facts/history implemented; quote-only records survive fundamental gaps; missing values remain UNKNOWN. Full custom-taxonomy coverage remains pending; material share-count jumps are conservatively held UNKNOWN |
 | 36–38 | Two-source, confidence, four angles | Missing/conflict surfaced; final ranking disabled; no actual secondary-source enrichment |
 | 39 | Universe cleaning | Bundled 7,675-symbol SEC/Nasdaq directory, exchange filter and conservative name classification; quick cache excludes funds, trusts, units, warrants, preferred instruments and limited partnerships. Not yet a fully verified security master |
 | 40–45 | Database, snapshots, stages, hashes | Self-initializing schema, immutable runs/snapshots/checks/hash and cursor/lease implemented. Full scan uses bulk quotes, 16 Frames datasets (including IFRS alternatives), then a historical enrichment pass for small-cap Bounce candidates (12-company bounded batches) to compute 12-month return, 52-week low and 30 completed weekly closes; quick mode retains bounded deep batches and a retry queue. Server tasks continue after the page closes. Research-only stages beyond the production screener remain incomplete |
-| 46–50 | Dashboard/cards/excluded/incomplete | Professional dark RTL terminal, dense table, explicit status language and synthetic mode clearly separated. No padding |
+| 46–50 | Dashboard/cards/excluded/incomplete | Professional dark RTL terminal, dense table, explicit status language and synthetic mode clearly separated. Approval list now contains PASS only; UNKNOWN is never promoted |
 | 51–53 | Deep company views/charts/translation | Gate/evidence details, five-range chart, financial summary, sector/industry, Nasdaq one-year target, Yahoo Finance RSS news and SEC Form 4 purchase detail are implemented on-demand; translation caching remains pending |
 | 54–59 | Statistical lab/PIT/holdouts/multiple tests/bootstrap | Tested utilities and synthetic exit example; experiment/holdout tables only, no complete research orchestration |
 | 60–66 | Survivorship/costs/stress/metrics/disasters | Costs and basic exits implemented. Delisted dataset, full backtest, liquidity stress, Core/Bounce dashboards and disaster analysis pending |

@@ -31,6 +31,23 @@ function coreFactors(s:Snapshot):Factor[]{
   make('balance','الميزانية',3,balance,s.cash!=null&&s.debt!=null?s.cash-s.debt:null,'صافي النقد/الدين')
  ];
 }
+function legacyFactors(s:Snapshot):Factor[]{
+ const valuation=finite(s.ps)?clamp(1-s.ps/SPECS.legacy.psMax):null;
+ const profitability=finite(s.netIncome)||finite(s.fcf)?((finite(s.netIncome)&&s.netIncome>0?0.5:0)+(finite(s.fcf)&&s.fcf>0?0.5:0)):null;
+ const momentum=finite(s.return12m)?scale(s.return12m,-.5,.5):null;
+ const dilution=finite(s.dilution)?clamp(1-s.dilution/.25):null;
+ const size=finite(s.marketCap)?clamp(1-(Math.log10(Math.max(s.marketCap,50e6))-Math.log10(50e6))/(Math.log10(5e9)-Math.log10(50e6))):null;
+ const insider=finite(s.insiderBuyValue)&&finite(s.marketCap)&&s.marketCap>0?clamp(s.insiderBuyValue/s.marketCap/.01):null;
+ const make=(id:string,label:string,maxPoints:number,n:number|null,raw:number|null|undefined,explanation:string):Factor=>({id,label,maxPoints,points:n==null?0:n*maxPoints,available:n!=null,rawValue:raw??null,explanation});
+ return [
+  make('valuation','التقييم',25,valuation,s.ps,'P/S ضمن الحد المرجعي 10'),
+  make('profitability','الربحية / التدفق النقدي',20,profitability,s.netIncome??s.fcf,'Net Income أو FCF موجب'),
+  make('momentum','الزخم',20,momentum,s.return12m,'العائد التاريخي ضمن نطاق مرجعي محافظ'),
+  make('dilution','التخفيف',15,dilution,s.dilution,'التخفيف الأقل يحصل على نقاط أعلى'),
+  make('size','الحجم',10,size,s.marketCap,'أفضلية الحجم الأصغر ضمن نطاق Legacy'),
+  make('insider','شراء المطلعين',10,insider,s.insiderBuyValue,'Form 4 P فقط')
+ ];
+}
 export function specHash(strategy:keyof typeof SPECS){let h=2166136261;for(const c of JSON.stringify(SPECS[strategy])){h^=c.charCodeAt(0);h=Math.imul(h,16777619)}return (h>>>0).toString(16)}
 export function evaluateStrategy(strategy:keyof typeof SPECS,s:Snapshot){
  const spec=SPECS[strategy],checks:Check[]=[];
@@ -72,13 +89,17 @@ export function evaluateStrategy(strategy:keyof typeof SPECS,s:Snapshot){
  const screening=checks.filter(c=>c.id!=='conflict');
  const status:Status=screening.some(c=>c.status==='FAIL')?'FAIL':screening.some(c=>c.status==='UNKNOWN')?'UNKNOWN':'PASS';
  const researchComplete=['financials','valuation','analysts','sector'].every(k=>s.research?.[k as keyof NonNullable<Snapshot['research']>]===true);
- const factors=strategy==='core'?coreFactors(s):[];
+ const factors=strategy==='core'?coreFactors(s):strategy==='legacy'?legacyFactors(s):[];
  // Bounce has no validated predictive ranking model in the supplied spec.
  // Expose an honest diagnostic percentage instead: equal share of the six
  // published gates, with UNKNOWN and FAIL both receiving zero. It is never
  // used to promote a stock or replace the gate result.
  const gateScore=strategy==='bounce'?Math.round(100*hardGateIds.filter(id=>checks.find(c=>c.id===id)?.status==='PASS').length/hardGateIds.length*10)/10:null;
- const score=strategy==='core'&&!hardGates.some(c=>c.status==='FAIL')?Math.round(factors.reduce((total,f)=>total+f.points,0)*10)/10:null;
- const scoreCoverage=strategy==='core'?Math.round(100*factors.filter(f=>f.available).reduce((t,f)=>t+f.maxPoints,0)/100):0;
- return {strategy:spec.id,version:spec.version,hash:specHash(strategy),status,qualified:status==='PASS',gateStatus,screeningQualified:measurableStatus==='PASS',measurableStatus,score,gateScore,scoreCoverage,factors,scoreStatus:spec.scoreStatus,checks,researchComplete,finalRanked:false,finalReason:'الترتيب النهائي يتطلب اكتمال التحقق والزوايا الأربع'};
+ const score=(strategy==='core'||strategy==='legacy')&&!hardGates.some(c=>c.status==='FAIL')?Math.round(factors.reduce((total,f)=>total+f.points,0)*10)/10:null;
+ const scoreCoverage=(strategy==='core'||strategy==='legacy')?Math.round(100*factors.filter(f=>f.available).reduce((t,f)=>t+f.maxPoints,0)/100):0;
+ // A row is approved only when every screening check passes. Measurable-only
+ // completion is retained as a diagnostic, but must never enter the approval
+ // list or be presented as a recommendation.
+ const screeningQualified=status==='PASS';
+ return {strategy:spec.id,version:spec.version,hash:specHash(strategy),status,qualified:status==='PASS',gateStatus,screeningQualified,measurableStatus,score,gateScore,scoreCoverage,factors,scoreStatus:spec.scoreStatus,checks,researchComplete,finalRanked:false,finalReason:'الترتيب النهائي يتطلب اكتمال التحقق والزوايا الأربع'};
 }
