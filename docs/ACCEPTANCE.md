@@ -7,7 +7,7 @@ Status is implementation evidence, not an assertion of historical strategy profi
 | 1–3 | Funnel, shared engine, 3 models | Shared gates/specs implemented; final funnel and Legacy normalization incomplete |
 | 4–20 | Core | Documented gates/weights implemented; inflection, death-spiral automation and all factor sub-scores BLOCKED on specification/validation |
 | 21–31 | Bounce | Gate evaluator/exits implemented and tested; explicit operational 20-day median dollar-volume threshold ($150k); historic rates unverified; no invented Bounce score |
-| 32–35 | Raw/normalized/metrics/provenance | Bulk quote and SEC Frames adapters, provenance and on-demand Company Facts/history implemented; quote-only records survive fundamental gaps; missing values remain UNKNOWN. Taxonomy completeness and verified split adjustment remain pending |
+| 32–35 | Raw/normalized/metrics/provenance | Bulk quote and SEC Frames adapters (including IFRS cash/borrowings), provenance and on-demand Company Facts/history implemented; quote-only records survive fundamental gaps; missing values remain UNKNOWN. Full custom-taxonomy coverage and verified split adjustment remain pending |
 | 36–38 | Two-source, confidence, four angles | Missing/conflict surfaced; final ranking disabled; no actual secondary-source enrichment |
 | 39 | Universe cleaning | Bundled 7,675-symbol SEC/Nasdaq directory, exchange filter and conservative name classification; quick cache excludes funds, trusts, units, warrants, preferred instruments and limited partnerships. Not yet a fully verified security master |
 | 40–45 | Database, snapshots, stages, hashes | Self-initializing schema, immutable runs/snapshots/checks/hash and cursor/lease implemented. Full scan uses bulk quotes, 13 Frames datasets and 600-company local pages; quick mode retains bounded deep batches and a retry queue. Server tasks continue after the page closes. Research-only stages beyond the production screener remain incomplete |
@@ -26,7 +26,7 @@ Status is implementation evidence, not an assertion of historical strategy profi
 
 ## Verification performed
 
-- `npm run test:engine`: 36/36 passed; 6 additional UI/Web-Push component tests passed.
+- `npm run test:engine`: 37/37 passed; 6 additional UI/Web-Push component tests passed.
 - `npm run typecheck`: passed.
 - Production Sites build: passed.
 - Production full-scan QA: run `99475366-a6d5-4a6d-8d61-34aa8d970117` started at 22:10:34.896Z and completed at 22:11:02.035Z (27.1s), evaluating 2,910 candidates with zero processing failures. The page was closed mid-run and reopened after 36 seconds; the completed stage-13 run and its results were restored from the server.
