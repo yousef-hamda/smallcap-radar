@@ -28,7 +28,7 @@ Provider/MCP selection and the safe integration gates are recorded in [TOOLING_R
 
 ## Verification performed
 
-- `npm run test:engine`: 37/37 passed; 6 additional UI/Web-Push component tests passed.
+- `npm run test:engine`: 39/39 passed; 6 additional UI/Web-Push component tests passed.
 - `npm run typecheck`: passed.
 - Production Sites build: passed.
 - Production full-scan QA: run `99475366-a6d5-4a6d-8d61-34aa8d970117` started at 22:10:34.896Z and completed at 22:11:02.035Z (27.1s), evaluating 2,910 candidates with zero processing failures. The page was closed mid-run and reopened after 36 seconds; the completed stage-13 run and its results were restored from the server.
