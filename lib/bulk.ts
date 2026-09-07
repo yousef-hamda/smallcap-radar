@@ -183,8 +183,12 @@ export function preliminarySnapshot(company: Company, facts: BulkFundamentals | 
     snapshot.provenance.ps = { ...frameProvenance(facts.revenue!, retrievedAt), source: 'Derived from bulk market cap / SEC revenue', confidence: 'low' };
   }
   if (facts.shares && facts.priorShares && facts.priorShares.val > 0) {
-    snapshot.dilution = facts.shares.val / facts.priorShares.val - 1;
-    snapshot.splitAdjusted = false;
+    snapshot.shareCountRatio = facts.shares.val / facts.priorShares.val;
+    snapshot.dilution = snapshot.shareCountRatio - 1;
+    // A material split changes the reported share count by more than 2x (or
+    // below 0.5x for a reverse split). Such rows remain UNKNOWN rather than
+    // being promoted with an unadjusted dilution figure.
+    snapshot.splitAdjusted = snapshot.shareCountRatio > 0.5 && snapshot.shareCountRatio < 1.5;
   }
   snapshot.research = { financials: !!snapshot.revenue, valuation: snapshot.evSales != null, analysts: false, sector: !!company.sector };
   return snapshot;
