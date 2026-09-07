@@ -1,4 +1,4 @@
-import type { Snapshot, Provenance } from './engine';
+import type { Snapshot, Provenance, InsiderPurchase } from './engine';
 import { SPECS } from './engine';
 import { ma30Weeks } from './research';
 import { observations, latestInstant, trailingAnnual, provenance, REVENUE_TAGS } from './sec';
@@ -13,6 +13,7 @@ const NASDAQ_SCREENER = 'https://api.nasdaq.com/api/screener/stocks?tableonly=tr
 export const quickSymbols = Object.keys(quickCache.symbols);
 const browserAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124 Safari/537.36';
 const secAgent = 'SmallCapRadar/2.1 research-contact:yousef-hamda@users.noreply.github.com';
+const submissionsUrlFor = (cik: number|string) => `https://data.sec.gov/submissions/CIK${String(cik).padStart(10, '0')}.json`;
 const numeric = (value: unknown) => { const parsed = Number(String(value ?? '').replace(/[$,%+,]/g, '').trim()); return Number.isFinite(parsed) ? parsed : null };
 export const yahooPercentAsRatio = (value: unknown) => Number.isFinite(value) ? Number(value) / 100 : undefined;
 
@@ -119,6 +120,38 @@ async function nasdaqHistory(symbol: string, asOf: string) {
   return { url, history };
 }
 
+async function fetchInsiderPurchases(cik: number, symbol: string, now: string) {
+  const submissionsUrl = submissionsUrlFor(cik);
+  try {
+    const payload = await fetchJson(submissionsUrl, 8_000) as { filings?: { recent?: { form?: string[]; accessionNumber?: string[]; primaryDocument?: string[]; filingDate?: string[] } } };
+    const recent = payload.filings?.recent;
+    if (!recent?.form || !recent.accessionNumber || !recent.primaryDocument) return [];
+    const filings = recent.form.map((form, index) => ({ form, accession: recent.accessionNumber![index], document: recent.primaryDocument![index], filed: recent.filingDate?.[index] ?? '' })).filter(f => f.form === '4').slice(0, 8);
+    const parsed: InsiderPurchase[] = [];
+    const read = (tag: string, from: string) => from.match(new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`, 'i'))?.[1]?.replace(/<[^>]+>/g, '').trim() ?? '';
+    for (const filing of filings) {
+      const accessionPath = filing.accession.replaceAll('-', '');
+      const url = `https://www.sec.gov/Archives/edgar/data/${cik}/${accessionPath}/${filing.document}`;
+      const xml = await fetch(url, { headers: requestHeaders(url), signal: AbortSignal.timeout(8_000) }).then(response => response.ok ? response.text() : '').catch(() => '');
+      if (!xml) continue;
+      const blocks = xml.match(new RegExp('<nonDerivativeTransaction[\\s\\S]*?<\\/nonDerivativeTransaction>', 'gi')) ?? [];
+      const ownerBlock = xml.match(new RegExp('<reportingOwner>[\\s\\S]*?<\\/reportingOwner>', 'i'))?.[0] ?? '';
+      const owner = read('rptOwnerName', ownerBlock) || 'مبلّغ داخلي غير مسمّى';
+      for (const block of blocks) {
+        if (read('transactionCode', block) !== 'P') continue;
+        const dateBlock = block.match(new RegExp('<transactionDate[\\s\\S]*?<\\/transactionDate>', 'i'))?.[0] ?? '';
+        const sharesBlock = block.match(new RegExp('<transactionShares[\\s\\S]*?<\\/transactionShares>', 'i'))?.[0] ?? '';
+        const priceBlock = block.match(new RegExp('<transactionPricePerShare[\\s\\S]*?<\\/transactionPricePerShare>', 'i'))?.[0] ?? '';
+        const date = read('value', dateBlock) || filing.filed;
+        const shares = numeric(read('value', sharesBlock));
+        const price = numeric(read('value', priceBlock));
+        if (date && shares != null && price != null && shares > 0 && price >= 0) parsed.push({ owner, date, shares, price, value: shares * price, source: url });
+      }
+    }
+    return parsed.slice(0, 20);
+  } catch { return []; }
+}
+
 export async function companySnapshot(company: Company): Promise<Snapshot> {
   const now = new Date().toISOString(), symbol = company.ticker, cik = String(company.cik).padStart(10, '0'), issues: string[] = [];
   let history: NonNullable<Snapshot['history']> = [], historyUrl = NASDAQ_SCREENER;
@@ -136,7 +169,8 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
   if (snapshot.marketCap != null) snapshot.provenance.marketCap = { source: 'Nasdaq stock screener (official)', url: NASDAQ_SCREENER, periodEnd: bundledUniverse.generatedAt.slice(0, 10), availableAt: bundledUniverse.generatedAt, retrievedAt: now, currency: 'USD', confidence: 'medium' };
   const summaryPromise = fetchJson(`https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/summary?assetclass=stocks`, 8_000).catch(() => null) as Promise<any>;
   const newsPromise = fetch(`https://feeds.finance.yahoo.com/rss/2.0/headline?s=${encodeURIComponent(symbol)}&region=US&lang=en-US`, { headers: { 'User-Agent': browserAgent, Accept: 'application/rss+xml,text/xml' }, signal: AbortSignal.timeout(8_000) }).then(r => r.ok ? r.text() : '').catch(() => '');
-  const [summaryResult, newsResult] = await Promise.all([summaryPromise, newsPromise]);
+  const insiderPromise = fetchInsiderPurchases(company.cik, symbol, now);
+  const [summaryResult, newsResult, insiderPurchases] = await Promise.all([summaryPromise, newsPromise, insiderPromise]);
   const summary = summaryResult?.data?.summaryData ?? {};
   const summaryValue = (key: string) => String(summary[key]?.value ?? '').trim();
   const target = numeric(summaryValue('OneYrTarget'));
@@ -146,6 +180,9 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
   if (summaryIndustry) snapshot.industry = summaryIndustry;
   const strip = (value: string) => value.replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, ' ').trim();
   snapshot.news = [...newsResult.matchAll(/<item>([\s\S]*?)<\/item>/gi)].slice(0, 8).map(match => { const item = match[1]; const read = (tag: string) => strip(item.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i'))?.[1] ?? ''); return { title: read('title'), link: read('link'), publishedAt: read('pubDate'), source: 'Yahoo Finance RSS' }; }).filter(item => item.title);
+  snapshot.insiderPurchases = insiderPurchases;
+  snapshot.insiderBuyValue = insiderPurchases.reduce((total, purchase) => total + purchase.value, 0) || null;
+  if (snapshot.insiderBuyValue != null) snapshot.provenance.insiderBuyValue = { source: 'SEC Form 4 open-market purchases (code P)', url: submissionsUrlFor(cik), periodEnd: insiderPurchases[0]?.date ?? now.slice(0, 10), availableAt: now, retrievedAt: now, currency: 'USD', confidence: 'high' };
   if (history.length >= 20) {
     const values = history.slice(-20).map((row) => row.close * (row.volume ?? Number.NaN)).filter(Number.isFinite).sort((a, b) => a - b);
     if (values.length === 20) { snapshot.medianDollarVolume20d = (values[9] + values[10]) / 2; snapshot.provenance.medianDollarVolume20d = quoteEvidence }
