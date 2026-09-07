@@ -1,5 +1,7 @@
 # Small-Cap Radar V2 — professional research terminal
 
+للدليل العربي الكامل الذي يغطي المنتج، المحرك، البيانات، الفحص الخلفي، الواجهة، الإشعارات، الاختبارات، النشر، والفجوات المتبقية، راجع [README_FULL_AR.md](docs/README_FULL_AR.md).
+
 Arabic RTL mobile-first PWA, published through Sites. It is a working research platform with a deliberately disabled final ranking until the remaining research requirements are validated. Do not interpret synthetic fixtures or referenced historical benchmark rates as market results.
 
 ## Implemented
