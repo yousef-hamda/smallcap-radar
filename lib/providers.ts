@@ -112,7 +112,7 @@ function commonSecurity(name: string) { return !/\b(etf|fund|trust|warrant|right
 async function nasdaqHistory(symbol: string, asOf: string) {
   const cached = (quickCache.symbols as Record<string, CachedQuick>)[symbol];
   if (cached?.history?.length) return { url: 'https://api.nasdaq.com/api/quote', history: cached.history };
-  const to = asOf.slice(0, 10), from = dateOffset(asOf, -550);
+  const to = asOf.slice(0, 10), from = dateOffset(asOf, -1900);
   const url = `https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/historical?assetclass=stocks&fromdate=${from}&todate=${to}&limit=5000`;
   const payload = await fetchJson(url) as { data?: { tradesTable?: { rows?: Array<Record<string, string>> } } };
   const history = (payload.data?.tradesTable?.rows ?? []).map((row) => ({ date: isoDate(row.date), close: numeric(row.close), open: numeric(row.open), high: numeric(row.high), low: numeric(row.low), volume: numeric(row.volume) }))
