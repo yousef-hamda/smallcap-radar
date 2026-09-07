@@ -8,7 +8,10 @@ const HISTORY_BATCH_SIZE = 24;
 const SCORE_BATCH_SIZE = 600;
 export const SCAN_SOURCE_VERSION = 'Bulk Quotes/SEC Frames v6';
 
-const nonTradable = /\b(etf|fund|trust|warrant|right|unit|preferred|depositary|senior note|bond|debenture|limited partnership)\b|,\s*L\.P\./i;
+// The exchange directory occasionally labels partnerships as common shares.
+// Exclude both punctuation variants (L.P./LP) and the explicit phrase so an
+// income partnership cannot enter the common-stock strategies by name alone.
+const nonTradable = /\b(etf|fund|trust|warrant|right|unit|preferred|depositary|senior note|bond|debenture|limited partnership)\b|(?:,\s*)?L\.?P\.?\b/i;
 
 function preliminaryCandidates(companies: any[]) {
   return companies.filter((company) => {
