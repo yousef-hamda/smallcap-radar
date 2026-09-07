@@ -130,10 +130,22 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
   const last = history.at(-1), quoteDate = last?.date ?? bundledUniverse.generatedAt.slice(0, 10), quoteAvailableAt = last ? `${last.date}T21:00:00.000Z` : bundledUniverse.generatedAt;
   const quoteEvidence: Provenance = { source: last ? 'Nasdaq Historical (official)' : 'Nasdaq screener snapshot (official)', url: historyUrl, periodEnd: quoteDate, availableAt: quoteAvailableAt > now ? now : quoteAvailableAt, retrievedAt: now, currency: 'USD', confidence: last ? 'high' : 'medium' };
   const price = last?.close ?? company.price ?? null;
-  const snapshot: Snapshot = { symbol, name: company.name, asOf: now, exchange: company.exchange, securityType: commonSecurity(company.name) ? 'common' : 'unknown', price, marketCap: company.marketCap ?? null, confidence: 'C', deathSpiral: 'unknown', provenance: {}, history, dataIssues: issues, research: { financials: false, valuation: false, analysts: false, sector: !!company.sector } };
+  const snapshot: Snapshot = { symbol, name: company.name, asOf: now, exchange: company.exchange, sector: company.sector, industry: company.industry, securityType: commonSecurity(company.name) ? 'common' : 'unknown', price, marketCap: company.marketCap ?? null, confidence: 'C', deathSpiral: 'unknown', provenance: {}, history, dataIssues: issues, research: { financials: false, valuation: false, analysts: false, sector: !!company.sector } };
 
   if (price != null) snapshot.provenance.price = quoteEvidence;
   if (snapshot.marketCap != null) snapshot.provenance.marketCap = { source: 'Nasdaq stock screener (official)', url: NASDAQ_SCREENER, periodEnd: bundledUniverse.generatedAt.slice(0, 10), availableAt: bundledUniverse.generatedAt, retrievedAt: now, currency: 'USD', confidence: 'medium' };
+  const summaryPromise = fetchJson(`https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/summary?assetclass=stocks`, 8_000).catch(() => null) as Promise<any>;
+  const newsPromise = fetch(`https://feeds.finance.yahoo.com/rss/2.0/headline?s=${encodeURIComponent(symbol)}&region=US&lang=en-US`, { headers: { 'User-Agent': browserAgent, Accept: 'application/rss+xml,text/xml' }, signal: AbortSignal.timeout(8_000) }).then(r => r.ok ? r.text() : '').catch(() => '');
+  const [summaryResult, newsResult] = await Promise.all([summaryPromise, newsPromise]);
+  const summary = summaryResult?.data?.summaryData ?? {};
+  const summaryValue = (key: string) => String(summary[key]?.value ?? '').trim();
+  const target = numeric(summaryValue('OneYrTarget'));
+  if (target != null) { snapshot.analystTarget = target; snapshot.provenance.analystTarget = { source: 'Nasdaq quote summary (official)', periodEnd: now.slice(0, 10), availableAt: now, retrievedAt: now, currency: 'USD', confidence: 'medium' }; }
+  const summarySector = summaryValue('Sector'), summaryIndustry = summaryValue('Industry');
+  if (summarySector) snapshot.sector = summarySector;
+  if (summaryIndustry) snapshot.industry = summaryIndustry;
+  const strip = (value: string) => value.replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, ' ').trim();
+  snapshot.news = [...newsResult.matchAll(/<item>([\s\S]*?)<\/item>/gi)].slice(0, 8).map(match => { const item = match[1]; const read = (tag: string) => strip(item.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i'))?.[1] ?? ''); return { title: read('title'), link: read('link'), publishedAt: read('pubDate'), source: 'Yahoo Finance RSS' }; }).filter(item => item.title);
   if (history.length >= 20) {
     const values = history.slice(-20).map((row) => row.close * (row.volume ?? Number.NaN)).filter(Number.isFinite).sort((a, b) => a - b);
     if (values.length === 20) { snapshot.medianDollarVolume20d = (values[9] + values[10]) / 2; snapshot.provenance.medianDollarVolume20d = quoteEvidence }
@@ -154,7 +166,7 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
       snapshot.ps = snapshot.marketCap / snapshot.revenue;
       snapshot.provenance.ps = { ...snapshot.provenance.revenue, source: 'Derived: market cap / SEC cached revenue', availableAt: [snapshot.provenance.marketCap.availableAt, snapshot.provenance.revenue.availableAt].sort().at(-1)!, confidence: 'low' };
     }
-    snapshot.research = { financials: !!snapshot.revenue, valuation: false, analysts: false, sector: !!company.sector };
+    snapshot.research = { financials: !!snapshot.revenue, valuation: false, analysts: snapshot.analystTarget != null, sector: !!snapshot.sector };
     return snapshot;
   }
 
@@ -182,6 +194,6 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
     snapshot.ps = snapshot.marketCap / snapshot.revenue;
     snapshot.provenance.ps = { ...snapshot.provenance.revenue, source: 'Derived: market cap / SEC revenue', availableAt: [snapshot.provenance.marketCap.availableAt, snapshot.provenance.revenue.availableAt].sort().at(-1)!, confidence: 'low' };
   }
-  snapshot.research = { financials: !!snapshot.revenue, valuation: false, analysts: false, sector: !!company.sector };
+  snapshot.research = { financials: !!snapshot.revenue, valuation: snapshot.evSales != null || snapshot.ps != null, analysts: snapshot.analystTarget != null, sector: !!snapshot.sector };
   return snapshot;
 }
