@@ -146,7 +146,8 @@ export async function processScanBatch(runId: string) {
         } else {
           snapshot.dataIssues = [...(snapshot.dataIssues ?? []), 'لم تتوفر 30 أسبوعاً متواصلاً صالحاً لحساب MA30W.'];
         }
-        snapshot.history = history;
+        // Keep the durable screening row compact. Full bars remain available
+        // through /api/company and are fetched on demand for the chart.
       } catch (error) {
         snapshot.dataIssues = [...(snapshot.dataIssues ?? []), `تعذّر تحميل تاريخ الارتداد: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`];
       }
