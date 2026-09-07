@@ -109,7 +109,7 @@ function isoDate(date: string) { const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exe
 function dateOffset(iso: string, days: number) { const date = new Date(iso); date.setUTCDate(date.getUTCDate() + days); return date.toISOString().slice(0, 10) }
 function commonSecurity(name: string) { return !/\b(etf|fund|trust|warrant|right|unit|preferred|depositary|senior note|bond|debenture|limited partnership)\b|,\s*L\.P\./i.test(name) }
 
-async function nasdaqHistory(symbol: string, asOf: string) {
+export async function historicalMarketData(symbol: string, asOf = new Date().toISOString()) {
   const cached = (quickCache.symbols as Record<string, CachedQuick>)[symbol];
   if (cached?.history?.length) return { url: 'https://api.nasdaq.com/api/quote', history: cached.history };
   const to = asOf.slice(0, 10), from = dateOffset(asOf, -1900);
@@ -156,7 +156,7 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
   const now = new Date().toISOString(), symbol = company.ticker, cik = String(company.cik).padStart(10, '0'), issues: string[] = [];
   let history: NonNullable<Snapshot['history']> = [], historyUrl = NASDAQ_SCREENER;
   try {
-    const result = await nasdaqHistory(symbol, now); historyUrl = result.url;
+    const result = await historicalMarketData(symbol, now); historyUrl = result.url;
     history = result.history.map((row) => ({ date: row.date, close: row.close!, open: row.open ?? undefined, high: row.high ?? undefined, low: row.low ?? undefined, volume: row.volume ?? undefined }));
   } catch (error) { issues.push(`تعذّر تحميل تاريخ Nasdaq: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`) }
 

@@ -1,6 +1,7 @@
 import { createRun, currentHash, db, ensureSchema, insertSnapshot, log } from './storage';
-import { companySnapshot, quickSymbols, universe } from './providers';
+import { companySnapshot, historicalMarketData, quickSymbols, universe } from './providers';
 import { fetchBulkFundamentals, preliminarySnapshot, type BulkFundamentals } from './bulk';
+import { ma30Weeks } from './research';
 
 const BATCH_SIZE = 12;
 const SCORE_BATCH_SIZE = 600;
@@ -15,6 +16,13 @@ function preliminaryCandidates(companies: any[]) {
     const price = Number(company.price);
     return Number.isFinite(marketCap) && marketCap >= 25_000_000 && marketCap <= 2_000_000_000 && Number.isFinite(price) && price > 0;
   });
+}
+
+function bounceHistoryCandidate(snapshot: any) {
+  // Bulk quotes are not guaranteed to contain 52-week fields (Yahoo can be
+  // rate-limited). History enrichment therefore runs for every small-cap
+  // common stock and computes the missing values from the same dated bars.
+  return snapshot?.securityType === 'common' && Number(snapshot.marketCap) >= 25_000_000 && Number(snapshot.marketCap) <= 600_000_000 && Number(snapshot.price) > 0;
 }
 
 export const publicRun = (run: any) => ({
@@ -101,8 +109,56 @@ export async function processScanBatch(runId: string) {
     const offset = run.offset + entries.length;
     const done = offset >= run.total;
     const status = done ? (run.sec_failed ? 'partial' : 'complete') : 'running';
-    writes.push(database.prepare('UPDATE strategy_runs SET offset=?,processed=processed+?,stage=?,status=?,updated_at=?,lease_until=0 WHERE id=?').bind(offset, entries.length, done ? 13 : 9, status, now, run.id));
+    // A full run needs one additional, bounded history pass before it is
+    // complete. The bulk snapshot intentionally does not pretend to contain
+    // MA30W, so Bounce is enriched from real historical bars afterwards.
+    writes.push(database.prepare('UPDATE strategy_runs SET offset=?,processed=processed+?,stage=?,status=?,updated_at=?,lease_until=0 WHERE id=?').bind(offset, entries.length, done ? 10 : 9, done ? 'running' : status, now, run.id));
     for (let index = 0; index < writes.length; index += 75) await database.batch(writes.slice(index, index + 75));
+    run = await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first();
+    return { run: publicRun(run), done };
+  }
+
+  if (!isQuick && run.stage === 10) {
+    const entries = companies.slice(run.offset, run.offset + BATCH_SIZE);
+    const now = new Date().toISOString();
+    const writes: any[] = [];
+    const outcomes = await Promise.all(entries.map(async (company: any) => {
+      const row = await database.prepare('SELECT payload FROM fundamental_snapshots WHERE id=?').bind(`${run.id}:${company.ticker}`).first() as any;
+      if (!row) return null;
+      const snapshot = JSON.parse(row.payload);
+      if (!bounceHistoryCandidate(snapshot)) return { snapshot, company, skipped: true };
+      try {
+        const history = (await historicalMarketData(company.ticker, now)).history.filter((bar): bar is typeof bar & { close: number } => Number.isFinite(bar.close));
+        const last = history.at(-1);
+        const cutoff = last ? Date.parse(last.date) - 365 * 86_400_000 : NaN;
+        const year = history.filter((bar) => Date.parse(bar.date) >= cutoff);
+        const prior = history.filter((bar) => Date.parse(bar.date) <= cutoff).at(-1);
+        if (last && prior && Date.parse(prior.date) >= cutoff - 7 * 86_400_000) {
+          snapshot.return12m = last.close / prior.close - 1;
+          snapshot.provenance.return12m = { ...snapshot.provenance.price, source: 'Nasdaq Historical (official) · 12-month return', retrievedAt: now, availableAt: now, periodEnd: last.date, confidence: 'high' };
+        }
+        if (year.length >= 240) {
+          snapshot.low52w = Math.min(...year.map((bar) => bar.low ?? bar.close));
+          snapshot.provenance.low52w = { ...snapshot.provenance.price, source: 'Nasdaq Historical (official) · 52-week low', retrievedAt: now, availableAt: now, periodEnd: last?.date ?? now.slice(0, 10), confidence: 'high' };
+        }
+        const ma = ma30Weeks(history, now);
+        if (ma != null) {
+          snapshot.ma30w = ma;
+          snapshot.provenance.ma30w = { ...snapshot.provenance.price, source: 'Nasdaq Historical (official) · 30 completed weekly closes', retrievedAt: now, availableAt: now, periodEnd: history.at(-1)?.date ?? now.slice(0, 10), confidence: 'high' };
+        } else {
+          snapshot.dataIssues = [...(snapshot.dataIssues ?? []), 'لم تتوفر 30 أسبوعاً متواصلاً صالحاً لحساب MA30W.'];
+        }
+        snapshot.history = history;
+      } catch (error) {
+        snapshot.dataIssues = [...(snapshot.dataIssues ?? []), `تعذّر تحميل تاريخ الارتداد: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`];
+      }
+      return { snapshot, company };
+    }));
+    for (const outcome of outcomes) if (outcome) writes.push(insertSnapshot(run.id, outcome.snapshot));
+    const offset = run.offset + entries.length;
+    const done = offset >= run.total;
+    writes.push(database.prepare('UPDATE strategy_runs SET offset=?,stage=?,status=?,updated_at=?,lease_until=0 WHERE id=?').bind(offset, done ? 13 : 10, done ? 'complete' : 'running', now, run.id));
+    await database.batch(writes);
     run = await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first();
     return { run: publicRun(run), done };
   }

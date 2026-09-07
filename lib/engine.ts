@@ -69,7 +69,12 @@ export function evaluateStrategy(strategy:keyof typeof SPECS,s:Snapshot){
  const status:Status=screening.some(c=>c.status==='FAIL')?'FAIL':screening.some(c=>c.status==='UNKNOWN')?'UNKNOWN':'PASS';
  const researchComplete=['financials','valuation','analysts','sector'].every(k=>s.research?.[k as keyof NonNullable<Snapshot['research']>]===true);
  const factors=strategy==='core'?coreFactors(s):[];
+ // Bounce has no validated predictive ranking model in the supplied spec.
+ // Expose an honest diagnostic percentage instead: equal share of the six
+ // published gates, with UNKNOWN and FAIL both receiving zero. It is never
+ // used to promote a stock or replace the gate result.
+ const gateScore=strategy==='bounce'?Math.round(100*hardGateIds.filter(id=>checks.find(c=>c.id===id)?.status==='PASS').length/hardGateIds.length*10)/10:null;
  const score=strategy==='core'&&!hardGates.some(c=>c.status==='FAIL')?Math.round(factors.reduce((total,f)=>total+f.points,0)*10)/10:null;
  const scoreCoverage=strategy==='core'?Math.round(100*factors.filter(f=>f.available).reduce((t,f)=>t+f.maxPoints,0)/100):0;
- return {strategy:spec.id,version:spec.version,hash:specHash(strategy),status,qualified:status==='PASS',gateStatus,screeningQualified:measurableStatus==='PASS',measurableStatus,score,scoreCoverage,factors,scoreStatus:spec.scoreStatus,checks,researchComplete,finalRanked:false,finalReason:'الترتيب النهائي يتطلب اكتمال التحقق والزوايا الأربع'};
+ return {strategy:spec.id,version:spec.version,hash:specHash(strategy),status,qualified:status==='PASS',gateStatus,screeningQualified:measurableStatus==='PASS',measurableStatus,score,gateScore,scoreCoverage,factors,scoreStatus:spec.scoreStatus,checks,researchComplete,finalRanked:false,finalReason:'الترتيب النهائي يتطلب اكتمال التحقق والزوايا الأربع'};
 }
