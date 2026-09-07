@@ -1,7 +1,7 @@
 import { createRun, currentHash, db, ensureSchema, insertSnapshot, log } from './storage';
 import { companySnapshot, historicalMarketData, quickSymbols, universe } from './providers';
 import { fetchBulkFundamentals, preliminarySnapshot, type BulkFundamentals } from './bulk';
-import { ma30Weeks } from './research';
+import { bounceHistoryMetrics } from './research';
 
 const BATCH_SIZE = 12;
 const SCORE_BATCH_SIZE = 600;
@@ -129,22 +129,19 @@ export async function processScanBatch(runId: string) {
       if (!bounceHistoryCandidate(snapshot)) return { snapshot, company, skipped: true };
       try {
         const history = (await historicalMarketData(company.ticker, now)).history.filter((bar): bar is typeof bar & { close: number } => Number.isFinite(bar.close));
+        const metrics = bounceHistoryMetrics(history, now);
         const last = history.at(-1);
-        const cutoff = last ? Date.parse(last.date) - 365 * 86_400_000 : NaN;
-        const year = history.filter((bar) => Date.parse(bar.date) >= cutoff);
-        const prior = history.filter((bar) => Date.parse(bar.date) <= cutoff).at(-1);
-        if (last && prior && Date.parse(prior.date) >= cutoff - 7 * 86_400_000) {
-          snapshot.return12m = last.close / prior.close - 1;
-          snapshot.provenance.return12m = { ...snapshot.provenance.price, source: 'Nasdaq Historical (official) · 12-month return', retrievedAt: now, availableAt: now, periodEnd: last.date, confidence: 'high' };
+        if (metrics.return12m != null) {
+          snapshot.return12m = metrics.return12m;
+          snapshot.provenance.return12m = { ...snapshot.provenance.price, source: 'Nasdaq Historical (official) · 12-month return', retrievedAt: now, availableAt: now, periodEnd: last?.date ?? now.slice(0, 10), confidence: 'high' };
         }
-        if (year.length >= 240) {
-          snapshot.low52w = Math.min(...year.map((bar) => bar.low ?? bar.close));
+        if (metrics.low52w != null) {
+          snapshot.low52w = metrics.low52w;
           snapshot.provenance.low52w = { ...snapshot.provenance.price, source: 'Nasdaq Historical (official) · 52-week low', retrievedAt: now, availableAt: now, periodEnd: last?.date ?? now.slice(0, 10), confidence: 'high' };
         }
-        const ma = ma30Weeks(history, now);
-        if (ma != null) {
-          snapshot.ma30w = ma;
-          snapshot.provenance.ma30w = { ...snapshot.provenance.price, source: 'Nasdaq Historical (official) · 30 completed weekly closes', retrievedAt: now, availableAt: now, periodEnd: history.at(-1)?.date ?? now.slice(0, 10), confidence: 'high' };
+        if (metrics.ma30w != null) {
+          snapshot.ma30w = metrics.ma30w;
+          snapshot.provenance.ma30w = { ...snapshot.provenance.price, source: 'Nasdaq Historical (official) · 30 completed weekly closes', retrievedAt: now, availableAt: now, periodEnd: last?.date ?? now.slice(0, 10), confidence: 'high' };
         } else {
           snapshot.dataIssues = [...(snapshot.dataIssues ?? []), 'لم تتوفر 30 أسبوعاً متواصلاً صالحاً لحساب MA30W.'];
         }
