@@ -74,8 +74,16 @@ async function sendCompletionPush(env: Env, run: any) {
 async function scheduleNext(request: Request, runId: string, env: Env) {
   const target = new URL("/__radar-background", request.url);
   const cookie = request.headers.get("Cookie");
+  // Some existing Sites deployments have the optional dedicated secret unset.
+  // Reuse the already-required VAPID private key as an environment-only
+  // baton secret in that case; never fall back to a source-controlled value.
+  const batonSecret = env.BACKGROUND_SCAN_SECRET || env.VAPID_PRIVATE_KEY;
+  if (!batonSecret) {
+    await log(runId, "background", "BACKGROUND_SCAN_SECRET/VAPID_PRIVATE_KEY غير مضبوط؛ أوقفنا baton بدل إعادة المحاولة بلا حماية.");
+    return;
+  }
   for (let attempt = 0; attempt < 3; attempt++) {
-    const headers: Record<string, string> = { "X-Radar-Background": env.BACKGROUND_SCAN_SECRET, "Content-Type": "application/json" };
+    const headers: Record<string, string> = { "X-Radar-Background": batonSecret, "Content-Type": "application/json" };
     // Private Sites authenticate before the Worker runs. Preserve the owner's
     // session on the internal baton so the next batch reaches this Worker.
     if (cookie) headers.Cookie = cookie;
@@ -155,7 +163,8 @@ const worker = {
     }
 
     if (url.pathname === "/__radar-background" && request.method === "POST") {
-      if (request.headers.get("X-Radar-Background") !== env.BACKGROUND_SCAN_SECRET) return json({ error: "غير مصرح" }, 401);
+      const batonSecret = env.BACKGROUND_SCAN_SECRET || env.VAPID_PRIVATE_KEY;
+      if (!batonSecret || request.headers.get("X-Radar-Background") !== batonSecret) return json({ error: "غير مصرح" }, 401);
       const input = await request.json() as any;
       if (typeof input.runId !== "string") return json({ error: "معرّف غير صالح" }, 400);
       ctx.waitUntil(runBackgroundBatch(request, input.runId, env));

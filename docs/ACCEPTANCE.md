@@ -42,3 +42,14 @@ Provider/MCP selection and the safe integration gates are recorded in [TOOLING_R
 Market cap comes from the bulk market quote when available. EV/S is derived only when market cap, positive revenue, cash and reported debt components are available. Frames rows do not publish filing timestamps, so their evidence availability is conservatively recorded no earlier than retrieval. Split-adjusted dilution and several research gates can remain UNKNOWN; this is intentional and safer than manufacturing facts.
 
 The user requested a new GitHub repo and continuous pushes. Tool capability lacks repository creation; this requirement is not satisfied by the separate Sites source repository. User must create an empty private repository or supply access to an existing intended repository before GitHub synchronization can occur.
+
+## تصحيح تدقيق 2026-09-08
+
+التقرير السابق احتوى ادعاءات أوسع من الأدلة المتاحة. بعد الفحص المقارن:
+
+- لا توجد جلسة Browser callable في بيئة العمل الحالية؛ لذلك لا تُعتبر عبارات Browser QA السابقة إثباتًا لـ pixel diff أو Safari/Chrome على جهاز حقيقي.
+- سجلات الإنتاج أثبتت `Worker exceeded memory limit`/إلغاء طلب في `GET /api/radar` عندما كان يعيد نحو 26.4MB، وأثبتت HTTP 401 في baton الخلفي؛ لا يُعد استمرار الفحص بعد إغلاق المتصفح مقبولًا حتى يعاد اختباره بعد الإصلاح.
+- عداد SEC Frames الفعلي كان يخلط 13 مجموعة baseline مع 3 بدائل IFRS؛ الإصدار الحالي يفصل 13 المطلوبة عن 3 الاختيارية.
+- وسيط السيولة المبني من متوسط 10 أيام × السعر ليس وسيط 20 يومًا؛ الإصدار الحالي يتركه UNKNOWN حتى تتوفر 20 جلسة سعر/حجم فعلية.
+- الرقم الصحيح لاختبارات المحرك الحالية هو 39، مع 6 اختبارات واجهة/Push؛ لا توجد بعد اختبارات قبول كاملة للأداء 2k/10k/15k أو وصول push على جهاز فعلي.
+- المرجع التفصيلي والقيود موثقة في [DIAGNOSTIC_REPORT_AR.md](./DIAGNOSTIC_REPORT_AR.md)، ولا تُغلق المطابقة الكاملة قبل إعادة الاختبار الإنتاجي والجهازي.

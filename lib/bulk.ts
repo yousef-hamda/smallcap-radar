@@ -4,7 +4,7 @@ import type { Provenance, Snapshot } from './engine';
 import bundledFrames from './sec-frames.generated.json';
 
 type FrameFact = { cik: number; entityName?: string; start?: string; end: string; val: number; filed?: string; form?: string; accn?: string; frame?: string };
-type StoredFact = FrameFact & { tag: string; priority: number; url: string };
+type StoredFact = FrameFact & { tag: string; priority: number; url: string; fallback?: boolean };
 export type BulkFundamentals = {
   revenue?: StoredFact;
   netIncome?: StoredFact;
@@ -45,7 +45,7 @@ export async function fetchBulkFundamentals(candidateCiks: number[], asOf = new 
   const instant = `CY${quarter.year}Q${quarter.quarter}I`;
   const priorInstant = `CY${quarter.year - 1}Q${quarter.quarter}I`;
   const annual = `CY${annualYear}`;
-  const configs: FrameConfig[] = [
+  const requiredConfigs: FrameConfig[] = [
     ...revenueTags.map((tag, priority) => ({ key: 'revenue' as const, tag, unit: 'USD', period: annual, priority })),
     { key: 'netIncome' as const, tag: 'NetIncomeLoss', unit: 'USD', period: annual, priority: 0 },
     { key: 'ocf' as const, tag: 'NetCashProvidedByUsedInOperatingActivities', unit: 'USD', period: annual, priority: 0 },
@@ -55,15 +55,19 @@ export async function fetchBulkFundamentals(candidateCiks: number[], asOf = new 
     { key: 'cash' as const, tag: 'CashAndCashEquivalentsAtCarryingValue', unit: 'USD', period: instant, priority: 0 },
     { key: 'debtCurrent' as const, tag: 'LongTermDebtCurrent', unit: 'USD', period: instant, priority: 0 },
     { key: 'debtNoncurrent' as const, tag: 'LongTermDebtNoncurrent', unit: 'USD', period: instant, priority: 0 },
-    // Foreign filers commonly use IFRS taxonomy names; keep these in the same
-    // bulk pass so a valid EV/S is not lost merely because a company is a 20-F.
+  ];
+  // Optional overlays are kept separate from the 13 required baseline
+  // datasets. This keeps the scan contract honest while still supporting
+  // foreign filers when SEC exposes the IFRS taxonomy.
+  const optionalConfigs: FrameConfig[] = [
     { key: 'cash' as const, tag: 'CashAndCashEquivalents', taxonomy: 'ifrs-full', unit: 'USD', period: instant, priority: 1 },
     { key: 'debtCurrent' as const, tag: 'BorrowingsCurrent', taxonomy: 'ifrs-full', unit: 'USD', period: instant, priority: 1 },
     { key: 'debtNoncurrent' as const, tag: 'BorrowingsNoncurrent', taxonomy: 'ifrs-full', unit: 'USD', period: instant, priority: 1 },
   ];
+  const configs = [...requiredConfigs, ...optionalConfigs];
   const allowed = new Set(candidateCiks.map(Number));
   const fundamentals = new Map<number, BulkFundamentals>();
-  let success = 0, failed = 0;
+  let success = 0, failed = 0, optionalSuccess = 0, optionalFailed = 0;
   let fallbackUsed = false;
   const errors: string[] = [];
 
@@ -77,11 +81,11 @@ export async function fetchBulkFundamentals(candidateCiks: number[], asOf = new 
     }));
     for (const outcome of outcomes) {
       if (outcome.status === 'rejected') {
-        failed++;
+        if (index < requiredConfigs.length) failed++; else optionalFailed++;
         errors.push(outcome.reason instanceof Error ? outcome.reason.message : 'SEC Frames error');
         continue;
       }
-      success++;
+      if (index < requiredConfigs.length) success++; else optionalSuccess++;
       const { config, rows, url } = outcome.value;
       for (const row of rows) {
         const cik = Number(row.cik);
@@ -112,18 +116,18 @@ export async function fetchBulkFundamentals(candidateCiks: number[], asOf = new 
           const candidate = (bundled as BulkFundamentals)[key];
           if (!candidate) continue;
           const existing = current[key];
-          if (!existing || newer(candidate, existing)) current[key] = candidate;
+          if (!existing || newer(candidate, existing)) current[key] = { ...candidate, fallback: true };
         }
         fundamentals.set(cik, current);
       }
     }
   }
-  return { fundamentals, requests: configs.length, success, failed, fallbackUsed, errors: [...new Set(errors)].slice(0, 8), annual, instant };
+  return { fundamentals, requests: requiredConfigs.length, optionalRequests: optionalConfigs.length, success, failed, optionalSuccess, optionalFailed, fallbackUsed, errors: [...new Set(errors)].slice(0, 8), annual, instant };
 }
 
 function frameProvenance(fact: StoredFact, retrievedAt: string): Provenance {
   return {
-    source: 'SEC EDGAR XBRL Frames (official)',
+    source: fact.fallback ? 'SEC EDGAR XBRL Frames — official dated fallback snapshot' : 'SEC EDGAR XBRL Frames (official)',
     url: fact.url,
     periodStart: fact.start,
     periodEnd: fact.end,
@@ -133,13 +137,13 @@ function frameProvenance(fact: StoredFact, retrievedAt: string): Provenance {
     retrievedAt,
     currency: 'USD',
     tag: fact.tag,
-    confidence: 'medium',
+    confidence: fact.fallback ? 'low' : 'medium',
   };
 }
 
 export function preliminarySnapshot(company: Company, facts: BulkFundamentals | undefined, retrievedAt = new Date().toISOString()): Snapshot {
   const quoteDate = retrievedAt.slice(0, 10);
-  const quote: Provenance = { source: 'Yahoo/Nasdaq bulk quote', periodEnd: quoteDate, availableAt: retrievedAt, retrievedAt, currency: 'USD', confidence: 'medium' };
+  const quote: Provenance = { source: company.quoteSource || 'Yahoo/Nasdaq bulk quote', periodEnd: quoteDate, availableAt: company.quoteAvailableAt || retrievedAt, retrievedAt, currency: 'USD', confidence: company.quoteSource?.includes('bundled') ? 'low' : 'medium' };
   const snapshot: Snapshot = {
     symbol: company.ticker,
     name: company.name,
@@ -148,6 +152,8 @@ export function preliminarySnapshot(company: Company, facts: BulkFundamentals | 
     securityType: 'common',
     price: company.price ?? null,
     marketCap: company.marketCap ?? null,
+    volume: company.volume ?? null,
+    averageVolume10d: company.averageVolume10d ?? null,
     confidence: 'C',
     deathSpiral: 'unknown',
     provenance: {},
@@ -156,14 +162,10 @@ export function preliminarySnapshot(company: Company, facts: BulkFundamentals | 
   };
   if (snapshot.price != null) snapshot.provenance.price = quote;
   if (snapshot.marketCap != null) snapshot.provenance.marketCap = quote;
-  if (company.averageVolume10d && snapshot.price) {
-    snapshot.medianDollarVolume20d = company.averageVolume10d * snapshot.price;
-    snapshot.provenance.medianDollarVolume20d = { ...quote, source: 'Yahoo 10-day average volume × price (bulk liquidity proxy)', confidence: 'low' };
-    snapshot.dataIssues?.push('السيولة في الفحص السريع وكيل جماعي؛ يُحسب وسيط 20 يومًا في التحقق العميق.');
-  }
   if (company.return52w != null) { snapshot.return12m = company.return52w; snapshot.provenance.return12m = quote }
   if (company.low52w != null) { snapshot.low52w = company.low52w; snapshot.provenance.low52w = quote }
-  if (!facts) { snapshot.dataIssues?.push('لا توجد تغطية SEC Frames لهذه الشركة في الفترة الجماعية.'); return snapshot }
+  if (!facts) { snapshot.dataIssues?.push('لا توجد تغطية SEC Frames لهذه الشركة في الفترة الجماعية.'); snapshot.dataIssues?.push('وسيط السيولة لـ20 يومًا لا يُستنتج من متوسط 10 أيام؛ يحتاج تاريخًا فعليًا قبل PASS.'); return snapshot }
+  snapshot.dataIssues?.push('وسيط السيولة لـ20 يومًا لا يُستنتج من متوسط 10 أيام؛ يحتاج تاريخًا فعليًا قبل PASS.');
 
   for (const key of ['revenue', 'netIncome'] as const) if (facts[key]) {
     snapshot[key] = facts[key]!.val;
@@ -173,8 +175,8 @@ export function preliminarySnapshot(company: Company, facts: BulkFundamentals | 
     snapshot.fcf = facts.ocf.val - Math.abs(facts.capex.val);
     snapshot.provenance.fcf = { ...frameProvenance(facts.ocf, retrievedAt), tag: `${facts.ocf.tag} − ${facts.capex.tag}`, confidence: 'medium' };
   }
-  const debt = (facts.debtCurrent?.val ?? 0) + (facts.debtNoncurrent?.val ?? 0);
-  if (snapshot.marketCap && snapshot.revenue && snapshot.revenue > 0 && facts.cash) {
+  const debt = facts.debtCurrent && facts.debtNoncurrent ? facts.debtCurrent.val + facts.debtNoncurrent.val : null;
+  if (snapshot.marketCap && snapshot.revenue && snapshot.revenue > 0 && facts.cash && debt != null) {
     snapshot.evSales = (snapshot.marketCap + debt - facts.cash.val) / snapshot.revenue;
     snapshot.provenance.evSales = { ...frameProvenance(facts.revenue!, retrievedAt), source: 'Derived from bulk market cap + SEC debt − SEC cash / SEC revenue', confidence: 'low' };
   }

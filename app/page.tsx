@@ -1,4 +1,8 @@
 "use client";
+/* The refresh function intentionally tracks the current strategy view and is
+   called from controlled polling effects; including it as a dependency would
+   recreate the polling timer on every render. */
+/* eslint-disable react-hooks/exhaustive-deps */
 
 import {useEffect,useMemo,useState} from "react";
 import Link from "next/link";
@@ -27,6 +31,7 @@ export default function RadarApp(){
  const [strategy,setStrategy]=useState<'core'|'bounce'>('bounce');
  const [query,setQuery]=useState('');
  const [data,setData]=useState<Snapshot[]>([]);
+ const [radarSummary,setRadarSummary]=useState<any>({total:0,coreQualified:0,bounceQualified:0,coreUnknown:0,bounceUnknown:0,coreFailed:0,bounceFailed:0});
  const [demo,setDemo]=useState(false);
  const [run,setRun]=useState<any>(null);
  const [busy,setBusy]=useState(false);
@@ -44,9 +49,9 @@ export default function RadarApp(){
  const [notificationState,setNotificationState]=useState<'checking'|'ready'|'unsupported'|'denied'>('checking');
  const [detailLoading,setDetailLoading]=useState(false);
 
- const refresh=async()=>{const response=await fetch('/api/radar');const payload=await response.json();if(!response.ok)throw Error(payload.error||'تعذّر تحميل آخر فحص.');setData(payload.snapshots||[]);setStoredEvaluations(payload.storedEvaluations||[]);setRun(payload.run);setFavorites(payload.favorites||[]);setDemo(false);if(payload.dataRunId&&payload.run?.id!==payload.dataRunId)setNotice('نعرض آخر لقطة تحتوي بيانات؛ الجولة الأحدث لم تنتج نتائج بعد.');await saveOffline({savedAt:new Date().toISOString(),run:payload.dataRun,snapshots:(payload.snapshots||[]).map((s:any)=>({...s,history:undefined}))}).catch(()=>{});};
+ const refresh=async(view:'core'|'bounce'|'favorites'=strategy)=>{const response=await fetch(`/api/radar?strategy=${view}&limit=150`);const payload=await response.json();if(!response.ok)throw Error(payload.error||'تعذّر تحميل آخر فحص.');setData(payload.snapshots||[]);setStoredEvaluations(payload.storedEvaluations||[]);setRadarSummary(payload.summary||{});setRun(payload.run);setFavorites(payload.favorites||[]);setDemo(false);if(payload.dataRunId&&payload.run?.id!==payload.dataRunId)setNotice('نعرض آخر لقطة تحتوي بيانات؛ الجولة الأحدث لم تنتج نتائج بعد.');await saveOffline({savedAt:new Date().toISOString(),run:payload.dataRun,snapshots:(payload.snapshots||[]).map((s:any)=>({...s,history:undefined}))}).catch(()=>{});};
 
- useEffect(()=>{queueMicrotask(()=>refresh().catch(e=>setNotice(e.message||'لا توجد لقطة محفوظة بعد.')));const handler=(event:any)=>{event.preventDefault();setInstall(event)};window.addEventListener('beforeinstallprompt',handler);if(!('serviceWorker'in navigator)||!('PushManager'in window)||!('Notification'in window))queueMicrotask(()=>setNotificationState('unsupported'));else navigator.serviceWorker.register('/sw.js').then(registration=>registration.pushManager.getSubscription().then(subscription=>{setNotificationsEnabled(!!subscription);setNotificationState(Notification.permission==='denied'?'denied':'ready')})).catch(()=>setNotificationState('unsupported'));return()=>window.removeEventListener('beforeinstallprompt',handler)},[]);
+ useEffect(()=>{queueMicrotask(()=>refresh('bounce').catch(e=>setNotice(e.message||'لا توجد لقطة محفوظة بعد.')));const handler=(event:any)=>{event.preventDefault();setInstall(event)};window.addEventListener('beforeinstallprompt',handler);if(!('serviceWorker'in navigator)||!('PushManager'in window)||!('Notification'in window))queueMicrotask(()=>setNotificationState('unsupported'));else navigator.serviceWorker.register('/sw.js').then(registration=>registration.pushManager.getSubscription().then(subscription=>{setNotificationsEnabled(!!subscription);setNotificationState(Notification.permission==='denied'?'denied':'ready')})).catch(()=>setNotificationState('unsupported'));return()=>window.removeEventListener('beforeinstallprompt',handler)},[]);
 
  useEffect(()=>{if(!run||!['running','partial'].includes(run.status)||(run.offset>=run.total&&!run.retryPending))return;let active=true;let busyStep=false;const tick=async()=>{if(!active||busyStep)return;busyStep=true;try{await fetch('/api/scan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'step',runId:run.id})});await refresh()}catch{}finally{busyStep=false}};void tick();const timer=window.setInterval(tick,2500);return()=>{active=false;window.clearInterval(timer)}},[run]);
 
@@ -83,16 +88,16 @@ export default function RadarApp(){
  async function importFile(file?:File){if(!file)return;setBusy(true);setError('');try{if(file.size>4_000_000)throw Error('الحد الأقصى للملف 4 MB.');const records=JSON.parse(await file.text());const response=await fetch('/api/radar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'import',records})});const payload=await response.json();if(!response.ok)throw Error(payload.error);await refresh();setNotice('تم استيراد اللقطة وتقييمها بالقواعد الحالية.')}catch(e:any){setError(e.message)}finally{setBusy(false)}}
 
  const evaluated=useMemo(()=>data.map(snapshot=>({s:snapshot,e:evaluateStrategy(strategy,snapshot)})),[data,strategy]);
- const rows=useMemo(()=>{const source=tab==='favorites'?data.flatMap(s=>{const bounce=evaluateStrategy('bounce',s) as any;const core=evaluateStrategy('core',s) as any;const e=bounce.screeningQualified?bounce:core;return e.screeningQualified?[{s,e}]:[]}):evaluated;return source.filter(({s,e})=>(e as any).screeningQualified&&(!query||`${s.symbol} ${s.name}`.toLowerCase().includes(query.toLowerCase()))&&(tab!=='favorites'||favorites.includes(s.symbol))).sort((a,b)=>a.s.symbol.localeCompare(b.s.symbol))},[evaluated,data,query,tab,favorites]);
- const screeningQualified=evaluated.filter(x=>(x.e as any).screeningQualified).length;
- const incomplete=evaluated.filter(x=>x.e.status==='UNKNOWN').length;
- const excluded=evaluated.filter(x=>x.e.status==='FAIL').length;
- const mobileBounceCount=useMemo(()=>data.reduce((n,s)=>n+(evaluateStrategy('bounce',s) as any).screeningQualified?1:0,0),[data]);
- const mobileCoreCount=useMemo(()=>data.reduce((n,s)=>n+(evaluateStrategy('core',s) as any).screeningQualified?1:0,0),[data]);
+ const rows=useMemo(()=>{const source=tab==='favorites'?data.flatMap(s=>{const bounce=evaluateStrategy('bounce',s) as any;const core=evaluateStrategy('core',s) as any;return [{s,e:bounce.screeningQualified?bounce:core}]}):evaluated;return source.filter(({s,e})=>(tab==='favorites'?favorites.includes(s.symbol):(e as any).screeningQualified)&&(!query||`${s.symbol} ${s.name}`.toLowerCase().includes(query.toLowerCase()))).sort((a,b)=>a.s.symbol.localeCompare(b.s.symbol))},[evaluated,data,query,tab,favorites]);
+ const screeningQualified=strategy==='core'?radarSummary.coreQualified:radarSummary.bounceQualified;
+ const incomplete=strategy==='core'?radarSummary.coreUnknown:radarSummary.bounceUnknown;
+ const excluded=strategy==='core'?radarSummary.coreFailed:radarSummary.bounceFailed;
+ const mobileBounceCount=radarSummary.bounceQualified;
+ const mobileCoreCount=radarSummary.coreQualified;
  const progress=run?.total?Math.min(100,100*(run.offset||0)/run.total):0;
- const resumable=run&&run.source?.includes('Bulk Quotes/SEC Frames v6')&&['running','partial'].includes(run.status)&&(run.stage<13||run.offset<run.total||run.retryPending);
+ const resumable=run&&run.source?.includes('Bulk Quotes/SEC Frames v7')&&['running','partial'].includes(run.status)&&(run.stage<13||run.offset<run.total||run.retryPending);
 
- function switchTab(id:string){setTab(id);setMobileNav(false);if(id==='core'||id==='bounce')setStrategy(id)}
+ function switchTab(id:string){setTab(id);setMobileNav(false);const view:'core'|'bounce'|'favorites'=id==='core'||id==='bounce'||id==='favorites'?id as 'core'|'bounce'|'favorites':'bounce';if(id==='core'||id==='bounce')setStrategy(id);void refresh(view).catch(e=>setError(e.message||'تعذّر تبديل القائمة.'))}
  function exportData(){const blob=new Blob([JSON.stringify({run,mode:demo?'synthetic':'observed',strategy:SPECS[strategy],results:evaluated,evaluationMode:'current-spec reevaluation',persistedEvaluations:demo?[]:storedEvaluations},null,2)],{type:'application/json'});const url=URL.createObjectURL(blob),anchor=document.createElement('a');anchor.href=url;anchor.download='small-cap-radar-audit.json';anchor.click();URL.revokeObjectURL(url)}
 
  return <div className="terminal-shell" dir="rtl">

@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import type { Snapshot } from '@/lib/engine';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
-const ranges: Record<string, number> = { '1M': 30, '6M': 183, '1Y': 365, '2Y': 730, '5Y': 1826 };
+const ranges: Record<string, number> = { '1D': 1, '1W': 7, '1M': 30, '6M': 183, '1Y': 365, '2Y': 730, '5Y': 1826 };
 const compact = (value: number) => new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
 
 export default function PriceChart({ snapshot, bounce }: { snapshot: Snapshot; bounce: boolean }) {

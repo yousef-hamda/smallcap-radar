@@ -1,24 +1,21 @@
 import { createRun, currentHash, db, ensureSchema, insertSnapshot, log } from './storage';
-import { companySnapshot, historicalMarketData, quickSymbols, universe } from './providers';
+import { companySnapshot, consumeProviderIssues, historicalMarketData, quickSymbols, universe } from './providers';
 import { fetchBulkFundamentals, preliminarySnapshot, type BulkFundamentals } from './bulk';
 import { bounceHistoryMetrics } from './research';
+import { NON_TRADABLE_NAME, SPECS } from './strategy-spec';
+import { evaluateStrategy } from './engine';
 
 const BATCH_SIZE = 12;
 const HISTORY_BATCH_SIZE = 24;
 const SCORE_BATCH_SIZE = 600;
-export const SCAN_SOURCE_VERSION = 'Bulk Quotes/SEC Frames v6';
-
-// The exchange directory occasionally labels partnerships as common shares.
-// Exclude both punctuation variants (L.P./LP) and the explicit phrase so an
-// income partnership cannot enter the common-stock strategies by name alone.
-const nonTradable = /\b(etf|fund|trust|warrant|right|unit|preferred|depositary|senior note|bond|debenture|limited partnership)\b|(?:,\s*)?L\.?P\.?\b/i;
+export const SCAN_SOURCE_VERSION = 'Bulk Quotes/SEC Frames v7';
 
 function preliminaryCandidates(companies: any[]) {
   return companies.filter((company) => {
-    if (nonTradable.test(String(company.name || ''))) return false;
+    if (NON_TRADABLE_NAME.test(String(company.name || ''))) return false;
     const marketCap = Number(company.marketCap);
     const price = Number(company.price);
-    return Number.isFinite(marketCap) && marketCap >= 25_000_000 && marketCap <= 2_000_000_000 && Number.isFinite(price) && price > 0;
+    return Number.isFinite(marketCap) && marketCap >= SPECS.core.marketCap.min && marketCap <= SPECS.core.marketCap.max && Number.isFinite(price) && price > 0;
   });
 }
 
@@ -26,7 +23,17 @@ function bounceHistoryCandidate(snapshot: any) {
   // Bulk quotes are not guaranteed to contain 52-week fields (Yahoo can be
   // rate-limited). History enrichment therefore runs for every small-cap
   // common stock and computes the missing values from the same dated bars.
-  return snapshot?.securityType === 'common' && Number(snapshot.marketCap) >= 25_000_000 && Number(snapshot.marketCap) <= 600_000_000 && Number(snapshot.price) > 0;
+  return snapshot?.securityType === 'common' && Number(snapshot.marketCap) >= SPECS.bounce.marketCap.min && Number(snapshot.marketCap) <= SPECS.bounce.marketCap.max && Number(snapshot.price) > 0;
+}
+
+function historyCandidate(snapshot: any) {
+  if (bounceHistoryCandidate(snapshot)) return true;
+  if (snapshot?.securityType !== 'common' || Number(snapshot.marketCap) < SPECS.core.marketCap.min || Number(snapshot.marketCap) > SPECS.core.marketCap.max || Number(snapshot.price) <= 0) return false;
+  // History is fetched only for rows that pass the cheap, non-liquidity Core
+  // gates. The exact 20-session dollar-volume median is then verified from
+  // bars; a quote average is never used as a PASS substitute.
+  const evaluation = evaluateStrategy('core', snapshot);
+  return ['security', 'cap', 'revenue', 'valuation', 'profitability'].every(id => evaluation.checks.find(check => check.id === id)?.status === 'PASS');
 }
 
 export const publicRun = (run: any) => ({
@@ -50,6 +57,7 @@ export async function startScan(modeInput: unknown) {
   try {
     let companies = await universe();
     if (!companies.length) throw new Error('دليل الشركات المحلي فارغ');
+    for (const issue of consumeProviderIssues()) await log(id, 'providers', issue);
     const universeTotal = companies.length;
     const quoteCoverage = companies.filter((company: any) => Number.isFinite(company.price) && Number.isFinite(company.marketCap)).length;
     if (mode === 'quick') {
@@ -92,7 +100,7 @@ export async function processScanBatch(runId: string) {
       const effectiveFailed = bulk.fallbackUsed ? 0 : bulk.failed;
       const error = effectiveFailed ? `SEC Frames: ${bulk.success}/${bulk.requests} requests succeeded. ${bulk.errors.join('؛ ')}` : '';
       await database.prepare('UPDATE strategy_runs SET stage=9,offset=0,processed=0,sec_requests=?,sec_success=?,sec_failed=?,fundamental_coverage=?,error=?,updated_at=?,lease_until=0 WHERE id=?').bind(bulk.requests, effectiveSuccess, effectiveFailed, bulk.fundamentals.size, error, new Date().toISOString(), run.id).run();
-      await log(run.id, 'sec_frames', `SEC Frames datasets ${effectiveSuccess}/${bulk.requests}; coverage ${bulk.fundamentals.size}/${companies.length}; annual ${bulk.annual}; instant ${bulk.instant}; source ${bulk.fallbackUsed ? 'bundled official snapshot' : 'live API'}`);
+      await log(run.id, 'sec_frames', `SEC Frames baseline ${effectiveSuccess}/${bulk.requests}; optional IFRS ${bulk.optionalSuccess}/${bulk.optionalRequests}; coverage ${bulk.fundamentals.size}/${companies.length}; annual ${bulk.annual}; instant ${bulk.instant}; source ${bulk.fallbackUsed ? 'bundled official dated snapshot' : 'live API'}`);
       run = await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first();
       return { run: publicRun(run), done: false };
     } catch (error) {
@@ -130,9 +138,10 @@ export async function processScanBatch(runId: string) {
       const row = await database.prepare('SELECT payload FROM fundamental_snapshots WHERE id=?').bind(`${run.id}:${company.ticker}`).first() as any;
       if (!row) return null;
       const snapshot = JSON.parse(row.payload);
-      if (!bounceHistoryCandidate(snapshot)) return { snapshot, company, skipped: true };
+      if (!historyCandidate(snapshot)) return { snapshot, company, skipped: true };
       try {
-        const history = (await historicalMarketData(company.ticker, now)).history.filter((bar): bar is typeof bar & { close: number } => Number.isFinite(bar.close));
+        const historical = await historicalMarketData(company.ticker, now);
+        const history = historical.history.filter((bar): bar is typeof bar & { close: number } => Number.isFinite(bar.close));
         const metrics = bounceHistoryMetrics(history, now);
         // The historical observations were retrieved after the bulk row was
         // created; advance the snapshot timestamp so provenance/freshness do
@@ -147,23 +156,38 @@ export async function processScanBatch(runId: string) {
           snapshot.low52w = metrics.low52w;
           snapshot.provenance.low52w = { ...snapshot.provenance.price, source: 'Nasdaq Historical (official) · 52-week low', retrievedAt: now, availableAt: now, periodEnd: last?.date ?? now.slice(0, 10), confidence: 'high' };
         }
+        const yearBars = history.filter(bar => Date.parse(bar.date) >= Date.parse(now) - 365 * 86_400_000);
+        if (yearBars.length >= 240) {
+          snapshot.high52w = Math.max(...yearBars.map(bar => bar.high ?? bar.close));
+          snapshot.provenance.high52w = { ...snapshot.provenance.price, source: 'Nasdaq Historical (official) · 52-week high', retrievedAt: now, availableAt: now, periodEnd: last?.date ?? now.slice(0, 10), confidence: 'high' };
+        }
         if (metrics.ma30w != null) {
           snapshot.ma30w = metrics.ma30w;
           snapshot.provenance.ma30w = { ...snapshot.provenance.price, source: 'Nasdaq Historical (official) · 30 completed weekly closes', retrievedAt: now, availableAt: now, periodEnd: last?.date ?? now.slice(0, 10), confidence: 'high' };
         } else {
           snapshot.dataIssues = [...(snapshot.dataIssues ?? []), 'لم تتوفر 30 أسبوعاً متواصلاً صالحاً لحساب MA30W.'];
         }
+        const dollarVolumes = history.slice(-20).map(bar => Number.isFinite(bar.volume) && bar.volume! >= 0 ? bar.close * bar.volume! : Number.NaN).filter(Number.isFinite).sort((a, b) => a - b);
+        if (dollarVolumes.length === 20) {
+          snapshot.medianDollarVolume20d = (dollarVolumes[9] + dollarVolumes[10]) / 2;
+          snapshot.liquidityReviewed = true;
+          snapshot.provenance.medianDollarVolume20d = { ...snapshot.provenance.price, source: `${historical.url} · 20-session median dollar volume`, retrievedAt: now, availableAt: now, periodEnd: last?.date ?? now.slice(0, 10), confidence: 'high' };
+        } else {
+          snapshot.dataIssues = [...(snapshot.dataIssues ?? []), 'لا تتوفر 20 جلسة مكتملة مع السعر والحجم لحساب وسيط السيولة.'];
+        }
         // Keep the durable screening row compact. Full bars remain available
         // through /api/company and are fetched on demand for the chart.
       } catch (error) {
         snapshot.dataIssues = [...(snapshot.dataIssues ?? []), `تعذّر تحميل تاريخ الارتداد: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`];
       }
-      return { snapshot, company };
+      return { snapshot, company, failed: snapshot.dataIssues?.some((issue: string) => issue.startsWith('تعذّر تحميل تاريخ')) === true };
     }));
+    const historyFailed = outcomes.filter(outcome => outcome?.failed).length;
     for (const outcome of outcomes) if (outcome) writes.push(insertSnapshot(run.id, outcome.snapshot));
     const offset = run.offset + entries.length;
     const done = offset >= run.total;
-    writes.push(database.prepare('UPDATE strategy_runs SET offset=?,stage=?,status=?,updated_at=?,lease_until=0 WHERE id=?').bind(offset, done ? 13 : 10, done ? 'complete' : 'running', now, run.id));
+    const totalFailed = Number(run.failed || 0) + historyFailed;
+    writes.push(database.prepare('UPDATE strategy_runs SET offset=?,stage=?,status=?,failed=?,error=?,updated_at=?,lease_until=0 WHERE id=?').bind(offset, done ? 13 : 10, done ? (totalFailed ? 'partial' : 'complete') : 'running', totalFailed, historyFailed ? `فشل جلب التاريخ لـ${historyFailed} شركة` : run.error, now, run.id));
     await database.batch(writes);
     run = await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first();
     return { run: publicRun(run), done };

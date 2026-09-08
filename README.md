@@ -7,15 +7,15 @@ Arabic RTL mobile-first PWA, published through Sites. It is a working research p
 ## Implemented
 
 - Professional Arabic RTL research terminal with a dense desktop table, responsive mobile layout, Core/Bounce filters, company gate/evidence detail, five-range historical chart, persistent favorites, JSON snapshot import and audit export.
-- Cloudflare D1 self-initializing schema and migrations, immutable run identifiers and per-run snapshots/evaluations, explicit provider errors and a server-owned cursor with lease/offset concurrency protection. Chained Worker tasks continue after the browser closes; production verification on 2026-09-06 advanced the same run from offset 24 to 144 while the browser was closed.
+- Cloudflare D1 self-initializing schema and migrations, immutable run identifiers and per-run snapshots/evaluations, explicit provider errors and a server-owned cursor with lease/offset concurrency protection. The background baton is implemented, but its production continuation must be re-verified after the authentication fix; see `docs/DIAGNOSTIC_REPORT_AR.md`.
 - Standards-based Web Push completion notifications with VAPID signing and an explicit subscribe-and-test panel. On iPhone, install the PWA on the Home Screen, open it from the icon, and press **تفعيل واختبار** once.
-- The full scan now follows the legacy system's bulk-first architecture: Yahoo quotes in groups of 250 symbols, exactly 13 SEC XBRL Frames datasets, then deterministic local evaluation in pages of 600 companies. Detailed price history and SEC Company Facts are fetched only when a company is opened. A bundled official SEC/Nasdaq directory and a dated official Frames snapshot keep the scan deterministic when a provider blocks the Worker egress range.
+- The full scan follows the legacy system's bulk-first architecture: Yahoo quotes in groups of 250 symbols, 13 required SEC XBRL Frames datasets plus optional IFRS overlays, then deterministic local evaluation in pages of 600 companies. Exact 20-session liquidity and historical Bounce metrics are verified from dated bars when a candidate reaches the history stage; a 10-day volume proxy never passes a gate. A bundled official SEC/Nasdaq directory and a dated official Frames snapshot are labeled as fallback data.
 - Production benchmark on 2026-09-06: 7,675 exchange-listed securities loaded; 6,320 had quote coverage; 4,765 were removed by preliminary gates; all 2,910 candidates were evaluated in 27.1 seconds with zero processing failures. The 13 Frames datasets covered 2,381 candidates (81.8%). The browser was closed mid-run for 36 seconds; the same server run completed at stage 13 and appeared after reopening.
 - Shared versioned gate engine, Core/Legacy documented weights, and a transparent Core diagnostic score from 100 with per-factor points and coverage. The score is deliberately diagnostic until the point-in-time validation gates are approved; failed hard gates cannot be rescued by a score. Bounce remains documented gates plus research ranking, not an invented production score.
 - Conservative SEC annual + current YTD − prior YTD normalization, provenance, foreign-filer flag, unavailable-data handling. Some issuers require custom taxonomy support and remain incomplete.
 - PIT availability filter, deterministic firm holdout assignment, firm bootstrap, Bonferroni correction, conservative Bounce exit simulation and costs.
 - Web manifest and icons; offline fallback reads the last snapshot saved on the device. Installation and notification receipt still require final verification on the owner's physical phone; server-side VAPID request generation is covered by automated tests.
-- 33 meaningful engine/normalization tests plus 6 UI/Web-Push component tests, TypeScript checking, ESLint and a verified production build.
+- 39 engine/normalization tests plus 6 UI/Web-Push component tests, TypeScript checking, ESLint and a verified production build.
 
 ## Not complete / not validated
 
@@ -38,19 +38,19 @@ Current implementation uses **Vinext/React instead of the plan's TanStack Start*
 
 ## Strategy contract
 
-`lib/engine.ts` is the single strategy configuration/evaluator source. All absent critical metrics become UNKNOWN. Positive net income OR FCF passes the definitive profitability branch. Inflection has no invented substitute. Core/Legacy score returns null; Bounce returns gates only. UI candidate qualification is not a final research rank. Version suffix `draft.1` identifies unvalidated implementation conventions.
+`lib/strategy-spec.ts` is the single strategy configuration source and `lib/engine.ts` is the evaluator. All absent critical metrics become UNKNOWN. Positive net income OR FCF passes the definitive profitability branch. Inflection has no invented substitute. Core/Legacy score returns null; Bounce returns gates only. UI candidate qualification is not a final research rank. Version suffix `draft.1` identifies unvalidated implementation conventions.
 
 Operational conventions: 20-day median dollar volume for Core and Bounce (Bounce requires at least $150k); 3 calendar days quote freshness; 200-day fundamental period freshness; 30 fully completed consecutive weekly closing prices; calendar-month expiry clamped at month end, then first observed tradable open. These are conservative implementation choices, **not reproduced original settings**. SEC date-only filing records become available at end of filing day, intentionally conservative.
 
 ## Data and API
 
-- `GET /api/radar`: most recent run and last available snapshots; explicit `dataRunId` identifies displayed data.
+- `GET /api/radar?strategy=core|bounce|favorites&limit=150&offset=0`: paged qualified/favorite snapshots plus counts; explicit `dataRunId` identifies displayed data. This bounded contract avoids returning the full historical snapshot table in one response.
 - `GET /api/company?symbol=...`: on-demand deep verification using detailed history and SEC Company Facts, cached for 30 minutes; this deliberately stays outside the market-wide hot path.
 - `POST /api/radar`: same-origin `{action:'favorite',symbol}` or `{action:'import',records: Snapshot[]}`. Import max 500 records / 4MB; rejects duplicate symbols and malformed provenance.
 - `POST /api/background-scan/start`: starts or revives a server-owned quick/full scan and returns immediately. The Worker passes a signed internal baton between bounded stages/pages, so browser suspension does not control progress.
 - `GET /api/push/key` and `POST /api/push/subscribe`: create the device subscription used for the completion alert. Expired subscriptions are removed automatically.
 - `POST /api/scan`: retained as a bounded diagnostic/manual recovery API. Failed symbols enter a persistent queue with up to three total attempts; exhausted failures keep the run partial.
-- `GET /api/export?kind=spec` and `?kind=schema`: strategy JSON or documented synthetic schema example.
+- `GET /api/export?kind=spec`, `?kind=schema`, or `?kind=audit`: strategy JSON, documented synthetic schema example, or bounded run/audit log export.
 
 Do not import the schema wrapper itself: import the actual array of sourced snapshots. Data are research inputs, not independently verified simply because they have been imported.
 

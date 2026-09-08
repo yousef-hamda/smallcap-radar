@@ -1,11 +1,12 @@
 import type { Snapshot, Provenance, InsiderPurchase } from './engine';
 import { SPECS } from './engine';
+import { NON_TRADABLE_NAME } from './strategy-spec';
 import { ma30Weeks } from './research';
 import { observations, latestInstant, trailingAnnual, provenance, REVENUE_TAGS } from './sec';
 import bundledUniverse from './universe.generated.json';
 import quickCache from './quick-cache.generated.json';
 
-export type Company = { cik: number; name: string; ticker: string; exchange: string; price?: number; marketCap?: number; volume?: number; averageVolume10d?: number; return52w?: number; low52w?: number; high52w?: number; ma50d?: number; ma200d?: number; sector?: string; industry?: string };
+export type Company = { cik: number; name: string; ticker: string; exchange: string; price?: number; marketCap?: number; volume?: number; averageVolume10d?: number; return52w?: number; low52w?: number; high52w?: number; ma50d?: number; ma200d?: number; sector?: string; industry?: string; quoteSource?: string; quoteAvailableAt?: string };
 type NasdaqRow = { symbol: string; name?: string; lastsale?: string; marketCap?: string; volume?: string; sector?: string; industry?: string };
 type CachedQuick = { history: NonNullable<Snapshot['history']>; financials: Record<string, number>; provenance: Record<string, Provenance>; issues: string[] };
 
@@ -16,6 +17,11 @@ const secAgent = 'SmallCapRadar/2.1 research-contact:yousef-hamda@users.noreply.
 const submissionsUrlFor = (cik: number|string) => `https://data.sec.gov/submissions/CIK${String(cik).padStart(10, '0')}.json`;
 const numeric = (value: unknown) => { const parsed = Number(String(value ?? '').replace(/[$,%+,]/g, '').trim()); return Number.isFinite(parsed) ? parsed : null };
 export const yahooPercentAsRatio = (value: unknown) => Number.isFinite(value) ? Number(value) / 100 : undefined;
+const responseCache = new Map<string, { expiresAt: number; value: unknown }>();
+const inflight = new Map<string, Promise<unknown>>();
+const providerIssues: string[] = [];
+const recordProviderIssue = (message: string) => { providerIssues.push(message.slice(0, 500)); if (providerIssues.length > 50) providerIssues.shift(); };
+export const consumeProviderIssues = () => providerIssues.splice(0, providerIssues.length);
 
 export function companyBySymbol(symbol: string): Company | null {
   return (bundledUniverse.companies as Company[]).find((company) => company.ticker === symbol.toUpperCase()) ?? null;
@@ -27,10 +33,38 @@ function requestHeaders(url: string): Record<string, string> {
     : { 'User-Agent': browserAgent, Accept: 'application/json, text/plain, */*', 'Accept-Language': 'en-US,en;q=0.9', Referer: 'https://www.nasdaq.com/' };
 }
 
-export async function fetchJson(url: string, timeoutMs = 8_000) {
-  const response = await fetch(url, { headers: requestHeaders(url), signal: AbortSignal.timeout(timeoutMs) });
-  if (!response.ok) throw Error(`${new URL(url).hostname}: HTTP ${response.status}`);
-  return response.json();
+const wait = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
+export async function fetchJson(url: string, timeoutMs = 8_000, ttlMs = 30_000) {
+  const now = Date.now(), cached = responseCache.get(url);
+  if (cached && cached.expiresAt > now) return cached.value;
+  const existing = inflight.get(url);
+  if (existing) return existing;
+  const request = (async () => {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const response = await fetch(url, { headers: requestHeaders(url), signal: AbortSignal.timeout(timeoutMs) });
+        if (response.ok) {
+          const value = await response.json();
+          responseCache.set(url, { expiresAt: Date.now() + ttlMs, value });
+          if (responseCache.size > 500) responseCache.delete(responseCache.keys().next().value as string);
+          return value;
+        }
+        lastError = Error(`${new URL(url).hostname}: HTTP ${response.status}`);
+        if (![408, 425, 429, 500, 502, 503, 504].includes(response.status)) break;
+        const retryAfter = Number(response.headers.get('retry-after') || 0);
+        await wait(Math.max(retryAfter * 1000, 250 * 2 ** attempt));
+      } catch (error) {
+        lastError = error;
+        if (attempt < 2) await wait(250 * 2 ** attempt);
+      }
+    }
+    const message = lastError instanceof Error ? lastError.message : 'provider request failed';
+    recordProviderIssue(`${new URL(url).hostname}: ${message}`);
+    throw lastError instanceof Error ? lastError : Error(message);
+  })();
+  inflight.set(url, request);
+  try { return await request; } finally { inflight.delete(url); }
 }
 
 function quotePatch(row?: NasdaqRow) {
@@ -40,13 +74,13 @@ function quotePatch(row?: NasdaqRow) {
 }
 
 export async function universe(): Promise<Company[]> {
-  const base = (bundledUniverse.companies as Company[]).map((company) => ({ ...company }));
+  const base = (bundledUniverse.companies as Company[]).map((company) => ({ ...company, quoteSource: 'bundled official dated snapshot', quoteAvailableAt: bundledUniverse.generatedAt }));
   let nasdaq = base;
   try {
     const latest = await fetchJson(NASDAQ_SCREENER) as { data?: { rows?: NasdaqRow[] } };
     const quotes = new Map((latest.data?.rows ?? []).map((row) => [row.symbol, row]));
-    nasdaq = base.map((company) => ({ ...company, ...quotePatch(quotes.get(company.ticker)) }));
-  } catch {}
+    nasdaq = base.map((company) => quotes.has(company.ticker) ? ({ ...company, ...quotePatch(quotes.get(company.ticker)), quoteSource: 'Nasdaq screener live', quoteAvailableAt: new Date().toISOString() }) : company);
+  } catch (error) { recordProviderIssue(`Nasdaq screener: ${error instanceof Error ? error.message : 'provider request failed'}`); }
   return yahooBulkQuotes(nasdaq);
 }
 
@@ -85,6 +119,8 @@ async function yahooBulkQuotes(companies: Company[]): Promise<Company[]> {
       if (!quote) return company;
       return {
         ...company,
+        quoteSource: 'Yahoo bulk quote live',
+        quoteAvailableAt: new Date().toISOString(),
         ...(Number.isFinite(quote.regularMarketPrice) ? { price: quote.regularMarketPrice } : {}),
         ...(Number.isFinite(quote.marketCap) ? { marketCap: quote.marketCap } : {}),
         ...(Number.isFinite(quote.regularMarketVolume) ? { volume: quote.regularMarketVolume } : {}),
@@ -100,19 +136,20 @@ async function yahooBulkQuotes(companies: Company[]): Promise<Company[]> {
         ...(quote.industry ? { industry: quote.industry } : {}),
       };
     });
-  } catch {
+  } catch (error) {
+    recordProviderIssue(`Yahoo bulk quotes: ${error instanceof Error ? error.message : 'provider request failed'}`);
     return companies;
   }
 }
 
 function isoDate(date: string) { const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(date); return match ? `${match[3]}-${match[1]}-${match[2]}` : '' }
 function dateOffset(iso: string, days: number) { const date = new Date(iso); date.setUTCDate(date.getUTCDate() + days); return date.toISOString().slice(0, 10) }
-function commonSecurity(name: string) { return !/\b(etf|fund|trust|warrant|right|unit|preferred|depositary|senior note|bond|debenture|limited partnership)\b|(?:,\s*)?L\.?P\.?\b/i.test(name) }
+function commonSecurity(name: string) { return !NON_TRADABLE_NAME.test(name) }
 
 export async function historicalMarketData(symbol: string, asOf = new Date().toISOString()) {
   const cached = (quickCache.symbols as Record<string, CachedQuick>)[symbol];
-  if (cached?.history?.length) return { url: 'https://api.nasdaq.com/api/quote', history: cached.history };
   const to = asOf.slice(0, 10), from = dateOffset(asOf, -1900);
+  if (cached?.history?.length) return { url: 'https://api.nasdaq.com/api/quote', history: cached.history.filter(row => row.date <= to) };
   const url = `https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/historical?assetclass=stocks&fromdate=${from}&todate=${to}&limit=5000`;
   const payload = await fetchJson(url) as { data?: { tradesTable?: { rows?: Array<Record<string, string>> } } };
   const history = (payload.data?.tradesTable?.rows ?? []).map((row) => ({ date: isoDate(row.date), close: numeric(row.close), open: numeric(row.open), high: numeric(row.high), low: numeric(row.low), volume: numeric(row.volume) }))
@@ -189,7 +226,7 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
   }
   const yearStart = Date.parse(quoteDate) - 365 * 86_400_000, year = history.filter((row) => Date.parse(row.date) >= yearStart), prior = history.filter((row) => Date.parse(row.date) <= yearStart).at(-1);
   if (prior && Date.parse(prior.date) >= yearStart - 7 * 86_400_000 && price) { snapshot.return12m = price / prior.close - 1; snapshot.provenance.return12m = quoteEvidence }
-  if (year.length >= 240) { snapshot.low52w = Math.min(...year.map((row) => row.low ?? row.close)); snapshot.provenance.low52w = quoteEvidence }
+  if (year.length >= 240) { snapshot.low52w = Math.min(...year.map((row) => row.low ?? row.close)); snapshot.high52w = Math.max(...year.map((row) => row.high ?? row.close)); snapshot.provenance.low52w = quoteEvidence; snapshot.provenance.high52w = quoteEvidence }
   snapshot.ma30w = ma30Weeks(history, now); if (snapshot.ma30w) snapshot.provenance.ma30w = quoteEvidence;
   if (snapshot.marketCap != null && (snapshot.marketCap < SPECS.core.marketCap.min || snapshot.marketCap > SPECS.core.marketCap.max)) return snapshot;
 
