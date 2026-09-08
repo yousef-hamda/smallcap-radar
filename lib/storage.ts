@@ -48,15 +48,13 @@ export async function readState(options:{strategy?:'core'|'bounce'|'favorites';l
  const strategy=options.strategy==='core'||options.strategy==='favorites'?options.strategy:'bounce';
  const limit=Math.max(1,Math.min(250,Math.floor(options.limit??150)));
  const offset=Math.max(0,Math.floor(options.offset??0));
- const fav=options.owner?(await d.prepare('SELECT symbol,payload FROM personal_watchlist WHERE owner=? ORDER BY created_at DESC').bind(options.owner).all()).results as any[]:[];
+ const fav=options.owner?(await d.prepare(strategy==='favorites'?'SELECT symbol,payload FROM personal_watchlist WHERE owner=? ORDER BY created_at DESC':'SELECT symbol FROM personal_watchlist WHERE owner=? ORDER BY created_at DESC').bind(options.owner).all()).results as any[]:[];
  const statusSql=(key:'core'|'bounce',status:string)=>`SUM(CASE WHEN json_extract(evaluation, '$.${key}.screeningQualified') = ${status==='PASS'?1:0} THEN 1 ELSE 0 END)`;
  const summaryRow=currentData?await d.prepare(`SELECT COUNT(*) AS total, ${statusSql('core','PASS')} AS coreQualified, ${statusSql('bounce','PASS')} AS bounceQualified, SUM(CASE WHEN json_extract(evaluation, '$.core.status')='UNKNOWN' THEN 1 ELSE 0 END) AS coreUnknown, SUM(CASE WHEN json_extract(evaluation, '$.bounce.status')='UNKNOWN' THEN 1 ELSE 0 END) AS bounceUnknown, SUM(CASE WHEN json_extract(evaluation, '$.core.status')='FAIL' THEN 1 ELSE 0 END) AS coreFailed, SUM(CASE WHEN json_extract(evaluation, '$.bounce.status')='FAIL' THEN 1 ELSE 0 END) AS bounceFailed FROM fundamental_snapshots WHERE run_id=?`).bind(latest.id).first() as any: null;
  const expression=strategy==='core'?"json_extract(evaluation, '$.core.screeningQualified')=1":"json_extract(evaluation, '$.bounce.screeningQualified')=1";
- const favoriteSymbols=strategy==='favorites'?fav.map(row=>String(row.symbol)).filter(Boolean):[];
- const favoriteClause=favoriteSymbols.length?` OR symbol IN (${favoriteSymbols.map(()=>'?').join(',')})`:'';
  const search=options.query?.trim().toLowerCase().slice(0,100)||'';
- const query=latest?`SELECT payload,evaluation FROM fundamental_snapshots WHERE run_id=? AND (${strategy==='favorites'?'0=1':expression}${favoriteClause}) AND (?='' OR instr(lower(symbol),?)>0 OR instr(lower(json_extract(payload,'$.name')),?)>0) ORDER BY symbol LIMIT ? OFFSET ?`:null;
- const params=latest?[latest.id,...favoriteSymbols,search,search,search,limit,offset]:[];
+ const query=latest&&strategy!=='favorites'?`SELECT payload,evaluation FROM fundamental_snapshots WHERE run_id=? AND (${expression}) AND (?='' OR instr(lower(symbol),?)>0 OR instr(lower(json_extract(payload,'$.name')),?)>0) ORDER BY symbol LIMIT ? OFFSET ?`:null;
+ const params=latest?[latest.id,search,search,search,limit,offset]:[];
  let rows=currentData&&query?(await d.prepare(query).bind(...params).all()).results:[];
  if(strategy==='favorites') rows=fav.filter(r=>!search||`${r.symbol} ${JSON.parse(r.payload).name}`.toLowerCase().includes(search)).slice(offset,offset+limit).map(r=>{const s=JSON.parse(r.payload);return {payload:r.payload,evaluation:JSON.stringify({core:evaluateStrategy('core',s),bounce:evaluateStrategy('bounce',s)})}});
  const compact=(payload:string)=>{const parsed=JSON.parse(payload);delete parsed.history;return parsed};

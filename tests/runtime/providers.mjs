@@ -1,6 +1,11 @@
 export let historyCalls=0;
-export async function historicalMarketData(){historyCalls++;throw Error('Injected provider outage');}
+let historyResult=null;
+export function setHistoryResult(value){historyResult=value;}
+export async function historicalMarketData(){historyCalls++;if(historyResult)return historyResult;throw Error('Injected provider outage');}
 export async function companySnapshot(){throw Error('No provider configured in isolated test');}
 export const consumeProviderIssues=()=>[];
 export const quickSymbols=[];
-export const universe=async()=>[];
+export let universeCalls=0;
+let companies=[];
+export const setUniverse=value=>{companies=value;};
+export const universe=async()=>{universeCalls++;return companies;};

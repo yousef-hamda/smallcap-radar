@@ -25,22 +25,36 @@ export default function RadarApp(){
  const [settings,setSettings]=useState(false),[notificationBusy,setNotificationBusy]=useState(false),[saving,setSaving]=useState<string|null>(null);
  const [hasMore,setHasMore]=useState(false),[copied,setCopied]=useState('');
  const selection=useRef<AbortController|null>(null),lastView=useRef({view,search}),listRequest=useRef<AbortController|null>(null);
- const cursor=useRef(0),loadingRequest=useRef(false);
+ const cursor=useRef(0),loadingRequest=useRef(false),favoriteVersion=useRef(0),favoritePending=useRef(false);
  const progress=scanProgress(data?.run),strategy=view==='core'?'core':'bounce';
  const refresh=useCallback(async(append=false)=>{
   listRequest.current?.abort();const controller=new AbortController();listRequest.current=controller;loadingRequest.current=true;
-  const {view,search}=lastView.current,offset=append?cursor.current:0;
+  const {view,search}=lastView.current,offset=append?cursor.current:0,version=favoriteVersion.current;
   try{
    const payload=await request<RadarData>(`/api/radar?strategy=${view}&q=${encodeURIComponent(search)}&limit=40&offset=${offset}`,{signal:controller.signal});
    if(controller.signal.aborted)return;
-   setData(payload);setFavorites(payload.favorites);setHasMore(payload.page.hasMore);cursor.current=offset+payload.snapshots.length;
+   setData(payload);if(version===favoriteVersion.current&&!favoritePending.current)setFavorites(payload.favorites);setHasMore(payload.page.hasMore);cursor.current=offset+payload.snapshots.length;setError('');
    setRows(old=>append?[...old,...payload.snapshots.filter(s=>!old.some(p=>p.symbol===s.symbol))]:payload.snapshots);
    void saveOffline({savedAt:new Date().toISOString(),run:payload.dataRun,snapshots:payload.snapshots}).catch(()=>{});
   }catch(e){if(!controller.signal.aborted)setError(e instanceof Error?e.message:'تعذّر تحميل البيانات');}
   finally{if(!controller.signal.aborted){setLoading(false);loadingRequest.current=false;}}
  },[]);
  useEffect(()=>{lastView.current={view,search};cursor.current=0;queueMicrotask(()=>{setLoading(true);setRows([]);void refresh()});return()=>listRequest.current?.abort()},[view,search,refresh]);
- useEffect(()=>{if(!progress.active)return;const timer=window.setInterval(()=>{if(!loadingRequest.current)void refresh()},2500);return()=>window.clearInterval(timer)},[progress.active,refresh]);
+ useEffect(()=>{
+  if(!progress.active)return;
+  let pending=false;const controller=new AbortController();
+  const timer=window.setInterval(async()=>{
+   if(pending||document.hidden)return;pending=true;
+   try{
+    const payload=await request<{run:ScanRun|null}>('/api/radar?status=1',{signal:controller.signal});
+    if(controller.signal.aborted)return;
+    setData(old=>old?{...old,run:payload.run}:old);
+    if(!scanProgress(payload.run).active)await refresh();
+   }catch(e){if(!controller.signal.aborted)setError(e instanceof Error?e.message:'تعذّر تحديث حالة الفحص');}
+   finally{pending=false;}
+  },2500);
+  return()=>{window.clearInterval(timer);controller.abort();};
+ },[progress.active,refresh]);
  useEffect(()=>{if('serviceWorker'in navigator)void navigator.serviceWorker.register('/sw.js').catch(()=>{});return()=>selection.current?.abort()},[]);
 
  async function scan(mode:'quick'|'full'='full'){
@@ -49,9 +63,9 @@ export default function RadarApp(){
   catch(e){setError(e instanceof Error?e.message:'تعذّر بدء الفحص')}finally{setBusy(false)}
  }
  async function favorite(s:Snapshot){
-  if(saving)return;setSaving(s.symbol);setError('');
+  if(favoritePending.current)return;favoritePending.current=true;favoriteVersion.current++;setSaving(s.symbol);setError('');
   try{const p=await request<{favorites:string[]}>('/api/radar',post({action:'favorite',symbol:s.symbol,saved:!favorites.includes(s.symbol)}));setFavorites(p.favorites);if(view==='favorites')await refresh()}
-  catch(e){setError(e instanceof Error?e.message:'تعذّر حفظ المفضلة')}finally{setSaving(null)}
+  catch(e){setError(e instanceof Error?e.message:'تعذّر حفظ المفضلة')}finally{favoritePending.current=false;favoriteVersion.current++;setSaving(null)}
  }
  async function openCompany(s:Snapshot){
   selection.current?.abort();const controller=new AbortController();selection.current=controller;
@@ -66,18 +80,19 @@ export default function RadarApp(){
   setSearch(query.trim());
   if(!/^[A-Za-z][A-Za-z0-9.^-]{0,15}$/.test(query.trim()))return;
   const found=rows.find(s=>s.symbol===query.trim().toUpperCase());if(found){await openCompany(found);return;}
+  selection.current?.abort();const controller=new AbortController();selection.current=controller;
   setBusy(true);setError('');
-  try{const p=await request<{snapshot:Snapshot}>(`/api/company?symbol=${encodeURIComponent(query.trim().toUpperCase())}`);setSelected(p.snapshot);setDetailError('')}
-  catch(e){setError(e instanceof Error?e.message:'لا توجد بيانات لهذا الرمز')}finally{setBusy(false)}
+  try{const p=await request<{snapshot:Snapshot}>(`/api/company?symbol=${encodeURIComponent(query.trim().toUpperCase())}`,{signal:controller.signal});if(!controller.signal.aborted){setSelected(p.snapshot);setDetailError('');setDetailLoading(false);}}
+  catch(e){if(!controller.signal.aborted)setError(e instanceof Error?e.message:'لا توجد بيانات لهذا الرمز')}finally{setBusy(false)}
  }
  async function notifications(testOnly=false){
   setNotificationBusy(true);setError('');
   try{
    if(!('Notification'in window)||!('serviceWorker'in navigator)||!('PushManager'in window))throw Error('على iPhone افتح الموقع في Safari، أضفه للشاشة الرئيسية، ثم افتحه من الأيقونة لتفعيل الإشعارات.');
-   const registration=await navigator.serviceWorker.ready;let subscription=await registration.pushManager.getSubscription();
+   if(!testOnly&&await Notification.requestPermission()!=='granted')throw Error('لم يُمنح إذن الإشعارات؛ راجع إعدادات المتصفح.');
+   const registration=await Promise.race([navigator.serviceWorker.ready,new Promise<never>((_,reject)=>window.setTimeout(()=>reject(Error('تعذّر تجهيز الإشعارات؛ أعد فتح التطبيق ثم حاول مجددًا.')),10000))]);let subscription=await registration.pushManager.getSubscription();
    if(testOnly&&!subscription)throw Error('فعّل الإشعارات أولًا، ثم اختبر وصولها.');
    if(!testOnly){
-    if(await Notification.requestPermission()!=='granted')throw Error('لم يُمنح إذن الإشعارات؛ راجع إعدادات المتصفح.');
     const key=await request<{publicKey:string}>('/api/push/key');
     if(!key.publicKey)throw Error('مفتاح الإشعارات غير مضبوط على الخادم.');
     const normalized=key.publicKey.replace(/-/g,'+').replace(/_/g,'/');

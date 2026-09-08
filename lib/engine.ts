@@ -42,12 +42,12 @@ function legacyFactors(s:Snapshot):Factor[]{
  const insider=finite(s.insiderBuyValue)&&finite(s.marketCap)&&s.marketCap>0?clamp(s.insiderBuyValue/s.marketCap/SPECS.legacy.insiderScale):null;
  const make=(id:string,label:string,maxPoints:number,n:number|null,raw:number|null|undefined,explanation:string):Factor=>({id,label,maxPoints,points:n==null?0:n*maxPoints,available:n!=null,rawValue:raw??null,explanation});
  return [
-  make('valuation','التقييم',25,valuation,s.ps,'P/S ضمن الحد المرجعي 10'),
-  make('profitability','الربحية / التدفق النقدي',20,profitability,s.netIncome??s.fcf,'Net Income أو FCF موجب'),
-  make('momentum','الزخم',20,momentum,s.return12m,'العائد التاريخي ضمن نطاق مرجعي محافظ'),
-  make('dilution','التخفيف',15,dilution,s.dilution,'التخفيف الأقل يحصل على نقاط أعلى'),
-  make('size','الحجم',10,size,s.marketCap,'أفضلية الحجم الأصغر ضمن نطاق Legacy'),
-  make('insider','شراء المطلعين',10,insider,s.insiderBuyValue,'Form 4 P فقط')
+  make('valuation','التقييم',SPECS.legacy.weights['Valuation'],valuation,s.ps,'P/S ضمن الحد المرجعي 10'),
+  make('profitability','الربحية / التدفق النقدي',SPECS.legacy.weights['Profitability/FCF'],profitability,s.netIncome??s.fcf,'Net Income أو FCF موجب'),
+  make('momentum','الزخم',SPECS.legacy.weights['Momentum'],momentum,s.return12m,'العائد التاريخي ضمن نطاق مرجعي محافظ'),
+  make('dilution','التخفيف',SPECS.legacy.weights['Dilution'],dilution,s.dilution,'التخفيف الأقل يحصل على نقاط أعلى'),
+  make('size','الحجم',SPECS.legacy.weights['Size'],size,s.marketCap,'أفضلية الحجم الأصغر ضمن نطاق Legacy'),
+  make('insider','شراء المطلعين',SPECS.legacy.weights['Insider'],insider,s.insiderBuyValue,'Form 4 P فقط')
  ];
 }
 export function evaluateStrategy(strategy:keyof typeof SPECS,s:Snapshot){

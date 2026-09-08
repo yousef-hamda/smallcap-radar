@@ -1,5 +1,4 @@
 import type { Snapshot, Provenance, InsiderPurchase } from './engine';
-import { SPECS } from './engine';
 import { NON_TRADABLE_NAME } from './strategy-spec';
 import { ma30Weeks } from './research';
 import { observations, latestInstant, trailingAnnual, provenance, REVENUE_TAGS } from './sec';
@@ -17,7 +16,8 @@ const secAgent = 'SmallCapRadar/2.1 research-contact:yousef-hamda@users.noreply.
 const submissionsUrlFor = (cik: number|string) => `https://data.sec.gov/submissions/CIK${String(cik).padStart(10, '0')}.json`;
 export const numeric = (value: unknown) => { if(typeof value!=='number'&&typeof value!=='string')return null;const text=String(value).replace(/[$,%+,]/g,'').trim();if(!text)return null;const parsed=Number(text);return Number.isFinite(parsed)?parsed:null; };
 export const yahooPercentAsRatio = (value: unknown) => Number.isFinite(value) ? Number(value) / 100 : undefined;
-const responseCache = new Map<string, { expiresAt: number; value: unknown }>();
+const responseCache = new Map<string, { expiresAt: number; value: unknown; bytes:number }>();
+const cooldowns = new Map<string,number>();
 const inflight = new Map<string, Promise<unknown>>();
 const providerIssues: string[] = [];
 const recordProviderIssue = (message: string) => { providerIssues.push(message.slice(0, 500)); if (providerIssues.length > 50) providerIssues.shift(); };
@@ -37,6 +37,8 @@ const wait = (milliseconds: number) => new Promise(resolve => setTimeout(resolve
 export async function fetchJson(url: string, timeoutMs = 8_000, ttlMs = 30_000) {
   const now = Date.now(), cached = responseCache.get(url);
   if (cached && cached.expiresAt > now) return cached.value;
+  const host=new URL(url).hostname;
+  if((cooldowns.get(host)??0)>now)throw Error(`${host}: rate limited until ${new Date(cooldowns.get(host)!).toISOString()}`);
   const existing = inflight.get(url);
   if (existing) return existing;
   const request = (async () => {
@@ -46,14 +48,19 @@ export async function fetchJson(url: string, timeoutMs = 8_000, ttlMs = 30_000) 
         const response = await fetch(url, { headers: requestHeaders(url), signal: AbortSignal.timeout(timeoutMs) });
         if (response.ok) {
           const value = await response.json();
-          responseCache.set(url, { expiresAt: Date.now() + ttlMs, value });
-          if (responseCache.size > 500) responseCache.delete(responseCache.keys().next().value as string);
+          // Large Company Facts responses must not fill the 128MB isolate.
+          const bytes=JSON.stringify(value).length*2;
+          for(const [key,row] of responseCache)if(row.expiresAt<=Date.now())responseCache.delete(key);
+          if(bytes<=1_000_000)responseCache.set(url, { expiresAt: Date.now() + ttlMs, value, bytes });
+          let used=[...responseCache.values()].reduce((n,row)=>n+row.bytes,0);
+          while(used>8_000_000||responseCache.size>64){const key=responseCache.keys().next().value!;used-=responseCache.get(key)!.bytes;responseCache.delete(key);}
           return value;
         }
         lastError = Error(`${new URL(url).hostname}: HTTP ${response.status}`);
         if (![408, 425, 429, 500, 502, 503, 504].includes(response.status)) break;
-        const retryAfter = Number(response.headers.get('retry-after') || 0);
-        if(retryAfter>5)throw Error(`${new URL(url).hostname}: rate limited; retry after ${retryAfter}s`);
+        const retryHeader=response.headers.get('retry-after')||'0';
+        const retryAfter=Number.isFinite(Number(retryHeader))?Number(retryHeader):Math.max(0,(Date.parse(retryHeader)-Date.now())/1000);
+        if(retryAfter>5){cooldowns.set(host,Date.now()+retryAfter*1000);lastError=Error(`${host}: rate limited; retry after ${retryAfter}s`);break;}
         await wait(Math.min(5000,Math.max(retryAfter * 1000, 250 * 2 ** attempt)));
       } catch (error) {
         lastError = error;
@@ -80,12 +87,24 @@ export async function universe(): Promise<Company[]> {
   try {
     const latest = await fetchJson(NASDAQ_SCREENER) as { data?: { rows?: NasdaqRow[] } };
     const quotes = new Map((latest.data?.rows ?? []).map((row) => [row.symbol, row]));
-    nasdaq = base.map((company) => quotes.has(company.ticker) ? ({ ...company, ...quotePatch(quotes.get(company.ticker)), quoteSource: 'Nasdaq screener live', quoteAvailableAt: new Date().toISOString() }) : company);
+    nasdaq = base.map(company=>{
+      const patch=quotePatch(quotes.get(company.ticker));
+      if(!Number.isFinite(patch.price)||!Number.isFinite(patch.marketCap))return company;
+      return {...company,...patch,quoteSource:'Nasdaq screener live',quoteAvailableAt:new Date().toISOString()};
+    });
   } catch (error) { recordProviderIssue(`Nasdaq screener: ${error instanceof Error ? error.message : 'provider request failed'}`); }
   return yahooBulkQuotes(nasdaq);
 }
 
+let authCache:{expiresAt:number;value:{cookie:string;crumb:string}}|null=null;
+let authRequest:Promise<{cookie:string;crumb:string}>|null=null;
 async function yahooAuth() {
+  if(authCache&&authCache.expiresAt>Date.now())return authCache.value;
+  if(authRequest)return authRequest;
+  authRequest=loadYahooAuth().then(value=>{authCache={value,expiresAt:Date.now()+5*60_000};return value;}).finally(()=>{authRequest=null;});
+  return authRequest;
+}
+async function loadYahooAuth() {
   const first = await fetch('https://fc.yahoo.com/', { redirect: 'manual', headers: { 'User-Agent': browserAgent, Accept: '*/*' }, signal: AbortSignal.timeout(8_000) });
   const rawCookie = first.headers.get('set-cookie');
   if (!rawCookie) throw Error('Yahoo cookie unavailable');
@@ -111,8 +130,8 @@ async function yahooCompanyProfile(symbol: string) {
   }
 }
 
-async function enrichWithYahooProfile(snapshot: Snapshot, symbol: string, now: string) {
-  const profile = await yahooCompanyProfile(symbol);
+async function enrichWithYahooProfile(snapshot: Snapshot, symbol: string, now: string, profilePromise?:ReturnType<typeof yahooCompanyProfile>) {
+  const profile = await (profilePromise??yahooCompanyProfile(symbol));
   const asset = profile?.assetProfile;
   if (asset?.longBusinessSummary) snapshot.description = asset.longBusinessSummary;
   if (asset?.sector) snapshot.sector = asset.sector;
@@ -145,23 +164,26 @@ async function yahooBulkQuotes(companies: Company[]): Promise<Company[]> {
     const quoteMap = new Map<string, any>();
     for (let index = 0; index < chunks.length; index += 8) {
       const group = chunks.slice(index, index + 8);
-      const payloads = await Promise.all(group.map(async (chunk) => {
+      const payloads = await Promise.allSettled(group.map(async (chunk) => {
         const symbols = chunk.map((company) => company.ticker).join(',');
         const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbols)}&crumb=${encodeURIComponent(auth.crumb)}`;
         const response = await fetch(url, { headers: { 'User-Agent': browserAgent, Cookie: auth.cookie, Accept: 'application/json' }, signal: AbortSignal.timeout(10_000) });
         if (!response.ok) throw Error(`Yahoo quote HTTP ${response.status}`);
         return response.json() as Promise<{ quoteResponse?: { result?: any[] } }>;
       }));
-      for (const payload of payloads) for (const quote of payload.quoteResponse?.result ?? []) quoteMap.set(quote.symbol, quote);
+      for (const payload of payloads) {
+        if(payload.status==='fulfilled')for(const quote of payload.value.quoteResponse?.result??[])quoteMap.set(quote.symbol,quote);
+        else recordProviderIssue(`Yahoo quote batch: ${payload.reason instanceof Error?payload.reason.message:'request failed'}`);
+      }
     }
-    if (quoteMap.size < Math.min(100, companies.length / 2)) throw Error('Yahoo bulk coverage too low');
+    if (quoteMap.size < Math.min(100, companies.length / 2)) recordProviderIssue('Yahoo bulk coverage low; retained successful chunks and dated fallback rows');
     return companies.map((company) => {
       const quote = quoteMap.get(company.ticker);
-      if (!quote) return company;
+      if (!quote||!Number.isFinite(quote.regularMarketPrice)||!Number.isFinite(quote.marketCap)) return company;
       return {
         ...company,
         quoteSource: 'Yahoo bulk quote live',
-        quoteAvailableAt: new Date().toISOString(),
+        quoteAvailableAt: Number.isFinite(quote.regularMarketTime)?new Date(quote.regularMarketTime*1000).toISOString():new Date().toISOString(),
         ...(Number.isFinite(quote.regularMarketPrice) ? { price: quote.regularMarketPrice } : {}),
         ...(Number.isFinite(quote.regularMarketChangePercent) ? {dailyChange:quote.regularMarketChangePercent/100}:{}),
         ...(Number.isFinite(quote.marketCap) ? { marketCap: quote.marketCap } : {}),
@@ -214,11 +236,13 @@ async function fetchInsiderPurchases(cik: number) {
     const filings = recent.form.map((form, index) => ({ form, accession: recent.accessionNumber![index], document: recent.primaryDocument![index], filed: recent.filingDate?.[index] ?? '' })).filter(f => f.form === '4').slice(0, 8);
     const parsed: InsiderPurchase[] = [];
     const read = (tag: string, from: string) => from.match(new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`, 'i'))?.[1]?.replace(/<[^>]+>/g, '').trim() ?? '';
-    for (const filing of filings) {
+    // Fetch bounded groups; eight consecutive request timeouts used to hold a
+    // single company file open for more than a minute.
+    for (let offset=0;offset<filings.length;offset+=4) await Promise.all(filings.slice(offset,offset+4).map(async filing => {
       const accessionPath = filing.accession.replaceAll('-', '');
       const url = `https://www.sec.gov/Archives/edgar/data/${cik}/${accessionPath}/${filing.document}`;
       const xml = await fetch(url, { headers: requestHeaders(url), signal: AbortSignal.timeout(8_000) }).then(response => response.ok ? response.text() : '').catch(() => '');
-      if (!xml) continue;
+      if (!xml) {recordProviderIssue(`SEC Form 4 ${filing.accession}: document unavailable`);return;}
       const blocks = xml.match(new RegExp('<nonDerivativeTransaction[\\s\\S]*?<\\/nonDerivativeTransaction>', 'gi')) ?? [];
       const ownerBlock = xml.match(new RegExp('<reportingOwner>[\\s\\S]*?<\\/reportingOwner>', 'i'))?.[0] ?? '';
       const owner = read('rptOwnerName', ownerBlock) || 'مبلّغ داخلي غير مسمّى';
@@ -232,13 +256,21 @@ async function fetchInsiderPurchases(cik: number) {
         const price = numeric(read('value', priceBlock));
         if (date && shares != null && price != null && shares > 0 && price >= 0) parsed.push({ owner, date, shares, price, value: shares * price, source: url });
       }
-    }
-    return parsed.slice(0, 20);
+    }));
+    return parsed.sort((a,b)=>b.date.localeCompare(a.date)||(a.source??'').localeCompare(b.source??'')||a.owner.localeCompare(b.owner)).slice(0, 20);
   } catch { return []; }
 }
 
 export async function companySnapshot(company: Company): Promise<Snapshot> {
   const now = new Date().toISOString(), symbol = company.ticker, cik = String(company.cik).padStart(10, '0'), issues: string[] = [];
+  // Independent enrichment starts together. Every rejection is handled here,
+  // even when another provider fails or the company is outside screening size.
+  const factsUrl = `https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`;
+  const factsPromise=fetchJson(factsUrl).then(value=>({value:value as {facts:Record<string,unknown>},error:null}),error=>({value:null,error}));
+  const profilePromise=yahooCompanyProfile(symbol);
+  const summaryPromise = fetchJson(`https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/summary?assetclass=stocks`, 8_000).catch(error => {issues.push(`Nasdaq summary: ${error.message}`);return null;}) as Promise<any>;
+  const newsPromise = fetch(`https://feeds.finance.yahoo.com/rss/2.0/headline?s=${encodeURIComponent(symbol)}&region=US&lang=en-US`, { headers: { 'User-Agent': browserAgent, Accept: 'application/rss+xml,text/xml' }, signal: AbortSignal.timeout(8_000) }).then(r => {if(!r.ok)throw Error(`HTTP ${r.status}`);return r.text();}).catch(error => {issues.push(`Yahoo news: ${error.message}`);return '';});
+  const insiderPromise = fetchInsiderPurchases(company.cik);
   let history: NonNullable<Snapshot['history']> = [], historyUrl = NASDAQ_SCREENER,historySource='Nasdaq screener · bundled dated fallback',historyRetrievedAt=bundledUniverse.generatedAt;
   try {
     const result = await historicalMarketData(symbol, now); historyUrl = result.url;historySource=result.source;historyRetrievedAt=result.retrievedAt;
@@ -254,21 +286,20 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
   if(history.length>1&&history.at(-2)!.close>0){snapshot.dailyChange=history.at(-1)!.close/history.at(-2)!.close-1;snapshot.provenance.dailyChange={...quoteEvidence,tag:'last close / previous close - 1'};}
   if(history.length)snapshot.provenance.history=quoteEvidence;
   if (snapshot.marketCap != null) snapshot.provenance.marketCap = { source: 'Nasdaq stock screener (official)', url: NASDAQ_SCREENER, periodEnd: bundledUniverse.generatedAt.slice(0, 10), availableAt: bundledUniverse.generatedAt, retrievedAt: now, currency: 'USD', confidence: 'medium' };
-  const summaryPromise = fetchJson(`https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/summary?assetclass=stocks`, 8_000).catch(() => null) as Promise<any>;
-  const newsPromise = fetch(`https://feeds.finance.yahoo.com/rss/2.0/headline?s=${encodeURIComponent(symbol)}&region=US&lang=en-US`, { headers: { 'User-Agent': browserAgent, Accept: 'application/rss+xml,text/xml' }, signal: AbortSignal.timeout(8_000) }).then(r => r.ok ? r.text() : '').catch(() => '');
-  const insiderPromise = fetchInsiderPurchases(company.cik);
   const [summaryResult, newsResult, insiderPurchases] = await Promise.all([summaryPromise, newsPromise, insiderPromise]);
   const summary = summaryResult?.data?.summaryData ?? {};
   const summaryValue = (key: string) => String(summary[key]?.value ?? '').trim();
+  const summaryEvidence:Provenance={source:'Nasdaq quote summary · observed',url:`https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/summary?assetclass=stocks`,periodEnd:now.slice(0,10),availableAt:now,retrievedAt:now,confidence:'medium'};
+  const currentCap=numeric(summaryValue('MarketCap'));
+  if(currentCap!=null&&currentCap>0){snapshot.marketCap=currentCap;snapshot.provenance.marketCap={...summaryEvidence,currency:'USD'};}
   const target = numeric(summaryValue('OneYrTarget'));
-  if (target != null) { snapshot.analystTarget = target; snapshot.provenance.analystTarget = { source: 'Nasdaq quote summary (official) · OneYrTarget, not a verified mean', periodEnd: now.slice(0, 10), availableAt: now, retrievedAt: now, currency: 'USD', confidence: 'medium' }; }
+  if (target != null) { snapshot.analystTarget = target; snapshot.provenance.analystTarget = { ...summaryEvidence,source: 'Nasdaq quote summary (official) · OneYrTarget, not a verified mean',currency:'USD' }; }
   const range = summaryValue('FiftTwoWeekHighLow').match(/\$?([\d.]+)\s*\/\s*\$?([\d.]+)/);
-  if (range) { snapshot.high52w ??= Number(range[1]); snapshot.low52w ??= Number(range[2]); }
+  if (range) { snapshot.high52w ??= Number(range[1]); snapshot.low52w ??= Number(range[2]);snapshot.provenance.high52w=summaryEvidence;snapshot.provenance.low52w=summaryEvidence; }
   const summarySector = summaryValue('Sector'), summaryIndustry = summaryValue('Industry');
   if (summarySector) snapshot.sector = summarySector;
   if (summaryIndustry) snapshot.industry = summaryIndustry;
-  const strip = (value: string) => value.replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, ' ').trim();
-  snapshot.news = [...newsResult.matchAll(/<item>([\s\S]*?)<\/item>/gi)].slice(0, 8).map(match => { const item = match[1]; const read = (tag: string) => strip(item.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i'))?.[1] ?? ''); return { title: read('title'), link: read('link'), publishedAt: read('pubDate'), source: 'Yahoo Finance RSS' }; }).filter(item => item.title);
+  snapshot.news = parseNews(newsResult,now);
   snapshot.insiderPurchases = insiderPurchases;
   snapshot.insiderBuyValue = insiderPurchases.reduce((total, purchase) => total + purchase.value, 0) || null;
   if (snapshot.insiderBuyValue != null) snapshot.provenance.insiderBuyValue = { source: 'SEC Form 4 open-market purchases (code P)', url: submissionsUrlFor(cik), periodEnd: insiderPurchases[0]?.date ?? now.slice(0, 10), availableAt: now, retrievedAt: now, currency: 'USD', confidence: 'high' };
@@ -280,10 +311,10 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
   if (prior && Date.parse(prior.date) >= yearStart - 7 * 86_400_000 && price) { snapshot.return12m = price / prior.close - 1; snapshot.provenance.return12m = quoteEvidence }
   if (year.length >= 240) { snapshot.low52w = Math.min(...year.map((row) => row.low ?? row.close)); snapshot.high52w = Math.max(...year.map((row) => row.high ?? row.close)); snapshot.provenance.low52w = quoteEvidence; snapshot.provenance.high52w = quoteEvidence }
   snapshot.ma30w = ma30Weeks(history, now); if (snapshot.ma30w) snapshot.provenance.ma30w = quoteEvidence;
-  if (snapshot.marketCap != null && (snapshot.marketCap < SPECS.core.marketCap.min || snapshot.marketCap > SPECS.core.marketCap.max)) return snapshot;
-
   const cached = (quickCache.symbols as Record<string, CachedQuick>)[symbol];
-  if (cached) {
+  const factsResult=await factsPromise;
+  if (cached && !factsResult.value) {
+    snapshot.dataIssues?.push('SEC Company Facts غير متاح؛ استُخدمت أساسيات احتياطية مؤرخة.');
     Object.assign(snapshot as unknown as Record<string, unknown>, cached.financials);
     Object.assign(snapshot.provenance, cached.provenance);
     const operational = snapshot as Snapshot & { ocf?: number; capex?: number };
@@ -292,20 +323,19 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
       snapshot.ps = snapshot.marketCap / snapshot.revenue;
       snapshot.provenance.ps = { ...snapshot.provenance.revenue, source: 'Derived: market cap / SEC cached revenue', availableAt: [snapshot.provenance.marketCap.availableAt, snapshot.provenance.revenue.availableAt].sort().at(-1)!, confidence: 'low' };
     }
-    await enrichWithYahooProfile(snapshot, symbol, now);
+    await enrichWithYahooProfile(snapshot, symbol, now, profilePromise);
     snapshot.research = { financials: !!snapshot.revenue, valuation: snapshot.evSales != null || snapshot.ps != null, analysts: snapshot.analystTarget != null, sector: !!snapshot.sector };
     return snapshot;
   }
 
-  const factsUrl = `https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`;
   let facts: Record<string, unknown>;
-  try { facts = ((await fetchJson(factsUrl)) as { facts: Record<string, unknown> }).facts }
+  try { if(!factsResult.value?.facts)throw factsResult.error??Error('SEC facts unavailable');facts=factsResult.value.facts; }
   catch (error) {
     snapshot.dataIssues?.push(`تعذّر جلب البيانات المالية من SEC: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`);
     // SEC failure must not short-circuit independent deep-profile sources.
     // Keep missing financials as UNKNOWN while still attempting profile,
     // earnings and analyst data on demand.
-    await enrichWithYahooProfile(snapshot, symbol, now);
+    await enrichWithYahooProfile(snapshot, symbol, now, profilePromise);
     snapshot.research = { financials: false, valuation: snapshot.evSales != null || snapshot.ps != null, analysts: snapshot.analystTarget != null, sector: !!snapshot.sector };
     return snapshot;
   }
@@ -334,7 +364,21 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
     snapshot.ps = snapshot.marketCap / snapshot.revenue;
     snapshot.provenance.ps = { ...snapshot.provenance.revenue, source: 'Derived: market cap / SEC revenue', availableAt: [snapshot.provenance.marketCap.availableAt, snapshot.provenance.revenue.availableAt].sort().at(-1)!, confidence: 'low' };
   }
-  await enrichWithYahooProfile(snapshot, symbol, now);
+  await enrichWithYahooProfile(snapshot, symbol, now, profilePromise);
   snapshot.research = { financials: !!snapshot.revenue, valuation: snapshot.evSales != null || snapshot.ps != null, analysts: snapshot.analystTarget != null, sector: !!snapshot.sector };
   return snapshot;
+}
+
+export function parseNews(xml:string,asOf:string) {
+  const strip=(value:string)=>value.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g,'$1').replace(/<[^>]+>/g,' ').replace(/&amp;/g,'&').replace(/&#39;/g,"'").replace(/&quot;/g,'"').replace(/\s+/g,' ').trim();
+  const seen=new Set<string>();
+  return [...xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)].map(match=>{
+    const read=(tag:string)=>strip(match[1].match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`,'i'))?.[1]??'');
+    const date=Date.parse(read('pubDate'));
+    return {title:read('title'),link:read('link'),publishedAt:Number.isFinite(date)?new Date(date).toISOString():'',source:'Yahoo Finance RSS'};
+  }).filter(item=>{
+    if(!item.title||!item.publishedAt||Date.parse(item.publishedAt)>Date.parse(asOf)||seen.has(item.link))return false;
+    try{if(!['https:','http:'].includes(new URL(item.link).protocol))return false;}catch{return false;}
+    seen.add(item.link);return true;
+  }).sort((a,b)=>b.publishedAt.localeCompare(a.publishedAt)).slice(0,8);
 }

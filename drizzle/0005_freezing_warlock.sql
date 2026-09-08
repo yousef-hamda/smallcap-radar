@@ -1,0 +1,1 @@
+CREATE INDEX `snapshot_symbol_date_idx` ON `fundamental_snapshots` (`symbol`,`as_of`);

@@ -4,14 +4,22 @@ import fs from 'node:fs/promises';
 import {sqlite} from './env.mjs';
 import {scanProgress} from '../../.test-build/scan-progress.mjs';
 import {visitor} from '../../.test-build/visitor.mjs';
-import {numeric} from '../../.test-build/providers.mjs';
+import {numeric,parseNews,fetchJson} from '../../.test-build/providers.mjs';
+import {reconcile} from '../../.test-build/reconcile.mjs';
+import {setHistoryResult,setUniverse,universeCalls} from './providers.mjs';
 import {evaluateStrategy} from '../../.test-build/engine.mjs';
 import {fixtures} from '../../.test-build/fixtures.mjs';
 import {ensureSchema,db,currentHash,readState,insertSnapshot} from '../../.test-build/storage.mjs';
-import {processScanBatch,bounceHistoryCandidate,historyCandidate} from '../../.test-build/scanner.mjs';
+import {processScanBatch,startScan,bounceHistoryCandidate,historyCandidate} from '../../.test-build/scanner.mjs';
 import {GET,POST} from '../../.test-build/radar-api.mjs';
+import worker from '../../.test-build/worker.mjs';
+import {validPushSubscription} from '../../.test-build/push-validation.mjs';
+import {createECDH,randomBytes} from 'node:crypto';
+import webpush from 'web-push';
 await ensureSchema();
 sqlite.exec(await fs.readFile('drizzle/0003_solid_spot.sql','utf8'));
+sqlite.exec(await fs.readFile('drizzle/0004_nervous_gressill.sql','utf8'));
+sqlite.exec(await fs.readFile('drizzle/0005_freezing_warlock.sql','utf8'));
 const base=fixtures[0];
 const run=(patch={})=>({id:'test',status:'running',source:'Bulk Quotes/SEC Frames v7 · full',stage:0,offset:0,total:100,processed:0,failed:0,retryPending:0,...patch});
 test('progress is monotonic at all full-scan phase transitions',()=>{
@@ -58,7 +66,8 @@ test('provider outage finishes partial, preserves row and never manufactures his
  const company={ticker:'OUTAGE',name:'Synthetic outage fixture',cik:101,exchange:'Nasdaq',marketCap:100e6,price:10};
  await db().prepare('INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,strategy_hash) VALUES(?,?,?,?,?,?,?,?,?)').bind('outage','2026-09-10','2026-09-10','running','Bulk Quotes/SEC Frames v7 · full',1,JSON.stringify([company]),10,currentHash()).run();
  await insertSnapshot('outage',{...base,symbol:'OUTAGE',marketCap:100e6,price:10,return12m:-.5,low52w:5,ma30w:null,medianDollarVolume20d:null}).run();
- const result=await processScanBatch('outage');assert.equal(result.run.status,'partial');assert.equal(result.run.failed,1);assert.equal(result.done,true);
+ for(let attempt=0;attempt<2;attempt++){const retry=await processScanBatch('outage');assert.equal(retry.done,false);assert.equal(retry.run.retryPending,1);assert.equal(retry.run.failed,1);}
+ const result=await processScanBatch('outage');assert.equal(result.run.status,'partial');assert.equal(result.run.failed,1);assert.equal(result.done,true);assert.equal(result.run.retryPending,0);
  const row=await db().prepare("SELECT payload,evaluation FROM fundamental_snapshots WHERE id='outage:OUTAGE'").first();
  assert.match(row.payload,/Injected provider outage/);assert.equal(JSON.parse(row.evaluation).bounce.screeningQualified,false);
 });
@@ -69,4 +78,78 @@ test('local evaluation benchmarks at 2000, 10000 and 15000 synthetic companies',
   for(let i=0;i<size;i++){const s={...base,symbol:`SYNTHETIC${i}`};if(evaluateStrategy('bounce',s).status)count++;}
   const elapsed=performance.now()-start;assert.equal(count,size);assert(elapsed<15000);t.diagnostic(`${size}: ${elapsed.toFixed(1)} ms (local engine only; excludes providers and browser)`);
  }
+});
+
+test('history retries recover without double-counting failures or retaining stale errors',async()=>{
+ const company={ticker:'OUTAGE',cik:101};
+ await db().prepare("UPDATE strategy_runs SET stage=10,status='running',offset=1,failed=1,retry_queue=? WHERE id='outage'").bind(JSON.stringify([{company,attempt:1}])).run();
+ const now=new Date().toISOString();
+ setHistoryResult({history:[{date:now.slice(0,10),close:10,volume:100}],source:'TEST_ONLY',url:'https://example.test',availableAt:now,retrievedAt:now});
+ try{
+  const r=await processScanBatch('outage');assert.equal(r.done,true);assert.equal(r.run.failed,0);assert.equal(r.run.status,'complete');assert.equal(r.run.error,null);
+  const row=await db().prepare("SELECT payload,evaluation FROM fundamental_snapshots WHERE id='outage:OUTAGE'").first();assert(!row.payload.includes('Injected provider outage'));assert.equal(JSON.parse(row.evaluation).bounce.screeningQualified,false);
+ }finally{setHistoryResult(null);}
+});
+test('concurrent quick/full starts share one durable run before any network call',async()=>{
+  await db().prepare("UPDATE strategy_runs SET stage=13,status='complete',lease_until=0 WHERE status='running'").run();
+ await db().prepare("UPDATE strategy_runs SET created_at='2000-01-01' WHERE status IN ('complete','partial')").run();
+ const before=universeCalls;
+ const results=await Promise.all([startScan('full'),startScan('quick'),startScan('full')]);
+ assert.equal(new Set(results.map(r=>r.id)).size,1);assert.equal(results[0].stage,0);assert.equal(universeCalls,before);
+ setUniverse([{ticker:'INIT',name:'Synthetic initialized company',price:10,marketCap:100e6,cik:123}]);
+ const initialized=await processScanBatch(results[0].id);assert.equal(initialized.done,false);assert.equal(initialized.run.total,1);assert.equal(initialized.run.stage,4);
+ await db().prepare("UPDATE strategy_runs SET stage=13,status='complete' WHERE id=?").bind(results[0].id).run();setUniverse([]);
+});
+test('initialization outage retries after restart and terminates after three attempts',async()=>{
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,strategy_hash) VALUES('init-outage','2000-01-01','2000-01-01','running','Bulk Quotes/SEC Frames v7 · full',?)").bind(currentHash()).run();
+ for(let i=0;i<3;i++){
+  const r=await processScanBatch('init-outage');assert.equal(r.done,i===2);assert.equal(r.run.status,i===2?'failed':'running');assert.equal(r.run.stage,0);
+ }
+});
+test('status polling is compact and does not send snapshots or the universe',async()=>{
+ const response=await GET(new Request('https://radar.test/api/radar?status=1'));const raw=await response.text(),data=JSON.parse(raw);
+ assert.equal(response.status,200);assert(raw.length<2000);assert(!('snapshots'in data));assert(!('universe'in data.run));
+});
+test('company lookup query uses the symbol/date index',()=>{
+ const plan=sqlite.prepare('EXPLAIN QUERY PLAN SELECT payload FROM fundamental_snapshots WHERE symbol=? ORDER BY as_of DESC LIMIT 1').all('TEST');
+ assert(plan.some(row=>row.detail.includes('snapshot_symbol_date_idx')));
+});
+test('source reconciliation compares matching periods and preserves prior conflicts',()=>{
+ const p=(period)=>({source:'TEST',periodEnd:period,availableAt:'2026-01-01',retrievedAt:'2026-01-02'});
+ const current={...base,asOf:'2026-09-08',revenue:100,sourceConflicts:['existing issue'],provenance:{revenue:p('2025-12-31')}};
+ const previous={...base,revenue:200,provenance:{revenue:p('2024-12-31')}};
+ assert.deepEqual(reconcile(current,previous).sourceConflicts,['existing issue']);
+ previous.provenance.revenue=p('2025-12-31');assert.equal(reconcile(current,previous).sourceConflicts.length,2);
+ const missing={...current,revenue:null};previous.provenance.revenue.availableAt='2027-01-01';assert.equal(reconcile(missing,previous).revenue,null);
+ previous.provenance.revenue.availableAt='2026-01-01';assert.equal(reconcile(missing,previous).revenue,200);assert.equal(missing.revenue,null);
+});
+test('RSS normalization excludes future news, unsafe links and duplicates, retaining CDATA text',()=>{
+ const item=(date,link='https://news.example/article')=>`<item><title><![CDATA[Real &amp; sourced]]></title><link>${link}</link><pubDate>${date}</pubDate></item>`;
+ const xml=item('Mon, 07 Sep 2026 14:00:00 GMT')+item('Mon, 07 Sep 2026 14:00:00 GMT')+item('Tue, 08 Sep 2026 14:00:00 GMT','https://news.example/future')+item('bad','https://news.example/bad')+item('Mon, 07 Sep 2026 14:00:00 GMT','javascript:alert(1)');
+ const items=parseNews(xml,'2026-09-08T00:00:00Z');assert.equal(items.length,1);assert.equal(items[0].title,'Real & sourced');assert.equal(items[0].publishedAt,'2026-09-07T14:00:00.000Z');
+});
+test('long Retry-After is honored across calls without immediate provider hammering',async()=>{
+ const original=globalThis.fetch;let calls=0;
+ globalThis.fetch=async()=>{calls++;return new Response('',{status:429,headers:{'Retry-After':'120'}});};
+ try{for(let i=0;i<2;i++)await assert.rejects(fetchJson('https://rate-limit.test/facts'),/rate limited/);assert.equal(calls,1);}finally{globalThis.fetch=original;}
+});
+test('push ownership, same-origin, key validation, delivery acceptance and expired cleanup',async()=>{
+ const vapid=webpush.generateVAPIDKeys(),client=createECDH('prime256v1');client.generateKeys();
+ const subscription={endpoint:'https://fcm.googleapis.com/fcm/send/test-only',keys:{p256dh:client.getPublicKey().toString('base64url'),auth:randomBytes(16).toString('base64url')}};
+ assert(validPushSubscription(subscription));
+ for(const endpoint of ['https://127.0.0.1/test','https://fcm.googleapis.com.attacker.test','http://fcm.googleapis.com/test','https://user@fcm.googleapis.com/test'])assert(!validPushSubscription({...subscription,endpoint}));
+ assert(!validPushSubscription({...subscription,keys:{...subscription.keys,auth:'bad'}}));
+ const env={VAPID_PUBLIC_KEY:vapid.publicKey,VAPID_PRIVATE_KEY:vapid.privateKey};
+ const send=(path,payload,cookie,origin='https://radar.test')=>worker.fetch(new Request('https://radar.test'+path,{method:'POST',headers:{...(origin?{origin}:{}),...(cookie?{cookie}:{}),'content-type':'application/json'},body:JSON.stringify(payload)}),env,{waitUntil:()=>{}});
+ assert.equal((await send('/api/push/subscribe',subscription,null,null)).status,403);
+ const registered=await send('/api/push/subscribe',subscription);assert.equal(registered.status,200);const cookie=registered.headers.get('set-cookie').split(';')[0];
+ assert.equal((await send('/api/push/subscribe',subscription)).status,403);
+ assert.equal((await send('/api/push/test',{endpoint:subscription.endpoint})).status,404);
+ const original=globalThis.fetch;let status=201,calls=0;
+ globalThis.fetch=async(url,options)=>{calls++;assert.equal(options.redirect,'error');assert(options.body.length>0);return new Response('',{status});};
+ try{
+  assert.equal((await send('/api/push/test',{endpoint:subscription.endpoint},cookie)).status,200);
+  status=410;assert.equal((await send('/api/push/test',{endpoint:subscription.endpoint},cookie)).status,410);
+  assert.equal((await send('/api/push/test',{endpoint:subscription.endpoint},cookie)).status,404);assert.equal(calls,2);
+ }finally{globalThis.fetch=original;}
 });

@@ -1,4 +1,4 @@
-import { createRun, currentHash, db, ensureSchema, insertSnapshot, log } from './storage';
+import { currentHash, db, ensureSchema, insertSnapshot, log } from './storage';
 import { companySnapshot, consumeProviderIssues, historicalMarketData, quickSymbols, universe } from './providers';
 import { fetchBulkFundamentals, preliminarySnapshot, type BulkFundamentals } from './bulk';
 import { bounceHistoryMetrics } from './research';
@@ -48,15 +48,27 @@ export const publicRun = (run: any) => ({
 
 export async function startScan(modeInput: unknown) {
   await ensureSchema();
+  if (modeInput != null && modeInput !== 'quick' && modeInput !== 'full') throw Object.assign(new Error('نوع الفحص غير صالح'), {status:400});
   const mode = modeInput === 'quick' ? 'quick' : 'full';
   const source = `${SCAN_SOURCE_VERSION} · ${mode}`;
   const database = db();
-  const previous = await database.prepare("SELECT * FROM strategy_runs WHERE source=? AND status IN ('running','partial') ORDER BY created_at DESC LIMIT 1").bind(source).first();
+  const activeSql = "SELECT * FROM strategy_runs WHERE strategy_hash=? AND source LIKE 'Bulk Quotes/%' AND status IN ('running','partial') AND stage<13 ORDER BY created_at DESC LIMIT 1";
+  const previous = await database.prepare(activeSql).bind(currentHash()).first();
   if (previous && previous.strategy_hash === currentHash() && (previous.stage < 13 || previous.offset < previous.total || JSON.parse(previous.retry_queue || '[]').length)) return publicRun(previous);
   const recent = await database.prepare('SELECT created_at FROM strategy_runs WHERE source=? ORDER BY created_at DESC LIMIT 1').bind(source).first() as any;
   if (recent && Date.now() - Date.parse(recent.created_at) < 30_000) throw Object.assign(new Error('انتظر نصف دقيقة قبل بدء فحص جديد من النوع نفسه.'), { status: 429 });
 
-  const id = await createRun(source);
+  // A single conditional INSERT serializes concurrent quick/full starts in D1.
+  // No provider work runs on the user's start request; stage zero is durable.
+  const id = crypto.randomUUID(), now = new Date().toISOString();
+  const inserted = await database.prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,universe,strategy_hash) SELECT ?,?,?,'running',?,'[]',? WHERE NOT EXISTS(SELECT 1 FROM strategy_runs WHERE strategy_hash=? AND source LIKE 'Bulk Quotes/%' AND status IN ('running','partial') AND stage<13)").bind(id,now,now,source,currentHash(),currentHash()).run();
+  return publicRun(inserted.meta.changes
+    ? await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(id).first()
+    : await database.prepare(activeSql).bind(currentHash()).first());
+}
+
+async function initializeRun(run:any) {
+  const database=db(), id=run.id, mode=String(run.source).includes('quick')?'quick':'full';
   try {
     let companies = await universe();
     if (!companies.length) throw new Error('دليل الشركات المحلي فارغ');
@@ -68,14 +80,16 @@ export async function startScan(modeInput: unknown) {
       companies = quickSymbols.map((symbol) => bySymbol.get(symbol)).filter(Boolean) as any[];
     } else companies = preliminaryCandidates(companies);
     const screenedOut = universeTotal - companies.length;
-    await database.prepare('UPDATE strategy_runs SET universe=?,total=?,universe_total=?,screened_out=?,quote_coverage=?,stage=? WHERE id=?').bind(JSON.stringify(companies), companies.length, universeTotal, screenedOut, quoteCoverage, mode === 'quick' ? 3 : 4, id).run();
+    await database.prepare("UPDATE strategy_runs SET universe=?,total=?,universe_total=?,screened_out=?,quote_coverage=?,stage=?,lease_until=0,retry_queue='[]',error=NULL,updated_at=? WHERE id=?").bind(JSON.stringify(companies), companies.length, universeTotal, screenedOut, quoteCoverage, mode === 'quick' ? 3 : 4, new Date().toISOString(), id).run();
     await log(id, 'universe', `Loaded ${universeTotal} exchange-listed symbols; ${companies.length} passed security type, price and $25M-$2B preliminary gates (${mode})`);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'تعذّر تجهيز دليل الشركات';
-    await database.prepare("UPDATE strategy_runs SET status='failed',error=? WHERE id=?").bind(message, id).run();
-    throw Object.assign(new Error(`تعذّر تجهيز دليل الشركات: ${message}`), { status: 502 });
+    const attempt=Number(JSON.parse(run.retry_queue||'[]')[0]?.attempt||0)+1;
+    await database.prepare('UPDATE strategy_runs SET status=?,error=?,retry_queue=?,lease_until=0,updated_at=? WHERE id=?').bind(attempt>=3?'failed':'running',message,attempt>=3?'[]':JSON.stringify([{stage:0,attempt}]),new Date().toISOString(),id).run();
+    await log(id,'universe',`Attempt ${attempt}: ${message}`);
   }
-  return publicRun(await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(id).first());
+  const updated=await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(id).first();
+  return {run:publicRun(updated),done:updated.status==='failed'};
 }
 
 export async function processScanBatch(runId: string) {
@@ -90,6 +104,8 @@ export async function processScanBatch(runId: string) {
   const lock = await database.prepare("UPDATE strategy_runs SET lease_until=?,status='running' WHERE id=? AND lease_until<? AND offset=? AND stage=? AND retry_queue=?").bind(Date.now() + 90_000, run.id, Date.now(), run.offset, run.stage, run.retry_queue).run();
   if (!lock.meta.changes) return { run: publicRun(run), done: false, busy: true };
 
+  if(run.stage===0)return initializeRun(run);
+
   const companies = JSON.parse(run.universe || '[]');
   const isQuick = String(run.source).includes('quick');
 
@@ -99,16 +115,19 @@ export async function processScanBatch(runId: string) {
       await database.prepare('DELETE FROM bulk_fundamentals WHERE run_id=?').bind(run.id).run();
       const statements = [...bulk.fundamentals.entries()].map(([cik, payload]) => database.prepare('INSERT INTO bulk_fundamentals(run_id,cik,payload) VALUES(?,?,?)').bind(run.id, cik, JSON.stringify(payload)));
       for (let index = 0; index < statements.length; index += 75) await database.batch(statements.slice(index, index + 75));
-      const effectiveSuccess = bulk.fallbackUsed ? bulk.requests : bulk.success;
-      const effectiveFailed = bulk.fallbackUsed ? 0 : bulk.failed;
+      const effectiveSuccess = bulk.success;
+      const effectiveFailed = bulk.failed;
       const error = effectiveFailed ? `SEC Frames: ${bulk.success}/${bulk.requests} requests succeeded. ${bulk.errors.join('؛ ')}` : '';
-      await database.prepare('UPDATE strategy_runs SET stage=9,offset=0,processed=0,sec_requests=?,sec_success=?,sec_failed=?,fundamental_coverage=?,error=?,updated_at=?,lease_until=0 WHERE id=?').bind(bulk.requests, effectiveSuccess, effectiveFailed, bulk.fundamentals.size, error, new Date().toISOString(), run.id).run();
+      await database.prepare("UPDATE strategy_runs SET stage=9,offset=0,processed=0,sec_requests=?,sec_success=?,sec_failed=?,fundamental_coverage=?,error=?,updated_at=?,lease_until=0,retry_queue='[]' WHERE id=?").bind(bulk.requests, effectiveSuccess, effectiveFailed, bulk.fundamentals.size, error, new Date().toISOString(), run.id).run();
       await log(run.id, 'sec_frames', `SEC Frames baseline ${effectiveSuccess}/${bulk.requests}; optional IFRS ${bulk.optionalSuccess}/${bulk.optionalRequests}; coverage ${bulk.fundamentals.size}/${companies.length}; annual ${bulk.annual}; instant ${bulk.instant}; source ${bulk.fallbackUsed ? 'bundled official dated snapshot' : 'live API'}`);
       run = await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first();
       return { run: publicRun(run), done: false };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'SEC Frames stage failed';
-      await database.prepare("UPDATE strategy_runs SET status='partial',error=?,updated_at=?,lease_until=0 WHERE id=?").bind(message, new Date().toISOString(), run.id).run();
+      const attempt=Number(initialQueue[0]?.attempt||0)+1;
+      // Exhausted SEC attempts still evaluate the quotes as UNKNOWN and retain
+      // companies, rather than trapping the background baton on this stage.
+      await database.prepare("UPDATE strategy_runs SET status='running',stage=?,sec_failed=MAX(sec_failed,1),error=?,updated_at=?,lease_until=0,retry_queue=? WHERE id=?").bind(attempt>=3?9:4,message,new Date().toISOString(),attempt>=3?'[]':JSON.stringify([{stage:4,attempt}]),run.id).run();
       await log(run.id, 'sec_frames', message);
       run = await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first();
       return { run: publicRun(run), done: false };
@@ -134,14 +153,21 @@ export async function processScanBatch(runId: string) {
   }
 
   if (!isQuick && run.stage === 10) {
-    const entries = companies.slice(run.offset, run.offset + HISTORY_BATCH_SIZE);
+    const retrying=run.offset>=run.total;
+    const queue=JSON.parse(run.retry_queue||'[]');
+    const jobs=retrying?queue.slice(0,HISTORY_BATCH_SIZE):companies.slice(run.offset,run.offset+HISTORY_BATCH_SIZE).map((company:any)=>({company,attempt:0}));
+    const remaining=retrying?queue.slice(HISTORY_BATCH_SIZE):queue;
+    const entries=jobs.map((job:any)=>job.company);
     const now = new Date().toISOString();
     const writes: any[] = [];
+    const rows=entries.length?(await database.prepare(`SELECT symbol,payload FROM fundamental_snapshots WHERE run_id=? AND symbol IN (${entries.map(()=>'?').join(',')})`).bind(run.id,...entries.map((c:any)=>c.ticker)).all()).results:[];
+    const bySymbol=new Map<string,any>(rows.map((row:any)=>[row.symbol,row]));
     const outcomes = await Promise.all(entries.map(async (company: any) => {
-      const row = await database.prepare('SELECT payload FROM fundamental_snapshots WHERE id=?').bind(`${run.id}:${company.ticker}`).first() as any;
-      if (!row) return null;
+      const row = bySymbol.get(company.ticker);
+      if (!row) {await log(run.id,'history',`${company.ticker}: snapshot missing`);return {company,failed:true};}
       const snapshot = JSON.parse(row.payload);
       if (!historyCandidate(snapshot)) return { snapshot, company, skipped: true };
+      snapshot.dataIssues=(snapshot.dataIssues??[]).filter((issue:string)=>!issue.startsWith('تعذّر تحميل تاريخ'));
       try {
         const cacheKey=`scan-history:v1:${company.ticker}:${now.slice(0,10)}`;
         const cached=await database.prepare('SELECT retrieved_at,payload FROM raw_cache WHERE key=?').bind(cacheKey).first() as any;
@@ -186,15 +212,19 @@ export async function processScanBatch(runId: string) {
         // through /api/company and are fetched on demand for the chart.
       } catch (error) {
         snapshot.dataIssues = [...(snapshot.dataIssues ?? []), `تعذّر تحميل تاريخ الارتداد: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`];
+        await log(run.id,'history',`${company.ticker}: ${snapshot.dataIssues.at(-1)}`);
       }
       return { snapshot, company, failed: snapshot.dataIssues?.some((issue: string) => issue.startsWith('تعذّر تحميل تاريخ')) === true };
     }));
     const historyFailed = outcomes.filter(outcome => outcome?.failed).length;
-    for (const outcome of outcomes) if (outcome) writes.push(insertSnapshot(run.id, outcome.snapshot));
-    const offset = run.offset + entries.length;
-    const done = offset >= run.total;
-    const totalFailed = Number(run.failed || 0) + historyFailed;
-    writes.push(database.prepare('UPDATE strategy_runs SET offset=?,processed=total,stage=?,status=?,failed=?,error=?,updated_at=?,lease_until=0 WHERE id=?').bind(offset, done ? 13 : 10, done ? (totalFailed ? 'partial' : 'complete') : 'running', totalFailed, historyFailed ? `فشل جلب التاريخ لـ${historyFailed} شركة` : run.error, now, run.id));
+    for (const [index,outcome] of outcomes.entries()) {
+      if(outcome.snapshot&&!outcome.skipped)writes.push(insertSnapshot(run.id,outcome.snapshot));
+      if(outcome.failed&&jobs[index].attempt<2)remaining.push({...jobs[index],attempt:jobs[index].attempt+1});
+    }
+    const offset = retrying?run.offset:run.offset + entries.length;
+    const done = offset >= run.total && remaining.length===0;
+    const totalFailed = retrying?Math.max(0,Number(run.failed||0)-(entries.length-historyFailed)):Number(run.failed||0)+historyFailed;
+    writes.push(database.prepare('UPDATE strategy_runs SET offset=?,processed=total,stage=?,status=?,failed=?,error=?,updated_at=?,lease_until=0,retry_queue=? WHERE id=?').bind(offset, done ? 13 : 10, done ? (totalFailed||run.sec_failed ? 'partial' : 'complete') : 'running', totalFailed, totalFailed ? `تعذّر جلب التاريخ لـ${totalFailed} شركة؛ محاولات متبقية ${remaining.length}` : run.sec_failed?run.error:null, now,JSON.stringify(remaining), run.id));
     await database.batch(writes);
     run = await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first();
     return { run: publicRun(run), done };

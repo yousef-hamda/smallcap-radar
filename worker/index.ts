@@ -5,6 +5,9 @@ import handler from "vinext/server/app-router-entry";
 import webpush from "web-push";
 import { processScanBatch, startScan } from "../lib/scanner";
 import { db, ensureSchema, log } from "../lib/storage";
+import { sameOrigin } from "../lib/http";
+import { visitor } from "../lib/visitor";
+import { validPushSubscription } from "../lib/push-validation";
 
 interface Env {
   ASSETS: Fetcher;
@@ -29,11 +32,6 @@ interface ExecutionContext {
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
 const delay = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
-function sameOrigin(request: Request) {
-  const origin = request.headers.get("Origin");
-  if (origin && origin !== new URL(request.url).origin) throw Object.assign(new Error("طلب غير مسموح"), { status: 403 });
-}
-
 async function sendCompletionPush(env: Env, run: any) {
   await ensureSchema();
   if (run.notification_sent_at) return true;
@@ -53,9 +51,10 @@ async function sendCompletionPush(env: Env, run: any) {
   await Promise.all(subscriptions.filter((row) => !row.last_success_at || row.last_success_at < run.updated_at).map(async (row) => {
     try {
       const subscription = JSON.parse(row.subscription);
+      if(!validPushSubscription(subscription))throw Object.assign(Error('Invalid stored push subscription'),{statusCode:410});
       const details = webpush.generateRequestDetails(subscription, payload, { TTL: 86_400, urgency: "normal" });
       const pushBody = typeof details.body === "string" ? details.body : new Uint8Array(details.body);
-      const response = await fetch(details.endpoint, { method: details.method, headers: details.headers, body: pushBody });
+      const response = await fetch(details.endpoint, { method: details.method, headers: details.headers, body: pushBody,redirect:'error',signal:AbortSignal.timeout(8000) });
       if (!response.ok) throw Object.assign(new Error(`Push HTTP ${response.status}`), { statusCode: response.status });
       await db().prepare("UPDATE push_subscriptions SET last_success_at=?,failure_count=0 WHERE endpoint=?").bind(sentAt, row.endpoint).run();
     } catch (error: any) {
@@ -87,9 +86,11 @@ async function scheduleNext(request: Request, runId: string, env: Env) {
     // Private Sites authenticate before the Worker runs. Preserve the owner's
     // session on the internal baton so the next batch reaches this Worker.
     if (cookie) headers.Cookie = cookie;
-    const response = await fetch(target, { method: "POST", headers, body: JSON.stringify({ runId }) });
-    if (response.ok) return;
-    await log(runId, "background", `Background baton attempt ${attempt + 1}: HTTP ${response.status}`);
+    try {
+      const response = await fetch(target, { method: "POST", headers, body: JSON.stringify({ runId }),signal:AbortSignal.timeout(5000) });
+      if (response.ok) return;
+      await log(runId, "background", `Background baton attempt ${attempt + 1}: HTTP ${response.status}`);
+    }catch(error){await log(runId,'background',`Baton attempt ${attempt+1}: ${error instanceof Error?error.message:'network failure'}`);}
     await delay(400 * (attempt + 1));
   }
   await log(runId, "background", "تعذّر تمرير مهمة الفحص إلى الدفعة التالية بعد ثلاث محاولات.");
@@ -98,7 +99,11 @@ async function scheduleNext(request: Request, runId: string, env: Env) {
 async function runBackgroundBatch(request: Request, runId: string, env: Env) {
   try {
     const result = await processScanBatch(runId);
-    if (result.busy) return;
+    if (result.busy) {
+      // A duplicate or restarted worker must not abandon the only live baton.
+      await delay(Math.min(10_000,Math.max(500,Number(result.run.lease_until)-Date.now())));
+      await scheduleNext(request,runId,env);return;
+    }
     if (result.done) {
       const delivered = await sendCompletionPush(env, result.run);
       if (!delivered) { await delay(1_000); await scheduleNext(request, runId, env) }
@@ -127,9 +132,12 @@ const worker = {
         sameOrigin(request);
         await ensureSchema();
         const subscription = await request.json() as any;
-        if (!subscription?.endpoint?.startsWith("https://") || !subscription?.keys?.p256dh || !subscription?.keys?.auth) return json({ error: "اشتراك الإشعارات غير صالح" }, 400);
-        await db().prepare("INSERT OR REPLACE INTO push_subscriptions(endpoint,subscription,created_at,last_success_at,failure_count) VALUES(?,?,?,COALESCE((SELECT last_success_at FROM push_subscriptions WHERE endpoint=?),NULL),0)").bind(subscription.endpoint, JSON.stringify(subscription), new Date().toISOString(), subscription.endpoint).run();
-        return json({ subscribed: true });
+        if (!validPushSubscription(subscription)) return json({ error: "اشتراك الإشعارات غير صالح أو خدمة الإشعارات غير مدعومة" }, 400);
+        const identity=visitor(request);
+        const existing=await db().prepare('SELECT owner FROM push_subscriptions WHERE endpoint=?').bind(subscription.endpoint).first() as any;
+        if(existing?.owner&&existing.owner!==identity.owner)return json({error:'هذا الاشتراك مرتبط بهوية أخرى'},403);
+        await db().prepare("INSERT INTO push_subscriptions(endpoint,subscription,owner,created_at) VALUES(?,?,?,?) ON CONFLICT(endpoint) DO UPDATE SET subscription=excluded.subscription,owner=excluded.owner,failure_count=0 WHERE push_subscriptions.owner='' OR push_subscriptions.owner=excluded.owner").bind(subscription.endpoint, JSON.stringify(subscription),identity.owner, new Date().toISOString()).run();
+        const response=json({ subscribed: true });if(identity.cookie)response.headers.set('Set-Cookie',identity.cookie);return response;
       } catch (error: any) { return json({ error: error.message || "تعذّر تفعيل الإشعارات" }, error.status || 500) }
     }
 
@@ -139,17 +147,24 @@ const worker = {
         await ensureSchema();
         const input = await request.json() as any;
         if (typeof input?.endpoint !== "string") return json({ error: "اشتراك غير صالح" }, 400);
-        const row = await db().prepare("SELECT subscription FROM push_subscriptions WHERE endpoint=?").bind(input.endpoint).first() as any;
+        const identity=visitor(request);
+        const row = await db().prepare("SELECT subscription FROM push_subscriptions WHERE endpoint=? AND owner=?").bind(input.endpoint,identity.owner).first() as any;
         if (!row) return json({ error: "هذا الجهاز غير مسجل للإشعارات" }, 404);
         webpush.setVapidDetails("mailto:yousef-hamda@users.noreply.github.com", env.VAPID_PUBLIC_KEY, env.VAPID_PRIVATE_KEY);
         const payload = JSON.stringify({ title: "إشعارات رادار جاهزة", body: "تم ربط هذا الهاتف بنجاح. سنرسل لك تنبيهًا عند اكتمال الفحص.", url: "/" });
         const subscription = JSON.parse(row.subscription);
+        if(!validPushSubscription(subscription))return json({error:'أعد تفعيل الإشعارات على هذا الجهاز'},400);
         const details = webpush.generateRequestDetails(subscription, payload, { TTL: 300, urgency: "high" });
         const pushBody = typeof details.body === "string" ? details.body : new Uint8Array(details.body);
-        const response = await fetch(details.endpoint, { method: details.method, headers: details.headers, body: pushBody });
+        const response = await fetch(details.endpoint, { method: details.method, headers: details.headers, body: pushBody,redirect:'error',signal:AbortSignal.timeout(8000) });
+        if([404,410].includes(response.status)){
+          await db().prepare('DELETE FROM push_subscriptions WHERE endpoint=? AND owner=?').bind(input.endpoint,identity.owner).run();
+          return json({error:'انتهى الاشتراك؛ فعّل الإشعارات مجددًا'},410);
+        }
         if (!response.ok) throw Error(`Push HTTP ${response.status}`);
+        await db().prepare('UPDATE push_subscriptions SET last_success_at=?,failure_count=0 WHERE endpoint=? AND owner=?').bind(new Date().toISOString(),input.endpoint,identity.owner).run();
         return json({ sent: true });
-      } catch (error: any) { return json({ error: error.message || "تعذّر إرسال إشعار الاختبار" }, 503) }
+      } catch (error: any) { return json({ error: error.message || "تعذّر إرسال إشعار الاختبار" }, error.status||503) }
     }
 
     if (url.pathname === "/api/background-scan/start" && request.method === "POST") {
