@@ -127,7 +127,7 @@ export async function processScanBatch(runId: string) {
     // A full run needs one additional, bounded history pass before it is
     // complete. The bulk snapshot intentionally does not pretend to contain
     // MA30W, so Bounce is enriched from real historical bars afterwards.
-    writes.push(database.prepare('UPDATE strategy_runs SET offset=?,processed=processed+?,stage=?,status=?,updated_at=?,lease_until=0 WHERE id=?').bind(done ? 0 : offset, entries.length, done ? 10 : 9, done ? 'running' : status, now, run.id));
+    writes.push(database.prepare('UPDATE strategy_runs SET offset=?,processed=?,stage=?,status=?,updated_at=?,lease_until=0 WHERE id=?').bind(done ? 0 : offset, done ? 0 : Number(run.processed || 0) + entries.length, done ? 10 : 9, done ? 'running' : status, now, run.id));
     for (let index = 0; index < writes.length; index += 75) await database.batch(writes.slice(index, index + 75));
     run = await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first();
     return { run: publicRun(run), done };
