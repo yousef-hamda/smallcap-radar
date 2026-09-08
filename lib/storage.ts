@@ -40,9 +40,10 @@ export async function readState(options:{strategy?:'core'|'bounce'|'favorites';l
  // result set with its still-enriching (and therefore often empty) rows.
  // Prefer the newest completed/partial market run; only fall back to running
  // when no finished result exists yet (first-ever scan).
- const finished=await d.prepare("SELECT * FROM strategy_runs WHERE status IN ('complete','partial') AND processed>0 ORDER BY CASE WHEN source LIKE '%· full' THEN 0 ELSE 1 END, created_at DESC LIMIT 1").first();
- const running=await d.prepare("SELECT * FROM strategy_runs WHERE status='running' AND processed>0 ORDER BY CASE WHEN source LIKE '%· full' THEN 0 ELSE 1 END, created_at DESC LIMIT 1").first();
- const latest=finished||running;
+ const finished=await d.prepare("SELECT * FROM strategy_runs WHERE status IN ('complete','partial') AND processed>0 AND strategy_hash=? ORDER BY CASE WHEN source LIKE '%· full' THEN 0 ELSE 1 END, created_at DESC LIMIT 1").bind(currentHash()).first();
+ const running=await d.prepare("SELECT * FROM strategy_runs WHERE status='running' AND processed>0 AND strategy_hash=? ORDER BY CASE WHEN source LIKE '%· full' THEN 0 ELSE 1 END, created_at DESC LIMIT 1").bind(currentHash()).first();
+ const fallback=finished||running?null:await d.prepare("SELECT * FROM strategy_runs WHERE status IN ('complete','partial') AND processed>0 ORDER BY CASE WHEN source LIKE '%· full' THEN 0 ELSE 1 END, created_at DESC LIMIT 1").first();
+ const latest=finished||running||fallback;
  const currentData=!!latest&&latest.strategy_hash===currentHash();
  const strategy=options.strategy==='core'||options.strategy==='favorites'?options.strategy:'bounce';
  const limit=Math.max(1,Math.min(250,Math.floor(options.limit??150)));
