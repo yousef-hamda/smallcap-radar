@@ -25,7 +25,9 @@ export async function GET(request: Request) {
     const symbol = new URL(request.url).searchParams.get('symbol')?.trim().toUpperCase() ?? '';
     if (!/^[A-Z0-9.^-]{1,16}$/.test(symbol)) return json({ error: 'رمز غير صالح' }, 400);
     await ensureSchema();
-    const cacheKey = `deep:${symbol}`;
+    // Version the deep cache whenever the enrichment contract changes so a
+    // previous partial response cannot mask newly available fields.
+    const cacheKey = `deep:v2:${symbol}`;
     const cached = await db().prepare('SELECT retrieved_at,payload FROM raw_cache WHERE key=?').bind(cacheKey).first() as any;
     if (cached && Date.now() - Date.parse(cached.retrieved_at) < 30 * 60_000) return json({ snapshot: JSON.parse(cached.payload), cached: true });
     const company = companyBySymbol(symbol);
