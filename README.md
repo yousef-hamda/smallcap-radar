@@ -1,6 +1,6 @@
 # Small-Cap Radar V2
 
-**Deployment update:** version 60 is published at the user's explicit request on 2026-09-08. [Release record](docs/DEPLOYMENT_60.md). Browser acceptance remains pending; the source-checkpoint note below records the earlier state.
+**Deployment update:** version 61 is published at the user's explicit request on 2026-09-08. [Release record](docs/DEPLOYMENT_61.md). Browser acceptance remains pending; the source-checkpoint note below records the earlier state.
 
 **حملة التحسين الحالية:** راجع [التغييرات والأدلة والفجوات](docs/IMPROVEMENT_CAMPAIGN_2026_09_08.md). ملاحظات الإصدارات الأقدم أدناه تاريخية؛ لا تثبت أداء النسخة الحالية أو اكتمال القبول.
 
