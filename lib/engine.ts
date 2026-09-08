@@ -2,7 +2,7 @@ import { INVESTABLE_EXCHANGES, SPECS, specHash } from './strategy-spec';
 export { SPECS, specHash } from './strategy-spec';
 export type { StrategyKey } from './strategy-spec';
 export type Provenance={source:string;url?:string;periodStart?:string;periodEnd:string;availableAt:string;retrievedAt:string;currency?:string;tag?:string;confidence:'high'|'medium'|'low'};
-export type Snapshot={symbol:string;name:string;asOf:string;description?:string;descriptionAr?:string;sector?:string;industry?:string;employees?:number|null;securityType?:string;exchange?:string;foreignFiler?:boolean;price?:number|null;marketCap?:number|null;volume?:number|null;averageVolume10d?:number|null;medianDollarVolume20d?:number|null;revenue?:number|null;revenueGrowth?:number|null;evSales?:number|null;ps?:number|null;netIncome?:number|null;fcf?:number|null;fcfYield?:number|null;grossMargin?:number|null;operatingMarginTrend?:number|null;insiderBuyValue?:number|null;analystCount?:number|null;analystTarget?:number|null;targetMean?:number|null;targetLow?:number|null;targetHigh?:number|null;cash?:number|null;debt?:number|null;return12m?:number|null;low52w?:number|null;high52w?:number|null;ma30w?:number|null;dilution?:number|null;shareCountRatio?:number|null;splitAdjusted?:boolean;deathSpiral?:'clean'|'mild'|'elevated'|'severe'|'unknown';riskEvidence?:string;liquidityReviewed?:boolean;confidence?:'A'|'B'|'C'|'D'|'F';research?:{financials?:boolean;valuation?:boolean;analysts?:boolean;sector?:boolean};nextEarnings?:string|null;lastEarnings?:string|null;lastEarningsStatus?:'إيجابي'|'سلبي'|'مختلط'|'غير معروف';surprises?:{quarter:string;surprisePct?:number|null;actual?:number|null;estimate?:number|null}[];revenueTrend?:{quarter:string;value:number;periodEnd?:string}[];backlog?:{amount?:number|null;currency?:string;asOf?:string;stale?:boolean;source?:string}|null;news?:{title:string;link?:string;publishedAt?:string;source?:string}[];insiderPurchases?:InsiderPurchase[];sourceConflicts?:string[];dataIssues?:string[];provenance:Record<string,Provenance>;history?:{date:string;close:number;open?:number;high?:number;low?:number;volume?:number}[]};
+export type Snapshot={symbol:string;name:string;asOf:string;description?:string;descriptionAr?:string;sector?:string;industry?:string;employees?:number|null;securityType?:string;exchange?:string;foreignFiler?:boolean;price?:number|null;dailyChange?:number|null;marketCap?:number|null;volume?:number|null;averageVolume10d?:number|null;medianDollarVolume20d?:number|null;revenue?:number|null;revenueGrowth?:number|null;evSales?:number|null;ps?:number|null;netIncome?:number|null;fcf?:number|null;fcfYield?:number|null;grossMargin?:number|null;operatingMarginTrend?:number|null;insiderBuyValue?:number|null;analystCount?:number|null;analystTarget?:number|null;targetMean?:number|null;targetLow?:number|null;targetHigh?:number|null;cash?:number|null;debt?:number|null;return12m?:number|null;low52w?:number|null;high52w?:number|null;ma30w?:number|null;dilution?:number|null;shareCountRatio?:number|null;splitAdjusted?:boolean;deathSpiral?:'clean'|'mild'|'elevated'|'severe'|'unknown';riskEvidence?:string;liquidityReviewed?:boolean;confidence?:'A'|'B'|'C'|'D'|'F';research?:{financials?:boolean;valuation?:boolean;analysts?:boolean;sector?:boolean};nextEarnings?:string|null;lastEarnings?:string|null;lastEarningsStatus?:'إيجابي'|'سلبي'|'مختلط'|'غير معروف';surprises?:{quarter:string;surprisePct?:number|null;actual?:number|null;estimate?:number|null}[];revenueTrend?:{quarter:string;value:number;periodEnd?:string}[];backlog?:{amount?:number|null;currency?:string;asOf?:string;stale?:boolean;source?:string}|null;news?:{title:string;link?:string;publishedAt?:string;source?:string}[];insiderPurchases?:InsiderPurchase[];sourceConflicts?:string[];dataIssues?:string[];provenance:Record<string,Provenance>;history?:{date:string;close:number;open?:number;high?:number;low?:number;volume?:number}[]};
 export type InsiderPurchase={owner:string;date:string;shares:number;price:number;value:number;source?:string};
 export type Status='PASS'|'FAIL'|'UNKNOWN';
 export type Check={id:string;label:string;status:Status;explanation:string};
@@ -22,15 +22,15 @@ function coreFactors(s:Snapshot):Factor[]{
  const balance=finite(s.cash)&&finite(s.debt)?clamp((s.cash-s.debt)/Math.max(s.cash,s.debt,1)):null;
  const make=(id:string,label:string,maxPoints:number,n:number|null,raw:number|null|undefined,explanation:string):Factor=>({id,label,maxPoints,points:n==null?0:n*maxPoints,available:n!=null,rawValue:raw??null,explanation});
  return [
-  make('valuation','التقييم',24,valuation,s.evSales??s.ps??null,finite(s.evSales)?`EV/S ${s.evSales.toFixed(2)} ضمن حد 10`:'تقييم المبيعات مستخدم لعدم توفر EV/S'),
-  make('quality','الجودة والربحية',19,quality,s.netIncome??s.fcf??null,'Net Income أو FCF موجب'),
-  make('shareDiscipline','انضباط الأسهم',15,dilution,s.dilution,finite(s.dilution)?`التخفيف ${(s.dilution*100).toFixed(1)}%`:'التخفيف غير متاح'),
-  make('sizeCoverage','الحجم والتغطية',14,size,s.marketCap,'الحجم الأصغر يحصل على أفضلية محدودة، لا أفضلية مطلقة'),
-  make('growth','النمو',7,growth,s.revenueGrowth,'نمو الإيرادات ضمن نطاق محافظ'),
-  make('insider','الشراء الداخلي',7,insider,s.insiderBuyValue,'يحسب Form 4 P فقط عند توفره'),
-  make('marginTrend','اتجاه الهوامش',6,margin,s.operatingMarginTrend,'تحسن هامش التشغيل'),
-  make('entry','نقطة الدخول',5,entry,s.return12m,'ليس كل هبوط فرصة؛ يفضل ارتدادًا غير متطرف'),
-  make('balance','الميزانية',3,balance,s.cash!=null&&s.debt!=null?s.cash-s.debt:null,'صافي النقد/الدين')
+  make('valuation','التقييم',SPECS.core.weights['Valuation'],valuation,s.evSales??s.ps??null,finite(s.evSales)?`EV/S ${s.evSales.toFixed(2)} ضمن حد 10`:'تقييم المبيعات مستخدم لعدم توفر EV/S'),
+  make('quality','الجودة والربحية',SPECS.core.weights['Quality'],quality,s.netIncome??s.fcf??null,'Net Income أو FCF موجب'),
+  make('shareDiscipline','انضباط الأسهم',SPECS.core.weights['Share Discipline'],dilution,s.dilution,finite(s.dilution)?`التخفيف ${(s.dilution*100).toFixed(1)}%`:'التخفيف غير متاح'),
+  make('sizeCoverage','الحجم والتغطية',SPECS.core.weights['Small Size + Low Coverage'],size,s.marketCap,'الحجم الأصغر يحصل على أفضلية محدودة، لا أفضلية مطلقة'),
+  make('growth','النمو',SPECS.core.weights['Growth'],growth,s.revenueGrowth,'نمو الإيرادات ضمن نطاق محافظ'),
+  make('insider','الشراء الداخلي',SPECS.core.weights['Insider Buying'],insider,s.insiderBuyValue,'يحسب Form 4 P فقط عند توفره'),
+  make('marginTrend','اتجاه الهوامش',SPECS.core.weights['Margin Trend'],margin,s.operatingMarginTrend,'تحسن هامش التشغيل'),
+  make('entry','نقطة الدخول',SPECS.core.weights['Entry Point'],entry,s.return12m,'ليس كل هبوط فرصة؛ يفضل ارتدادًا غير متطرف'),
+  make('balance','الميزانية',SPECS.core.weights['Balance Sheet'],balance,s.cash!=null&&s.debt!=null?s.cash-s.debt:null,'صافي النقد/الدين')
  ];
 }
 function legacyFactors(s:Snapshot):Factor[]{
@@ -87,7 +87,7 @@ export function evaluateStrategy(strategy:keyof typeof SPECS,s:Snapshot){
  const measurableGates=checks.filter(c=>measurableGateIds.includes(c.id));
  const measurableStatus:Status=measurableGates.some(c=>c.status==='FAIL')?'FAIL':measurableGates.some(c=>c.status==='UNKNOWN')?'UNKNOWN':'PASS';
  const gateStatus:Status=hardGates.some(c=>c.status==='FAIL')?'FAIL':hardGates.some(c=>c.status==='UNKNOWN')?'UNKNOWN':'PASS';
- const screening=checks.filter(c=>c.id!=='conflict');
+ const screening=checks;
  const status:Status=screening.some(c=>c.status==='FAIL')?'FAIL':screening.some(c=>c.status==='UNKNOWN')?'UNKNOWN':'PASS';
  const researchComplete=['financials','valuation','analysts','sector'].every(k=>s.research?.[k as keyof NonNullable<Snapshot['research']>]===true);
  const factors=strategy==='core'?coreFactors(s):strategy==='legacy'?legacyFactors(s):[];

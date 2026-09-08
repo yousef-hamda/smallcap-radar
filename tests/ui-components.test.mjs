@@ -83,3 +83,25 @@ test("renders sidebar skeletons deterministically", async () => {
   assert.equal(first, second);
   assert.match(first, /--skeleton-width:70%/);
 });
+
+test('radar initially has three primary lists, zero personal favorites and no bottom navigation', async()=>{
+ const {default:Radar}=await vite.ssrLoadModule('/app/page.tsx');
+ const html=renderToStaticMarkup(React.createElement(Radar));
+ assert.match(html,/رادار الشركات الصغيرة/);assert.match(html,/aria-label="المفضلة: 0"/);
+ assert.equal((html.match(/role="tab"/g)||[]).length,3);
+ assert.doesNotMatch(html,/bottom-nav|terminal-shell|sidebar-head/);
+});
+
+test('empty chart keeps all seven period controls',async()=>{
+ const {default:Chart}=await vite.ssrLoadModule('/app/price-chart.tsx');
+ const html=renderToStaticMarkup(React.createElement(Chart,{snapshot:{symbol:'TEST',name:'Synthetic chart fixture',asOf:'2025-01-01',provenance:{},history:[]}}));
+ assert.equal((html.match(/role="tab"/g)||[]).length,7);
+ assert.match(html,/لا تتوفر جلستان موثقتان/);
+});
+
+test('historical chart filters duplicate, future and nonfinite bars and displays actual extrema',async()=>{
+ const {default:Chart}=await vite.ssrLoadModule('/app/price-chart.tsx');
+ const html=renderToStaticMarkup(React.createElement(Chart,{snapshot:{symbol:'TEST',name:'Synthetic chart fixture',asOf:'2025-01-03',provenance:{},history:[{date:'2025-01-01',close:10},{date:'2025-01-01',close:10},{date:'2025-01-02',close:12},{date:'2025-01-04',close:99999},{date:'2025-01-02',close:NaN}]}}));
+ assert.match(html,/10\.00/);assert.match(html,/12\.00/);assert.doesNotMatch(html,/99999|NaN|Infinity/);
+ assert.match(html,/polyline/);
+});

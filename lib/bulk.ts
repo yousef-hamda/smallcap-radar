@@ -152,6 +152,7 @@ export function preliminarySnapshot(company: Company, facts: BulkFundamentals | 
     exchange: company.exchange,
     securityType: 'common',
     price: company.price ?? null,
+    dailyChange:company.dailyChange??null,
     marketCap: company.marketCap ?? null,
     volume: company.volume ?? null,
     averageVolume10d: company.averageVolume10d ?? null,
@@ -165,6 +166,7 @@ export function preliminarySnapshot(company: Company, facts: BulkFundamentals | 
     research: { financials: false, valuation: false, analysts: false, sector: !!company.sector },
   };
   if (snapshot.price != null) snapshot.provenance.price = quote;
+  if(snapshot.dailyChange!=null)snapshot.provenance.dailyChange=quote;
   if (snapshot.marketCap != null) snapshot.provenance.marketCap = quote;
   if (company.return52w != null) snapshot.provenance.return12m = quote
   if (company.low52w != null) snapshot.provenance.low52w = quote

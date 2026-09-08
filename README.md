@@ -1,4 +1,6 @@
-# Small-Cap Radar V2 — professional research terminal
+# Small-Cap Radar V2
+
+**2026-09-08 source checkpoint — NOT DEPLOYED.** The interface has been rebuilt from the supplied ten screenshots and the observed legacy UI. Scan-stage completion, operational progress and private watchlists have regression tests. New browser QA is blocked by the browser URL policy; publication is on hold under the user's acceptance gate. Read [the current evidence, changes and remaining gaps](docs/REBUILD_2026_09_08.md) before relying on older release notes below. Current production remains version 59.
 
 للدليل العربي الكامل الذي يغطي المنتج، المحرك، البيانات، الفحص الخلفي، الواجهة، الإشعارات، الاختبارات، النشر، والفجوات المتبقية، راجع [README_FULL_AR.md](docs/README_FULL_AR.md).
 
@@ -21,7 +23,7 @@ Arabic RTL mobile-first PWA, published through Sites. It is a working research p
 
 Read [the requirement ledger](docs/ACCEPTANCE.md). Major remaining gaps: complete Form 4 ingestion (P-only utility exists), a licensed secondary fundamentals source, company news/analyst enrichment, production factor normalization, paper portfolio, full historical backtesting/reporting UI, immutable consumed holdout workflow, failure-injection gates and shadow run. Current SEC Frames provide debt/cash/share fields where reported, but coverage is not universal and split-adjusted dilution remains review-only.
 
-The original historical dataset and PDF are absent. Original 47.2%/37.2%/54.8% figures cannot be reproduced or asserted. Inflection, death spiral, factor normalization and several operating conventions were explicitly unresolved in the supplied plan. Final ranking is unconditionally disabled until these requirements are implemented and validated.
+The supplied README PDFs and ten screenshots were located. The old website and its public client code were inspected directly. Its server implementation and original point-in-time historical dataset remain unavailable here. Original historical success rates cannot be reproduced or asserted. Inflection, death spiral, factor normalization and several operating conventions were explicitly unresolved in the supplied plan. Final research ranking remains disabled.
 
 ## Run and verify
 
@@ -29,6 +31,7 @@ The original historical dataset and PDF are absent. Original 47.2%/37.2%/54.8% f
 npm ci
 npm run typecheck
 npm run test:engine
+npm run test:runtime
 npm run build
 ```
 
@@ -38,7 +41,7 @@ Current implementation uses **Vinext/React instead of the plan's TanStack Start*
 
 ## Strategy contract
 
-`lib/strategy-spec.ts` is the single strategy configuration source and `lib/engine.ts` is the evaluator. All absent critical metrics become UNKNOWN. Positive net income OR FCF passes the definitive profitability branch. Inflection has no invented substitute. Core/Legacy score returns null; Bounce returns gates only. UI candidate qualification is not a final research rank. Version suffix `draft.1` identifies unvalidated implementation conventions.
+`lib/strategy-spec.ts` is the strategy configuration source and `lib/engine.ts` is the evaluator. All absent critical metrics become UNKNOWN. Positive net income OR FCF passes the definitive profitability branch. Inflection has no invented substitute. Core/Legacy expose diagnostic factor scores, returning null after hard-gate failure; Bounce exposes gate completion and no validated predictive score. UI candidate qualification is not a final research rank. Draft versions identify unvalidated implementation conventions.
 
 Operational conventions: 20-day median dollar volume for Core and Bounce (Bounce requires at least $150k); 3 calendar days quote freshness; 200-day fundamental period freshness; 30 fully completed consecutive weekly closing prices; calendar-month expiry clamped at month end, then first observed tradable open. These are conservative implementation choices, **not reproduced original settings**. SEC date-only filing records become available at end of filing day, intentionally conservative.
 
@@ -46,7 +49,7 @@ Operational conventions: 20-day median dollar volume for Core and Bounce (Bounce
 
 - `GET /api/radar?strategy=core|bounce|favorites&limit=150&offset=0`: paged qualified/favorite snapshots plus counts; explicit `dataRunId` identifies displayed data. This bounded contract avoids returning the full historical snapshot table in one response.
 - `GET /api/company?symbol=...`: on-demand deep verification using detailed history and SEC Company Facts, cached for 30 minutes; this deliberately stays outside the market-wide hot path.
-- `POST /api/radar`: same-origin `{action:'favorite',symbol}` or `{action:'import',records: Snapshot[]}`. Import max 500 records / 4MB; rejects duplicate symbols and malformed provenance.
+- `POST /api/radar`: same-origin `{action:'favorite',symbol,saved:boolean}` or `{action:'import',records: Snapshot[]}`. Favorites are private by platform identity or opaque visitor cookie and stored in D1. A new visitor starts with zero; legacy global favorites are not migrated to an arbitrary owner. Import max 500 records / 4MB; rejects duplicate symbols and malformed provenance.
 - `POST /api/background-scan/start`: starts or revives a server-owned quick/full scan and returns immediately. The Worker passes a signed internal baton between bounded stages/pages, so browser suspension does not control progress.
 - `GET /api/push/key` and `POST /api/push/subscribe`: create the device subscription used for the completion alert. Expired subscriptions are removed automatically.
 - `POST /api/scan`: retained as a bounded diagnostic/manual recovery API. Failed symbols enter a persistent queue with up to three total attempts; exhausted failures keep the run partial.
@@ -62,7 +65,7 @@ After an empty private `yousef-hamda/small-cap-radar-v2` exists, synchronize thi
 
 ## Secrets and access
 
-No supplied Cloudflare token or R2 key is used or embedded. The user's plan §76 specifically treats previously exposed credentials as compromised; replace those in Cloudflare before configuring a separate deployment. The Sites publication is public at the owner's explicit request so server-owned batches can re-enter the Worker without the private Sign in with ChatGPT gateway. Mutations enforce same-origin requests, but favorites and scan state are shared globally. Before using this as a multiuser service, add application-level authorization and per-user database scope.
+No supplied Cloudflare token or R2 key is used or embedded. The Sites publication is public at the owner's explicit request. Scan state remains shared; new favorites are scoped server-side and use idempotent explicit save/remove operations. Anonymous visitors retain their list through an HttpOnly cookie; deleting that cookie loses access to that anonymous list. Broader scan/push authorization and production failure-injection testing remain open work.
 
 ## Sources
 

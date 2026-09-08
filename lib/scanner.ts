@@ -6,7 +6,7 @@ import { NON_TRADABLE_NAME, SPECS } from './strategy-spec';
 import { evaluateStrategy } from './engine';
 
 const BATCH_SIZE = 12;
-const HISTORY_BATCH_SIZE = 48;
+const HISTORY_BATCH_SIZE = 24;
 const SCORE_BATCH_SIZE = 600;
 export const SCAN_SOURCE_VERSION = 'Bulk Quotes/SEC Frames v7';
 
@@ -19,28 +19,24 @@ function preliminaryCandidates(companies: any[]) {
   });
 }
 
-function bounceHistoryCandidate(snapshot: any) {
+export function bounceHistoryCandidate(snapshot: any) {
   if (snapshot?.securityType !== 'common' || Number(snapshot.marketCap) < SPECS.bounce.marketCap.min || Number(snapshot.marketCap) > SPECS.bounce.marketCap.max || Number(snapshot.price) <= 0) return false;
   // Bulk quotes can disprove many bounce candidates without an expensive
   // history request. History is reserved for rows that still need MA30W and
   // the exact 20-session median dollar-volume verification.
   if (Number.isFinite(snapshot.return12m) && snapshot.return12m >= SPECS.bounce.returnMax) return false;
   if (Number.isFinite(snapshot.low52w) && snapshot.price < snapshot.low52w * (1 + SPECS.bounce.lowDistanceMin)) return false;
-  if (Number.isFinite(snapshot.averageVolume10d) && snapshot.averageVolume10d * snapshot.price < SPECS.bounce.liquidity) return false;
   return true;
 }
 
-function historyCandidate(snapshot: any) {
+export function historyCandidate(snapshot: any) {
   if (bounceHistoryCandidate(snapshot)) return true;
   if (snapshot?.securityType !== 'common' || Number(snapshot.marketCap) < SPECS.core.marketCap.min || Number(snapshot.marketCap) > SPECS.core.marketCap.max || Number(snapshot.price) <= 0) return false;
   // History is fetched only for rows that pass the cheap, non-liquidity Core
   // gates. The exact 20-session dollar-volume median is then verified from
   // bars; a quote average is never used as a PASS substitute.
   const evaluation = evaluateStrategy('core', snapshot);
-  return ['security', 'cap', 'revenue', 'valuation', 'profitability'].every(id => evaluation.checks.find(check => check.id === id)?.status === 'PASS')
-    && Number.isFinite(snapshot.averageVolume10d)
-    && Number.isFinite(snapshot.price)
-    && snapshot.averageVolume10d * snapshot.price >= SPECS.core.liquidity;
+  return ['security', 'cap', 'revenue', 'valuation', 'profitability'].every(id => evaluation.checks.find(check => check.id === id)?.status === 'PASS');
 }
 
 export const publicRun = (run: any) => ({
@@ -56,7 +52,7 @@ export async function startScan(modeInput: unknown) {
   const source = `${SCAN_SOURCE_VERSION} · ${mode}`;
   const database = db();
   const previous = await database.prepare("SELECT * FROM strategy_runs WHERE source=? AND status IN ('running','partial') ORDER BY created_at DESC LIMIT 1").bind(source).first();
-  if (previous && previous.strategy_hash === currentHash() && (previous.offset < previous.total || JSON.parse(previous.retry_queue || '[]').length)) return publicRun(previous);
+  if (previous && previous.strategy_hash === currentHash() && (previous.stage < 13 || previous.offset < previous.total || JSON.parse(previous.retry_queue || '[]').length)) return publicRun(previous);
   const recent = await database.prepare('SELECT created_at FROM strategy_runs WHERE source=? ORDER BY created_at DESC LIMIT 1').bind(source).first() as any;
   if (recent && Date.now() - Date.parse(recent.created_at) < 30_000) throw Object.assign(new Error('انتظر نصف دقيقة قبل بدء فحص جديد من النوع نفسه.'), { status: 429 });
 
@@ -89,9 +85,9 @@ export async function processScanBatch(runId: string) {
   if (!run) throw Object.assign(new Error('الفحص غير موجود'), { status: 404 });
   if (run.strategy_hash !== currentHash()) throw Object.assign(new Error('تغيرت الاستراتيجية. ابدأ فحصًا جديدًا.'), { status: 409 });
   const initialQueue = JSON.parse(run.retry_queue || '[]');
-  if ((run.offset >= run.total && !initialQueue.length) || !['running', 'partial'].includes(run.status)) return { run: publicRun(run), done: true };
+  if ((run.stage >= 13 && run.offset >= run.total && !initialQueue.length) || !['running', 'partial'].includes(run.status)) return { run: publicRun(run), done: true };
 
-  const lock = await database.prepare("UPDATE strategy_runs SET lease_until=?,status='running' WHERE id=? AND lease_until<? AND offset=? AND retry_queue=?").bind(Date.now() + 90_000, run.id, Date.now(), run.offset, run.retry_queue).run();
+  const lock = await database.prepare("UPDATE strategy_runs SET lease_until=?,status='running' WHERE id=? AND lease_until<? AND offset=? AND stage=? AND retry_queue=?").bind(Date.now() + 90_000, run.id, Date.now(), run.offset, run.stage, run.retry_queue).run();
   if (!lock.meta.changes) return { run: publicRun(run), done: false, busy: true };
 
   const companies = JSON.parse(run.universe || '[]');
@@ -131,10 +127,10 @@ export async function processScanBatch(runId: string) {
     // A full run needs one additional, bounded history pass before it is
     // complete. The bulk snapshot intentionally does not pretend to contain
     // MA30W, so Bounce is enriched from real historical bars afterwards.
-    writes.push(database.prepare('UPDATE strategy_runs SET offset=?,processed=?,stage=?,status=?,updated_at=?,lease_until=0 WHERE id=?').bind(done ? 0 : offset, done ? 0 : Number(run.processed || 0) + entries.length, done ? 10 : 9, done ? 'running' : status, now, run.id));
+    writes.push(database.prepare('UPDATE strategy_runs SET offset=?,processed=?,stage=?,status=?,updated_at=?,lease_until=0 WHERE id=?').bind(done ? 0 : offset, offset, done ? 10 : 9, done ? 'running' : status, now, run.id));
     for (let index = 0; index < writes.length; index += 75) await database.batch(writes.slice(index, index + 75));
     run = await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first();
-    return { run: publicRun(run), done };
+    return { run: publicRun(run), done: false };
   }
 
   if (!isQuick && run.stage === 10) {
@@ -147,7 +143,10 @@ export async function processScanBatch(runId: string) {
       const snapshot = JSON.parse(row.payload);
       if (!historyCandidate(snapshot)) return { snapshot, company, skipped: true };
       try {
-        const historical = await historicalMarketData(company.ticker, now);
+        const cacheKey=`scan-history:v1:${company.ticker}:${now.slice(0,10)}`;
+        const cached=await database.prepare('SELECT retrieved_at,payload FROM raw_cache WHERE key=?').bind(cacheKey).first() as any;
+        const historical:Awaited<ReturnType<typeof historicalMarketData>>=cached&&Date.parse(now)-Date.parse(cached.retrieved_at)<15*60_000?JSON.parse(cached.payload):await historicalMarketData(company.ticker, now, 450);
+        if(!cached||cached.retrieved_at!==historical.retrievedAt)await database.prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(cacheKey,historical.source,historical.retrievedAt,JSON.stringify(historical)).run();
         const history = historical.history.filter((bar): bar is typeof bar & { close: number } => Number.isFinite(bar.close));
         const metrics = bounceHistoryMetrics(history, now);
         // The historical observations were retrieved after the bulk row was
@@ -155,22 +154,23 @@ export async function processScanBatch(runId: string) {
         // not incorrectly label these newer facts as future data.
         snapshot.asOf = now;
         const last = history.at(-1);
+        const historyEvidence={source:historical.source,url:historical.url,retrievedAt:historical.retrievedAt,availableAt:historical.availableAt,periodEnd:last?.date??now.slice(0,10),confidence:'medium' as const};
         if (metrics.return12m != null) {
           snapshot.return12m = metrics.return12m;
-          snapshot.provenance.return12m = { ...snapshot.provenance.price, source: 'Nasdaq Historical (official) · 12-month return', retrievedAt: now, availableAt: now, periodEnd: last?.date ?? now.slice(0, 10), confidence: 'high' };
+          snapshot.provenance.return12m = { ...historyEvidence,tag:'12-month return' };
         }
         if (metrics.low52w != null) {
           snapshot.low52w = metrics.low52w;
-          snapshot.provenance.low52w = { ...snapshot.provenance.price, source: 'Nasdaq Historical (official) · 52-week low', retrievedAt: now, availableAt: now, periodEnd: last?.date ?? now.slice(0, 10), confidence: 'high' };
+          snapshot.provenance.low52w = { ...historyEvidence,tag:'52-week low' };
         }
         const yearBars = history.filter(bar => Date.parse(bar.date) >= Date.parse(now) - 365 * 86_400_000);
         if (yearBars.length >= 240) {
           snapshot.high52w = Math.max(...yearBars.map(bar => bar.high ?? bar.close));
-          snapshot.provenance.high52w = { ...snapshot.provenance.price, source: 'Nasdaq Historical (official) · 52-week high', retrievedAt: now, availableAt: now, periodEnd: last?.date ?? now.slice(0, 10), confidence: 'high' };
+          snapshot.provenance.high52w = { ...historyEvidence,tag:'52-week high' };
         }
         if (metrics.ma30w != null) {
           snapshot.ma30w = metrics.ma30w;
-          snapshot.provenance.ma30w = { ...snapshot.provenance.price, source: 'Nasdaq Historical (official) · 30 completed weekly closes', retrievedAt: now, availableAt: now, periodEnd: last?.date ?? now.slice(0, 10), confidence: 'high' };
+          snapshot.provenance.ma30w = { ...historyEvidence,tag:'30 completed weekly closes' };
         } else {
           snapshot.dataIssues = [...(snapshot.dataIssues ?? []), 'لم تتوفر 30 أسبوعاً متواصلاً صالحاً لحساب MA30W.'];
         }
@@ -178,7 +178,7 @@ export async function processScanBatch(runId: string) {
         if (dollarVolumes.length === 20) {
           snapshot.medianDollarVolume20d = (dollarVolumes[9] + dollarVolumes[10]) / 2;
           snapshot.liquidityReviewed = true;
-          snapshot.provenance.medianDollarVolume20d = { ...snapshot.provenance.price, source: `${historical.url} · 20-session median dollar volume`, retrievedAt: now, availableAt: now, periodEnd: last?.date ?? now.slice(0, 10), confidence: 'high' };
+          snapshot.provenance.medianDollarVolume20d = { ...historyEvidence,tag:'20-session median dollar volume' };
         } else {
           snapshot.dataIssues = [...(snapshot.dataIssues ?? []), 'لا تتوفر 20 جلسة مكتملة مع السعر والحجم لحساب وسيط السيولة.'];
         }
@@ -194,7 +194,7 @@ export async function processScanBatch(runId: string) {
     const offset = run.offset + entries.length;
     const done = offset >= run.total;
     const totalFailed = Number(run.failed || 0) + historyFailed;
-    writes.push(database.prepare('UPDATE strategy_runs SET offset=?,stage=?,status=?,failed=?,error=?,updated_at=?,lease_until=0 WHERE id=?').bind(offset, done ? 13 : 10, done ? (totalFailed ? 'partial' : 'complete') : 'running', totalFailed, historyFailed ? `فشل جلب التاريخ لـ${historyFailed} شركة` : run.error, now, run.id));
+    writes.push(database.prepare('UPDATE strategy_runs SET offset=?,processed=total,stage=?,status=?,failed=?,error=?,updated_at=?,lease_until=0 WHERE id=?').bind(offset, done ? 13 : 10, done ? (totalFailed ? 'partial' : 'complete') : 'running', totalFailed, historyFailed ? `فشل جلب التاريخ لـ${historyFailed} شركة` : run.error, now, run.id));
     await database.batch(writes);
     run = await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first();
     return { run: publicRun(run), done };

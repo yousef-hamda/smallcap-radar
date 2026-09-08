@@ -15,7 +15,15 @@ function reconcile(current: any, previous: any) {
     if (difference > 0.2) conflicts.push(`${key}: اختلاف ${(difference * 100).toFixed(1)}% بين الفحص الجماعي والتحقق التفصيلي`);
   }
   current.sourceConflicts = conflicts;
-  current.confidence = conflicts.length ? 'D' : compared >= 3 ? 'B' : current.confidence ?? 'C';
+  current.confidence = conflicts.length ? 'D' : current.confidence ?? 'C';
+  // Preserve dated, sourced values when the deep provider has no replacement.
+  // Comparing two SEC-derived paths does not constitute independent corroboration.
+  for(const key of ['revenue','netIncome','fcf','cash','debt','evSales','ps','dilution','shareCountRatio','marketCap','revenueGrowth','operatingMarginTrend']) {
+    if(current[key]==null && Number.isFinite(previous?.[key]) && previous?.provenance?.[key] && Date.parse(previous.provenance[key].availableAt)<=Date.parse(current.asOf)) {
+      current[key]=previous[key];current.provenance[key]=previous.provenance[key];
+      current.dataIssues=[...(current.dataIssues??[]),`${key}: احتُفظ بقيمة الفحص السابقة المؤرخة لعدم توفر تحديث.`];
+    }
+  }
   current.dataIssues = [...new Set([...(current.dataIssues ?? []), ...(compared ? [`تمت مقارنة ${compared} مقاييس مع لقطة الفحص الجماعي.`] : ['لم تتوفر لقطة سابقة كافية للمقارنة.'])])];
   return current;
 }
@@ -27,7 +35,7 @@ export async function GET(request: Request) {
     await ensureSchema();
     // Version the deep cache whenever the enrichment contract changes so a
     // previous partial response cannot mask newly available fields.
-    const cacheKey = `deep:v2:${symbol}`;
+    const cacheKey = `deep:v3:${symbol}`;
     const cached = await db().prepare('SELECT retrieved_at,payload FROM raw_cache WHERE key=?').bind(cacheKey).first() as any;
     if (cached && Date.now() - Date.parse(cached.retrieved_at) < 30 * 60_000) return json({ snapshot: JSON.parse(cached.payload), cached: true });
     const company = companyBySymbol(symbol);

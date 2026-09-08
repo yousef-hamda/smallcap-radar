@@ -6,7 +6,7 @@ import { observations, latestInstant, trailingAnnual, provenance, REVENUE_TAGS }
 import bundledUniverse from './universe.generated.json';
 import quickCache from './quick-cache.generated.json';
 
-export type Company = { cik: number; name: string; ticker: string; exchange: string; price?: number; marketCap?: number; volume?: number; averageVolume10d?: number; return52w?: number; low52w?: number; high52w?: number; ma50d?: number; ma200d?: number; sector?: string; industry?: string; quoteSource?: string; quoteAvailableAt?: string };
+export type Company = { cik: number; name: string; ticker: string; exchange: string; price?: number; dailyChange?: number; marketCap?: number; volume?: number; averageVolume10d?: number; return52w?: number; low52w?: number; high52w?: number; ma50d?: number; ma200d?: number; sector?: string; industry?: string; quoteSource?: string; quoteAvailableAt?: string };
 type NasdaqRow = { symbol: string; name?: string; lastsale?: string; marketCap?: string; volume?: string; sector?: string; industry?: string };
 type CachedQuick = { history: NonNullable<Snapshot['history']>; financials: Record<string, number>; provenance: Record<string, Provenance>; issues: string[] };
 
@@ -15,7 +15,7 @@ export const quickSymbols = Object.keys(quickCache.symbols);
 const browserAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124 Safari/537.36';
 const secAgent = 'SmallCapRadar/2.1 research-contact:yousef-hamda@users.noreply.github.com';
 const submissionsUrlFor = (cik: number|string) => `https://data.sec.gov/submissions/CIK${String(cik).padStart(10, '0')}.json`;
-const numeric = (value: unknown) => { const parsed = Number(String(value ?? '').replace(/[$,%+,]/g, '').trim()); return Number.isFinite(parsed) ? parsed : null };
+export const numeric = (value: unknown) => { if(typeof value!=='number'&&typeof value!=='string')return null;const text=String(value).replace(/[$,%+,]/g,'').trim();if(!text)return null;const parsed=Number(text);return Number.isFinite(parsed)?parsed:null; };
 export const yahooPercentAsRatio = (value: unknown) => Number.isFinite(value) ? Number(value) / 100 : undefined;
 const responseCache = new Map<string, { expiresAt: number; value: unknown }>();
 const inflight = new Map<string, Promise<unknown>>();
@@ -53,7 +53,8 @@ export async function fetchJson(url: string, timeoutMs = 8_000, ttlMs = 30_000) 
         lastError = Error(`${new URL(url).hostname}: HTTP ${response.status}`);
         if (![408, 425, 429, 500, 502, 503, 504].includes(response.status)) break;
         const retryAfter = Number(response.headers.get('retry-after') || 0);
-        await wait(Math.max(retryAfter * 1000, 250 * 2 ** attempt));
+        if(retryAfter>5)throw Error(`${new URL(url).hostname}: rate limited; retry after ${retryAfter}s`);
+        await wait(Math.min(5000,Math.max(retryAfter * 1000, 250 * 2 ** attempt)));
       } catch (error) {
         lastError = error;
         if (attempt < 2) await wait(250 * 2 ** attempt);
@@ -131,6 +132,8 @@ async function enrichWithYahooProfile(snapshot: Snapshot, symbol: string, now: s
   const latestEarnings = earningsHistory.at(-1)?.quarter?.fmt;
   if (latestEarnings) snapshot.lastEarnings = latestEarnings;
   if (snapshot.surprises?.length) { const latest = snapshot.surprises.at(-1)?.surprisePct; snapshot.lastEarningsStatus = latest == null ? 'غير معروف' : latest >= 0 ? 'إيجابي' : 'سلبي'; }
+  const profileEvidence:Provenance={source:'Yahoo Finance quoteSummary',url:`https://finance.yahoo.com/quote/${encodeURIComponent(symbol)}/`,periodEnd:now.slice(0,10),availableAt:now,retrievedAt:now,confidence:'medium'};
+  for(const key of ['description','sector','industry','employees','targetMean','targetLow','targetHigh','analystCount','nextEarnings','lastEarnings','surprises'] as const)if(snapshot[key]!=null&&profile)snapshot.provenance[key]={...profileEvidence,tag:key};
   return snapshot;
 }
 
@@ -160,6 +163,7 @@ async function yahooBulkQuotes(companies: Company[]): Promise<Company[]> {
         quoteSource: 'Yahoo bulk quote live',
         quoteAvailableAt: new Date().toISOString(),
         ...(Number.isFinite(quote.regularMarketPrice) ? { price: quote.regularMarketPrice } : {}),
+        ...(Number.isFinite(quote.regularMarketChangePercent) ? {dailyChange:quote.regularMarketChangePercent/100}:{}),
         ...(Number.isFinite(quote.marketCap) ? { marketCap: quote.marketCap } : {}),
         ...(Number.isFinite(quote.regularMarketVolume) ? { volume: quote.regularMarketVolume } : {}),
         ...(Number.isFinite(quote.averageDailyVolume10Day) ? { averageVolume10d: quote.averageDailyVolume10Day } : {}),
@@ -184,15 +188,21 @@ function isoDate(date: string) { const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exe
 function dateOffset(iso: string, days: number) { const date = new Date(iso); date.setUTCDate(date.getUTCDate() + days); return date.toISOString().slice(0, 10) }
 function commonSecurity(name: string) { return !NON_TRADABLE_NAME.test(name) }
 
-export async function historicalMarketData(symbol: string, asOf = new Date().toISOString()) {
+export async function historicalMarketData(symbol: string, asOf = new Date().toISOString(), days = 1900) {
   const cached = (quickCache.symbols as Record<string, CachedQuick>)[symbol];
-  const to = asOf.slice(0, 10), from = dateOffset(asOf, -1900);
-  if (cached?.history?.length) return { url: 'https://api.nasdaq.com/api/quote', history: cached.history.filter(row => row.date <= to) };
+  const to = asOf.slice(0, 10), from = dateOffset(asOf, -days);
   const url = `https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/historical?assetclass=stocks&fromdate=${from}&todate=${to}&limit=5000`;
-  const payload = await fetchJson(url) as { data?: { tradesTable?: { rows?: Array<Record<string, string>> } } };
+  let payload: { data?: { tradesTable?: { rows?: Array<Record<string, string>> } } };
+  try { payload = await fetchJson(url,6000,300_000) as typeof payload; }
+  catch(error) {
+   if(!cached?.history?.length)throw error;
+   recordProviderIssue(`${symbol}: historical API unavailable; dated bundled history fallback`);
+   return {url,history:cached.history.filter(row=>row.date>=from&&row.date<=to),source:'Nasdaq historical · bundled dated fallback',retrievedAt:quickCache.generatedAt,availableAt:quickCache.generatedAt};
+  }
   const history = (payload.data?.tradesTable?.rows ?? []).map((row) => ({ date: isoDate(row.date), close: numeric(row.close), open: numeric(row.open), high: numeric(row.high), low: numeric(row.low), volume: numeric(row.volume) }))
-    .filter((row) => row.date && row.close != null && row.close > 0 && row.low != null && row.low > 0).sort((a, b) => a.date.localeCompare(b.date));
-  return { url, history };
+    .filter((row) => row.date && row.date<=to && row.date>=from && row.close != null && row.close > 0 && row.low != null && row.low > 0).sort((a, b) => a.date.localeCompare(b.date));
+  if(!history.length)throw Error(`${symbol}: no historical sessions returned`);
+  return { url, history, source:'Nasdaq historical API',retrievedAt:asOf,availableAt:asOf };
 }
 
 async function fetchInsiderPurchases(cik: number) {
@@ -229,18 +239,20 @@ async function fetchInsiderPurchases(cik: number) {
 
 export async function companySnapshot(company: Company): Promise<Snapshot> {
   const now = new Date().toISOString(), symbol = company.ticker, cik = String(company.cik).padStart(10, '0'), issues: string[] = [];
-  let history: NonNullable<Snapshot['history']> = [], historyUrl = NASDAQ_SCREENER;
+  let history: NonNullable<Snapshot['history']> = [], historyUrl = NASDAQ_SCREENER,historySource='Nasdaq screener · bundled dated fallback',historyRetrievedAt=bundledUniverse.generatedAt;
   try {
-    const result = await historicalMarketData(symbol, now); historyUrl = result.url;
+    const result = await historicalMarketData(symbol, now); historyUrl = result.url;historySource=result.source;historyRetrievedAt=result.retrievedAt;
     history = result.history.map((row) => ({ date: row.date, close: row.close!, open: row.open ?? undefined, high: row.high ?? undefined, low: row.low ?? undefined, volume: row.volume ?? undefined }));
   } catch (error) { issues.push(`تعذّر تحميل تاريخ Nasdaq: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`) }
 
   const last = history.at(-1), quoteDate = last?.date ?? bundledUniverse.generatedAt.slice(0, 10), quoteAvailableAt = last ? `${last.date}T21:00:00.000Z` : bundledUniverse.generatedAt;
-  const quoteEvidence: Provenance = { source: last ? 'Nasdaq Historical (official)' : 'Nasdaq screener snapshot (official)', url: historyUrl, periodEnd: quoteDate, availableAt: quoteAvailableAt > now ? now : quoteAvailableAt, retrievedAt: now, currency: 'USD', confidence: last ? 'high' : 'medium' };
+  const quoteEvidence: Provenance = { source: historySource, url: historyUrl, periodEnd: quoteDate, availableAt: quoteAvailableAt > now ? now : quoteAvailableAt, retrievedAt: historyRetrievedAt, currency: 'USD', confidence: historySource.includes('fallback')?'low':'medium' };
   const price = last?.close ?? company.price ?? null;
   const snapshot: Snapshot = { symbol, name: company.name, description: 'الوصف غير متاح من مصدر موثق لهذه اللقطة.', asOf: now, exchange: company.exchange, sector: company.sector, industry: company.industry, securityType: commonSecurity(company.name) ? 'common' : 'unknown', price, marketCap: company.marketCap ?? null, confidence: 'C', deathSpiral: 'unknown', provenance: {}, history, dataIssues: issues, research: { financials: false, valuation: false, analysts: false, sector: !!company.sector } };
 
   if (price != null) snapshot.provenance.price = quoteEvidence;
+  if(history.length>1&&history.at(-2)!.close>0){snapshot.dailyChange=history.at(-1)!.close/history.at(-2)!.close-1;snapshot.provenance.dailyChange={...quoteEvidence,tag:'last close / previous close - 1'};}
+  if(history.length)snapshot.provenance.history=quoteEvidence;
   if (snapshot.marketCap != null) snapshot.provenance.marketCap = { source: 'Nasdaq stock screener (official)', url: NASDAQ_SCREENER, periodEnd: bundledUniverse.generatedAt.slice(0, 10), availableAt: bundledUniverse.generatedAt, retrievedAt: now, currency: 'USD', confidence: 'medium' };
   const summaryPromise = fetchJson(`https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/summary?assetclass=stocks`, 8_000).catch(() => null) as Promise<any>;
   const newsPromise = fetch(`https://feeds.finance.yahoo.com/rss/2.0/headline?s=${encodeURIComponent(symbol)}&region=US&lang=en-US`, { headers: { 'User-Agent': browserAgent, Accept: 'application/rss+xml,text/xml' }, signal: AbortSignal.timeout(8_000) }).then(r => r.ok ? r.text() : '').catch(() => '');
@@ -249,7 +261,7 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
   const summary = summaryResult?.data?.summaryData ?? {};
   const summaryValue = (key: string) => String(summary[key]?.value ?? '').trim();
   const target = numeric(summaryValue('OneYrTarget'));
-  if (target != null) { snapshot.analystTarget = target; snapshot.targetMean = target; snapshot.provenance.analystTarget = { source: 'Nasdaq quote summary (official)', periodEnd: now.slice(0, 10), availableAt: now, retrievedAt: now, currency: 'USD', confidence: 'medium' }; }
+  if (target != null) { snapshot.analystTarget = target; snapshot.provenance.analystTarget = { source: 'Nasdaq quote summary (official) · OneYrTarget, not a verified mean', periodEnd: now.slice(0, 10), availableAt: now, retrievedAt: now, currency: 'USD', confidence: 'medium' }; }
   const range = summaryValue('FiftTwoWeekHighLow').match(/\$?([\d.]+)\s*\/\s*\$?([\d.]+)/);
   if (range) { snapshot.high52w ??= Number(range[1]); snapshot.low52w ??= Number(range[2]); }
   const summarySector = summaryValue('Sector'), summaryIndustry = summaryValue('Industry');

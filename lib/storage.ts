@@ -32,7 +32,7 @@ export async function ensureSchema(){
  return schemaPromise;
 }
 export const currentHash=()=>`${specHash('core')}:${specHash('bounce')}`;
-export async function readState(options:{strategy?:'core'|'bounce'|'favorites';limit?:number;offset?:number}={}){await ensureSchema();const d=db();const active=await d.prepare("SELECT * FROM strategy_runs ORDER BY created_at DESC LIMIT 1").first();
+export async function readState(options:{strategy?:'core'|'bounce'|'favorites';limit?:number;offset?:number;owner?:string;query?:string}={}){await ensureSchema();const d=db();const active=await d.prepare("SELECT * FROM strategy_runs ORDER BY created_at DESC LIMIT 1").first();
  // A quick sample may be newer than a full scan. It must not silently replace
  // the user's main result set; prefer the newest full-market snapshot whenever
  // one has produced rows, then fall back to the newest available run.
@@ -40,23 +40,25 @@ export async function readState(options:{strategy?:'core'|'bounce'|'favorites';l
  // result set with its still-enriching (and therefore often empty) rows.
  // Prefer the newest completed/partial market run; only fall back to running
  // when no finished result exists yet (first-ever scan).
- const finished=await d.prepare("SELECT * FROM strategy_runs WHERE status IN ('complete','partial') AND processed>0 AND strategy_hash=? ORDER BY CASE WHEN source LIKE '%· full' THEN 0 ELSE 1 END, created_at DESC LIMIT 1").bind(currentHash()).first();
- const running=await d.prepare("SELECT * FROM strategy_runs WHERE status='running' AND processed>0 AND strategy_hash=? ORDER BY CASE WHEN source LIKE '%· full' THEN 0 ELSE 1 END, created_at DESC LIMIT 1").bind(currentHash()).first();
- const fallback=finished||running?null:await d.prepare("SELECT * FROM strategy_runs WHERE status IN ('complete','partial') AND processed>0 ORDER BY CASE WHEN source LIKE '%· full' THEN 0 ELSE 1 END, created_at DESC LIMIT 1").first();
+ const finished=await d.prepare("SELECT * FROM strategy_runs r WHERE status IN ('complete','partial') AND (stage>=13 OR source='import') AND EXISTS(SELECT 1 FROM fundamental_snapshots s WHERE s.run_id=r.id) AND strategy_hash=? ORDER BY CASE WHEN source LIKE '%· full' THEN 0 ELSE 1 END, CASE WHEN status='complete' THEN 0 ELSE 1 END, created_at DESC LIMIT 1").bind(currentHash()).first();
+ const running=await d.prepare("SELECT * FROM strategy_runs WHERE status='running' AND processed>0 AND strategy_hash=? ORDER BY CASE WHEN source LIKE '%· full' THEN 0 ELSE 1 END, CASE WHEN status='complete' THEN 0 ELSE 1 END, created_at DESC LIMIT 1").bind(currentHash()).first();
+ const fallback=finished||running?null:await d.prepare("SELECT * FROM strategy_runs r WHERE status IN ('complete','partial') AND (stage>=13 OR source='import') AND EXISTS(SELECT 1 FROM fundamental_snapshots s WHERE s.run_id=r.id) ORDER BY CASE WHEN source LIKE '%· full' THEN 0 ELSE 1 END, CASE WHEN status='complete' THEN 0 ELSE 1 END, created_at DESC LIMIT 1").first();
  const latest=finished||running||fallback;
  const currentData=!!latest&&latest.strategy_hash===currentHash();
  const strategy=options.strategy==='core'||options.strategy==='favorites'?options.strategy:'bounce';
  const limit=Math.max(1,Math.min(250,Math.floor(options.limit??150)));
  const offset=Math.max(0,Math.floor(options.offset??0));
- const fav=(await d.prepare('SELECT symbol FROM watchlist ORDER BY created_at DESC').all()).results as any[];
+ const fav=options.owner?(await d.prepare('SELECT symbol,payload FROM personal_watchlist WHERE owner=? ORDER BY created_at DESC').bind(options.owner).all()).results as any[]:[];
  const statusSql=(key:'core'|'bounce',status:string)=>`SUM(CASE WHEN json_extract(evaluation, '$.${key}.screeningQualified') = ${status==='PASS'?1:0} THEN 1 ELSE 0 END)`;
  const summaryRow=currentData?await d.prepare(`SELECT COUNT(*) AS total, ${statusSql('core','PASS')} AS coreQualified, ${statusSql('bounce','PASS')} AS bounceQualified, SUM(CASE WHEN json_extract(evaluation, '$.core.status')='UNKNOWN' THEN 1 ELSE 0 END) AS coreUnknown, SUM(CASE WHEN json_extract(evaluation, '$.bounce.status')='UNKNOWN' THEN 1 ELSE 0 END) AS bounceUnknown, SUM(CASE WHEN json_extract(evaluation, '$.core.status')='FAIL' THEN 1 ELSE 0 END) AS coreFailed, SUM(CASE WHEN json_extract(evaluation, '$.bounce.status')='FAIL' THEN 1 ELSE 0 END) AS bounceFailed FROM fundamental_snapshots WHERE run_id=?`).bind(latest.id).first() as any: null;
  const expression=strategy==='core'?"json_extract(evaluation, '$.core.screeningQualified')=1":"json_extract(evaluation, '$.bounce.screeningQualified')=1";
  const favoriteSymbols=strategy==='favorites'?fav.map(row=>String(row.symbol)).filter(Boolean):[];
  const favoriteClause=favoriteSymbols.length?` OR symbol IN (${favoriteSymbols.map(()=>'?').join(',')})`:'';
- const query=latest?`SELECT payload,evaluation FROM fundamental_snapshots WHERE run_id=? AND (${strategy==='favorites'?'0=1':expression}${favoriteClause}) ORDER BY symbol LIMIT ? OFFSET ?`:null;
- const params=latest?[latest.id,...favoriteSymbols,limit,offset]:[];
- const rows=currentData&&query?(await d.prepare(query).bind(...params).all()).results:[];
+ const search=options.query?.trim().toLowerCase().slice(0,100)||'';
+ const query=latest?`SELECT payload,evaluation FROM fundamental_snapshots WHERE run_id=? AND (${strategy==='favorites'?'0=1':expression}${favoriteClause}) AND (?='' OR instr(lower(symbol),?)>0 OR instr(lower(json_extract(payload,'$.name')),?)>0) ORDER BY symbol LIMIT ? OFFSET ?`:null;
+ const params=latest?[latest.id,...favoriteSymbols,search,search,search,limit,offset]:[];
+ let rows=currentData&&query?(await d.prepare(query).bind(...params).all()).results:[];
+ if(strategy==='favorites') rows=fav.filter(r=>!search||`${r.symbol} ${JSON.parse(r.payload).name}`.toLowerCase().includes(search)).slice(offset,offset+limit).map(r=>{const s=JSON.parse(r.payload);return {payload:r.payload,evaluation:JSON.stringify({core:evaluateStrategy('core',s),bounce:evaluateStrategy('bounce',s)})}});
  const compact=(payload:string)=>{const parsed=JSON.parse(payload);delete parsed.history;return parsed};
  return {run:active?{...active,universe:undefined,retry_queue:undefined,retryPending:JSON.parse(active.retry_queue||'[]').length,stale:!currentData}:null,dataRunId:latest?.id,dataRun:latest?{...latest,universe:undefined,retry_queue:undefined,stale:!currentData}:null,snapshots:rows.map((r:any)=>compact(r.payload)),storedEvaluations:rows.map((r:any)=>JSON.parse(r.evaluation)),favorites:fav.map((r:any)=>r.symbol),summary:{total:Number(summaryRow?.total||0),coreQualified:Number(summaryRow?.coreQualified||0),bounceQualified:Number(summaryRow?.bounceQualified||0),coreUnknown:Number(summaryRow?.coreUnknown||0),bounceUnknown:Number(summaryRow?.bounceUnknown||0),coreFailed:Number(summaryRow?.coreFailed||0),bounceFailed:Number(summaryRow?.bounceFailed||0),stale:!currentData},page:{strategy,limit,offset,hasMore:rows.length===limit}};}
 export async function readAudit(){await ensureSchema();const d=db();const latest=await d.prepare("SELECT * FROM strategy_runs WHERE status IN ('complete','partial') ORDER BY created_at DESC LIMIT 1").first() as any;const logs=latest?(await d.prepare('SELECT stage,created_at,message FROM diag WHERE run_id=? ORDER BY created_at DESC LIMIT 500').bind(latest.id).all()).results:[];const state=await readState({strategy:'bounce',limit:1});return {strategyHash:currentHash(),run:state.run,dataRun:state.dataRun,summary:state.summary,favorites:state.favorites,logs};}

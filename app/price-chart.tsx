@@ -1,50 +1,34 @@
 'use client';
+import {useId,useMemo,useState} from 'react';
+import type {Snapshot} from '@/lib/engine';
+import {Tabs,TabsList,TabsTrigger} from '@/components/ui/tabs';
 
-import { useMemo, useState } from 'react';
-import type { Snapshot } from '@/lib/engine';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-
-const ranges: Record<string, number> = { '1D': 1, '1W': 7, '1M': 30, '6M': 183, '1Y': 365, '2Y': 730, '5Y': 1826 };
-const compact = (value: number) => new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
-
-export default function PriceChart({ snapshot, bounce }: { snapshot: Snapshot; bounce: boolean }) {
-  const [range, setRange] = useState('1Y');
-  const rows = useMemo(() => (snapshot.history || []).filter(row => Date.parse(row.date) >= Date.parse(snapshot.asOf) - ranges[range] * 86_400_000), [snapshot.history, snapshot.asOf, range]);
-  if (!rows.length) return <div className="chart-empty">لا تتوفر جلسات سعرية موثقة لهذه الفترة.</div>;
-
-  const overlays = bounce ? [
-    { label: 'MA30W', value: snapshot.ma30w ?? null, color: '#7c9ac1' },
-    { label: 'الهدف +20%', value: snapshot.price ? snapshot.price * 1.2 : null, color: '#65d4ad' },
-    { label: 'الوقف −15%', value: snapshot.price ? snapshot.price * 0.85 : null, color: '#e77d85' },
-  ] : [];
-  const values = rows.map(row => row.close);
-  const allValues = [...values, ...overlays.flatMap(item => item.value == null ? [] : [item.value])];
-  const low = Math.min(...allValues) * 0.96;
-  const high = Math.max(...allValues) * 1.04;
-  const x = (index: number) => 42 + index / Math.max(1, rows.length - 1) * 508;
-  const y = (value: number) => 166 - (value - low) / (high - low || 1) * 138;
-  const points = rows.map((row, index) => `${x(index)},${y(row.close)}`).join(' ');
-  const area = `42,166 ${points} 550,166`;
-  const maxVolume = Math.max(...rows.map(row => row.volume ?? 0), 1);
-  const first = rows[0].close;
-  const last = rows.at(-1)!.close;
-  const periodReturn = last / first - 1;
-
-  return <section className="price-chart-panel">
-    <div className="section-title">
-      <div><h3>السعر التاريخي</h3><small>{rows.at(-1)!.date} · {rows.length} جلسة</small></div>
-      <Tabs value={range} onValueChange={setRange}><TabsList>{Object.keys(ranges).map(key => <TabsTrigger key={key} value={key}>{key}</TabsTrigger>)}</TabsList></Tabs>
-    </div>
-    <div className="chart-change"><b className={periodReturn >= 0 ? 'up' : 'down'}>{periodReturn >= 0 ? '+' : ''}{(periodReturn * 100).toFixed(1)}%</b><span>خلال الفترة المختارة</span></div>
-    <svg viewBox="0 0 600 225" role="img" aria-label={`رسم أسعار ${snapshot.symbol} خلال ${range}`} className="price-chart">
-      <defs><linearGradient id={`area-${snapshot.symbol}`} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#4fc49c" stopOpacity=".25"/><stop offset="100%" stopColor="#4fc49c" stopOpacity="0"/></linearGradient></defs>
-      {[0, 1, 2, 3].map(index => <g key={index}><line x1="42" x2="550" y1={28 + index * 46} y2={28 + index * 46} stroke="#233440"/><text x="558" y={32 + index * 46} fontSize="10" fill="#718491">{(high - (high - low) * index / 3).toFixed(2)}</text></g>)}
-      {rows.map((row, index) => index % Math.max(1, Math.floor(rows.length / 80)) === 0 ? <rect key={row.date} x={x(index) - 1} y={194 - ((row.volume ?? 0) / maxVolume) * 20} width="2" height={((row.volume ?? 0) / maxVolume) * 20} fill="#36505f" opacity=".75"/> : null)}
-      {overlays.filter(item => item.value != null).map(item => <g key={item.label}><line x1="42" x2="550" y1={y(item.value!)} y2={y(item.value!)} stroke={item.color} strokeDasharray="5 5"/><text x="46" y={y(item.value!) - 5} fontSize="10" fill={item.color}>{item.label}</text></g>)}
-      <polygon points={area} fill={`url(#area-${snapshot.symbol})`}/><polyline points={points} fill="none" stroke="#65d4ad" strokeWidth="2.2" strokeLinejoin="round" strokeLinecap="round"/><circle cx={x(rows.length - 1)} cy={y(last)} r="3.5" fill="#65d4ad"/>
-      <text x="42" y="218" fontSize="10" fill="#718491">{rows[0].date}</text><text x="550" y="218" textAnchor="end" fontSize="10" fill="#718491">{rows.at(-1)!.date}</text>
-    </svg>
-    <div className="chart-foot"><span>أدنى ${low.toFixed(2)}</span><span>أعلى ${high.toFixed(2)}</span><span>حجم أقصى {compact(maxVolume)}</span></div>
-    {snapshot.insiderPurchases?.length ? <div className="insider-panel"><h4>مشتريات المطلعين — SEC Form 4 P</h4>{snapshot.insiderPurchases.slice(0, 6).map(purchase => <a href={purchase.source} target="_blank" rel="noreferrer" key={`${purchase.owner}-${purchase.date}-${purchase.value}`}><span><b>{purchase.owner}</b><small>{purchase.date} · {purchase.shares.toLocaleString('en-US')} سهم</small></span><strong>${compact(purchase.value)}</strong></a>)}</div> : null}
-  </section>;
+export const chartRanges={'1D':{days:1,label:'يوم'},'1W':{days:7,label:'أسبوع'},'1M':{days:30,label:'شهر'},'6M':{days:183,label:'6 أشهر'},'1Y':{days:365,label:'سنة'},'2Y':{days:730,label:'سنتان'},'5Y':{days:1900,label:'5 سنوات'}};
+type Range=keyof typeof chartRanges;
+export default function PriceChart({snapshot,loading=false}:{snapshot:Snapshot;loading?:boolean}){
+ const [range,setRange]=useState<Range>('1Y'),[point,setPoint]=useState<number|null>(null),[observedAt]=useState(()=>Date.now()),id=useId().replaceAll(':','');
+ const rows=useMemo(()=>{
+  const end=Math.min(Date.parse(snapshot.asOf),observedAt);
+  const unique=new Map((snapshot.history||[]).filter(r=>Number.isFinite(r.close)&&r.close>0&&Number.isFinite(Date.parse(r.date))&&Date.parse(r.date)<=end).map(r=>[r.date,r]));
+  const all=[...unique.values()].sort((a,b)=>a.date.localeCompare(b.date));
+  return all.filter(r=>Date.parse(r.date)>=end-chartRanges[range].days*86_400_000);
+ },[snapshot.history,snapshot.asOf,range,observedAt]);
+ const low=rows.length?Math.min(...rows.map(r=>r.close)):0,high=rows.length?Math.max(...rows.map(r=>r.close)):0;
+ const pad=(high-low||high*.02||1)*.1,y=(n:number)=>145-(n-low+pad)/(high-low+pad*2)*125,x=(i:number)=>12+i/Math.max(1,rows.length-1)*576;
+ const points=rows.map((r,i)=>`${x(i)},${y(r.close)}`).join(' '),change=rows.length>1?rows.at(-1)!.close/rows[0].close-1:null;
+ const color=change!=null&&change<0?'#fb7185':'#00c896';
+ const chosen=point!=null?rows[Math.min(point,rows.length-1)]:null;
+ return <section className="chart-section"><div className="section-line"><h3>السعر</h3><span className={change!=null&&change<0?'fail':'pass'} dir="ltr">{change==null?'—':`${change>=0?'+':''}${(change*100).toFixed(2)}%`}</span></div>
+  <div className="chart-frame">{loading&&!rows.length?<p role="status">جارٍ تحميل التاريخ السعري…</p>:rows.length<2?<p className="muted">{range==='1D'?'تاريخ التداول اللحظي غير متاح؛ اختر فترة أطول.':'لا تتوفر جلستان موثقتان على الأقل لهذه الفترة.'}</p>:<>
+   <output className="chart-tooltip" dir="ltr">{chosen?`${chosen.date} · $${chosen.close.toFixed(2)}`:`${rows.at(-1)!.date} · $${rows.at(-1)!.close.toFixed(2)}`}</output>
+   <svg className="price-chart" viewBox="0 0 600 165" role="img" aria-label={`رسم سعر ${snapshot.symbol} — ${chartRanges[range].label}`} tabIndex={0} onKeyDown={e=>{if(e.key==='ArrowRight'||e.key==='ArrowLeft'){e.preventDefault();setPoint(p=>Math.max(0,Math.min(rows.length-1,(p??rows.length-1)+(e.key==='ArrowRight'?1:-1))))}}} onPointerMove={e=>{const b=e.currentTarget.getBoundingClientRect();setPoint(Math.round(Math.max(0,Math.min(1,(e.clientX-b.left)/b.width))*(rows.length-1)))}} onPointerLeave={()=>setPoint(null)}>
+    <defs><linearGradient id={id} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity=".25"/><stop offset="100%" stopColor={color} stopOpacity="0"/></linearGradient></defs>
+    <line x1="12" x2="588" y1={y(rows[0].close)} y2={y(rows[0].close)} stroke="#71717a" strokeDasharray="5 5"/>
+    <polygon points={`12,160 ${points} 588,160`} fill={`url(#${id})`}/><polyline points={points} stroke={color} strokeWidth="2.5" fill="none" strokeLinejoin="round" strokeLinecap="round"/>
+    {chosen&&<g><line x1={x(point!)} x2={x(point!)} y1="10" y2="160" stroke="#71717a" strokeDasharray="3 3"/><circle cx={x(point!)} cy={y(chosen.close)} r="4" fill={color}/></g>}
+   </svg><div className="chart-dates" dir="ltr"><span>{rows[0].date.slice(5)}</span><span dir="rtl">أدنى {low.toFixed(2)} · أعلى {high.toFixed(2)}</span><span>{rows.at(-1)!.date.slice(5)}</span></div>
+  </>}</div>
+  <Tabs value={range} onValueChange={v=>{setRange(v as Range);setPoint(null)}} dir="rtl" className="chart-tabs"><TabsList aria-label="فترة الرسم السعري">{(Object.keys(chartRanges) as Range[]).map(k=><TabsTrigger key={k} value={k}>{chartRanges[k].label}</TabsTrigger>)}</TabsList></Tabs>
+  <small className="muted">أسعار إغلاق يومية موثقة؛ المصدر والتوقيت ضمن سجل المصادر. حرّك المؤشر أو استخدم مفاتيح الأسهم لعرض السعر والتاريخ.</small>
+ </section>;
 }
