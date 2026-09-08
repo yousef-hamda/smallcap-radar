@@ -288,7 +288,15 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
   const factsUrl = `https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`;
   let facts: Record<string, unknown>;
   try { facts = ((await fetchJson(factsUrl)) as { facts: Record<string, unknown> }).facts }
-  catch (error) { snapshot.dataIssues?.push(`تعذّر جلب البيانات المالية من SEC: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`); return snapshot }
+  catch (error) {
+    snapshot.dataIssues?.push(`تعذّر جلب البيانات المالية من SEC: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`);
+    // SEC failure must not short-circuit independent deep-profile sources.
+    // Keep missing financials as UNKNOWN while still attempting profile,
+    // earnings and analyst data on demand.
+    await enrichWithYahooProfile(snapshot, symbol, now);
+    snapshot.research = { financials: false, valuation: snapshot.evSales != null || snapshot.ps != null, analysts: snapshot.analystTarget != null, sector: !!snapshot.sector };
+    return snapshot;
+  }
 
   const shares = latestInstant(observations(facts, ['EntityCommonStockSharesOutstanding', 'CommonStockSharesOutstanding'], 'shares'), now);
   if (shares && price && Date.parse(now) - Date.parse(shares.end) < 120 * 86_400_000) {
