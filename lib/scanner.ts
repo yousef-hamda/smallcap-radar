@@ -33,7 +33,10 @@ function historyCandidate(snapshot: any) {
   // gates. The exact 20-session dollar-volume median is then verified from
   // bars; a quote average is never used as a PASS substitute.
   const evaluation = evaluateStrategy('core', snapshot);
-  return ['security', 'cap', 'revenue', 'valuation', 'profitability'].every(id => evaluation.checks.find(check => check.id === id)?.status === 'PASS');
+  return ['security', 'cap', 'revenue', 'valuation', 'profitability'].every(id => evaluation.checks.find(check => check.id === id)?.status === 'PASS')
+    && Number.isFinite(snapshot.averageVolume10d)
+    && Number.isFinite(snapshot.price)
+    && snapshot.averageVolume10d * snapshot.price >= SPECS.core.liquidity;
 }
 
 export const publicRun = (run: any) => ({

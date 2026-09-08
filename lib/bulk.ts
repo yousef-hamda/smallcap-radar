@@ -147,6 +147,7 @@ export function preliminarySnapshot(company: Company, facts: BulkFundamentals | 
   const snapshot: Snapshot = {
     symbol: company.ticker,
     name: company.name,
+    description: 'الوصف غير متاح من مصدر موثق لهذه اللقطة.',
     asOf: retrievedAt,
     exchange: company.exchange,
     securityType: 'common',
