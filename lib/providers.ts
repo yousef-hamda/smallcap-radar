@@ -96,6 +96,44 @@ async function yahooAuth() {
   return { cookie, crumb };
 }
 
+async function yahooCompanyProfile(symbol: string) {
+  try {
+    const auth = await yahooAuth();
+    const modules = 'assetProfile,calendarEvents,earningsHistory,earningsTrend,financialData';
+    const url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(symbol)}?modules=${modules}&crumb=${encodeURIComponent(auth.crumb)}`;
+    const response = await fetch(url, { headers: { 'User-Agent': browserAgent, Cookie: auth.cookie, Accept: 'application/json' }, signal: AbortSignal.timeout(10_000) });
+    if (!response.ok) throw Error(`Yahoo profile HTTP ${response.status}`);
+    return (await response.json() as any)?.quoteSummary?.result?.[0] ?? null;
+  } catch (error) {
+    recordProviderIssue(`Yahoo profile ${symbol}: ${error instanceof Error ? error.message : 'provider request failed'}`);
+    return null;
+  }
+}
+
+async function enrichWithYahooProfile(snapshot: Snapshot, symbol: string, now: string) {
+  const profile = await yahooCompanyProfile(symbol);
+  const asset = profile?.assetProfile;
+  if (asset?.longBusinessSummary) snapshot.description = asset.longBusinessSummary;
+  if (asset?.sector) snapshot.sector = asset.sector;
+  if (asset?.industry) snapshot.industry = asset.industry;
+  if (Number.isFinite(asset?.fullTimeEmployees)) snapshot.employees = asset.fullTimeEmployees;
+  const financialData = profile?.financialData;
+  const profileTarget = financialData?.targetMeanPrice?.raw;
+  if (Number.isFinite(profileTarget)) { snapshot.targetMean = profileTarget; snapshot.analystTarget = profileTarget; snapshot.provenance.analystTarget = { source: 'Yahoo Finance quoteSummary financialData', url: `https://finance.yahoo.com/quote/${encodeURIComponent(symbol)}/analysis`, periodEnd: now.slice(0, 10), availableAt: now, retrievedAt: now, currency: 'USD', confidence: 'medium' }; }
+  for (const [field, key] of [['targetLow','targetLowPrice'],['targetHigh','targetHighPrice'],['analystCount','numberOfAnalystOpinions']] as const) {
+    const value = profile?.financialData?.[key]?.raw;
+    if (Number.isFinite(value)) (snapshot as any)[field] = value;
+  }
+  const earningsHistory = (profile?.earningsHistory?.history ?? []).filter((row:any) => row?.quarter?.fmt || row?.quarter?.raw).slice(-6);
+  snapshot.surprises = earningsHistory.map((row:any) => ({ quarter: row.quarter?.fmt || String(row.quarter?.raw || '').slice(0,10), surprisePct: row.surprisePercent?.raw == null ? null : row.surprisePercent.raw * 100, actual: row.epsActual?.raw, estimate: row.epsEstimate?.raw }));
+  const next = profile?.calendarEvents?.earnings?.earningsDate?.[0]?.fmt;
+  if (next) snapshot.nextEarnings = next;
+  const latestEarnings = earningsHistory.at(-1)?.quarter?.fmt;
+  if (latestEarnings) snapshot.lastEarnings = latestEarnings;
+  if (snapshot.surprises?.length) { const latest = snapshot.surprises.at(-1)?.surprisePct; snapshot.lastEarningsStatus = latest == null ? 'غير معروف' : latest >= 0 ? 'إيجابي' : 'سلبي'; }
+  return snapshot;
+}
+
 async function yahooBulkQuotes(companies: Company[]): Promise<Company[]> {
   try {
     const auth = await yahooAuth();
@@ -211,7 +249,9 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
   const summary = summaryResult?.data?.summaryData ?? {};
   const summaryValue = (key: string) => String(summary[key]?.value ?? '').trim();
   const target = numeric(summaryValue('OneYrTarget'));
-  if (target != null) { snapshot.analystTarget = target; snapshot.provenance.analystTarget = { source: 'Nasdaq quote summary (official)', periodEnd: now.slice(0, 10), availableAt: now, retrievedAt: now, currency: 'USD', confidence: 'medium' }; }
+  if (target != null) { snapshot.analystTarget = target; snapshot.targetMean = target; snapshot.provenance.analystTarget = { source: 'Nasdaq quote summary (official)', periodEnd: now.slice(0, 10), availableAt: now, retrievedAt: now, currency: 'USD', confidence: 'medium' }; }
+  const range = summaryValue('FiftTwoWeekHighLow').match(/\$?([\d.]+)\s*\/\s*\$?([\d.]+)/);
+  if (range) { snapshot.high52w ??= Number(range[1]); snapshot.low52w ??= Number(range[2]); }
   const summarySector = summaryValue('Sector'), summaryIndustry = summaryValue('Industry');
   if (summarySector) snapshot.sector = summarySector;
   if (summaryIndustry) snapshot.industry = summaryIndustry;
@@ -240,7 +280,8 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
       snapshot.ps = snapshot.marketCap / snapshot.revenue;
       snapshot.provenance.ps = { ...snapshot.provenance.revenue, source: 'Derived: market cap / SEC cached revenue', availableAt: [snapshot.provenance.marketCap.availableAt, snapshot.provenance.revenue.availableAt].sort().at(-1)!, confidence: 'low' };
     }
-    snapshot.research = { financials: !!snapshot.revenue, valuation: false, analysts: snapshot.analystTarget != null, sector: !!snapshot.sector };
+    await enrichWithYahooProfile(snapshot, symbol, now);
+    snapshot.research = { financials: !!snapshot.revenue, valuation: snapshot.evSales != null || snapshot.ps != null, analysts: snapshot.analystTarget != null, sector: !!snapshot.sector };
     return snapshot;
   }
 
@@ -254,6 +295,11 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
     snapshot.marketCap = shares.val * price;
     snapshot.provenance.marketCap = { ...provenance(shares, factsUrl, now), source: 'Derived: SEC reported shares × Nasdaq price', availableAt: [provenance(shares, factsUrl, now).availableAt, quoteEvidence.availableAt].sort().at(-1)!, confidence: 'low' };
   }
+  const revenueRows = observations(facts, REVENUE_TAGS).filter(row => Date.parse(row.filed+'T23:59:59Z') <= Date.parse(now));
+  const quarterly = revenueRows.filter(row => row.start && ['10-Q','10-Q/A'].includes(row.form)).map(row => ({ ...row, days: (Date.parse(row.end)-Date.parse(row.start!))/864e5 })).filter(row => row.days >= 70 && row.days <= 115).sort((a,b) => a.end.localeCompare(b.end) || b.filed.localeCompare(a.filed));
+  const seenQuarters = new Set<string>();
+  snapshot.revenueTrend = quarterly.reverse().filter(row => { if (seenQuarters.has(row.end)) return false; seenQuarters.add(row.end); return true; }).slice(0, 6).reverse().map(row => ({ quarter: row.end.slice(0, 7), value: row.val, periodEnd: row.end }));
+  if (snapshot.revenueTrend.length > 0) snapshot.provenance.revenueTrend = { source: 'SEC EDGAR XBRL quarterly revenue', url: factsUrl, periodEnd: snapshot.revenueTrend.at(-1)!.periodEnd || now.slice(0, 10), availableAt: now, retrievedAt: now, currency: 'USD', tag: 'quarterly revenue', confidence: 'high' };
   for (const [key, tags] of Object.entries({ revenue: REVENUE_TAGS, netIncome: ['NetIncomeLoss', 'ProfitLoss'], ocf: ['NetCashProvidedByUsedInOperatingActivities'], capex: ['PaymentsToAcquirePropertyPlantAndEquipment'] })) {
     const annual = trailingAnnual(observations(facts, tags), now);
     if (annual) { (snapshot as unknown as Record<string, unknown>)[key] = annual.val; snapshot.provenance[key] = provenance(annual, factsUrl, now); if (['20-F', '40-F'].includes(annual.form)) snapshot.foreignFiler = true }
@@ -268,6 +314,7 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
     snapshot.ps = snapshot.marketCap / snapshot.revenue;
     snapshot.provenance.ps = { ...snapshot.provenance.revenue, source: 'Derived: market cap / SEC revenue', availableAt: [snapshot.provenance.marketCap.availableAt, snapshot.provenance.revenue.availableAt].sort().at(-1)!, confidence: 'low' };
   }
+  await enrichWithYahooProfile(snapshot, symbol, now);
   snapshot.research = { financials: !!snapshot.revenue, valuation: snapshot.evSales != null || snapshot.ps != null, analysts: snapshot.analystTarget != null, sector: !!snapshot.sector };
   return snapshot;
 }

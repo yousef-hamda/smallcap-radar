@@ -6,7 +6,7 @@ import { NON_TRADABLE_NAME, SPECS } from './strategy-spec';
 import { evaluateStrategy } from './engine';
 
 const BATCH_SIZE = 12;
-const HISTORY_BATCH_SIZE = 24;
+const HISTORY_BATCH_SIZE = 48;
 const SCORE_BATCH_SIZE = 600;
 export const SCAN_SOURCE_VERSION = 'Bulk Quotes/SEC Frames v7';
 
@@ -20,10 +20,14 @@ function preliminaryCandidates(companies: any[]) {
 }
 
 function bounceHistoryCandidate(snapshot: any) {
-  // Bulk quotes are not guaranteed to contain 52-week fields (Yahoo can be
-  // rate-limited). History enrichment therefore runs for every small-cap
-  // common stock and computes the missing values from the same dated bars.
-  return snapshot?.securityType === 'common' && Number(snapshot.marketCap) >= SPECS.bounce.marketCap.min && Number(snapshot.marketCap) <= SPECS.bounce.marketCap.max && Number(snapshot.price) > 0;
+  if (snapshot?.securityType !== 'common' || Number(snapshot.marketCap) < SPECS.bounce.marketCap.min || Number(snapshot.marketCap) > SPECS.bounce.marketCap.max || Number(snapshot.price) <= 0) return false;
+  // Bulk quotes can disprove many bounce candidates without an expensive
+  // history request. History is reserved for rows that still need MA30W and
+  // the exact 20-session median dollar-volume verification.
+  if (Number.isFinite(snapshot.return12m) && snapshot.return12m >= SPECS.bounce.returnMax) return false;
+  if (Number.isFinite(snapshot.low52w) && snapshot.price < snapshot.low52w * (1 + SPECS.bounce.lowDistanceMin)) return false;
+  if (Number.isFinite(snapshot.averageVolume10d) && snapshot.averageVolume10d * snapshot.price < SPECS.bounce.liquidity) return false;
+  return true;
 }
 
 function historyCandidate(snapshot: any) {

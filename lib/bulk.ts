@@ -155,6 +155,9 @@ export function preliminarySnapshot(company: Company, facts: BulkFundamentals | 
     marketCap: company.marketCap ?? null,
     volume: company.volume ?? null,
     averageVolume10d: company.averageVolume10d ?? null,
+    return12m: company.return52w ?? null,
+    low52w: company.low52w ?? null,
+    high52w: company.high52w ?? null,
     confidence: 'C',
     deathSpiral: 'unknown',
     provenance: {},
@@ -163,8 +166,9 @@ export function preliminarySnapshot(company: Company, facts: BulkFundamentals | 
   };
   if (snapshot.price != null) snapshot.provenance.price = quote;
   if (snapshot.marketCap != null) snapshot.provenance.marketCap = quote;
-  if (company.return52w != null) { snapshot.return12m = company.return52w; snapshot.provenance.return12m = quote }
-  if (company.low52w != null) { snapshot.low52w = company.low52w; snapshot.provenance.low52w = quote }
+  if (company.return52w != null) snapshot.provenance.return12m = quote
+  if (company.low52w != null) snapshot.provenance.low52w = quote
+  if (company.high52w != null) snapshot.provenance.high52w = quote
   if (!facts) { snapshot.dataIssues?.push('لا توجد تغطية SEC Frames لهذه الشركة في الفترة الجماعية.'); snapshot.dataIssues?.push('وسيط السيولة لـ20 يومًا لا يُستنتج من متوسط 10 أيام؛ يحتاج تاريخًا فعليًا قبل PASS.'); return snapshot }
   snapshot.dataIssues?.push('وسيط السيولة لـ20 يومًا لا يُستنتج من متوسط 10 أيام؛ يحتاج تاريخًا فعليًا قبل PASS.');
 
