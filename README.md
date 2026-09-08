@@ -1,5 +1,7 @@
 # Small-Cap Radar V2
 
+**Deployment update:** version 60 is published at the user's explicit request on 2026-09-08. [Release record](docs/DEPLOYMENT_60.md). Browser acceptance remains pending; the source-checkpoint note below records the earlier state.
+
 **2026-09-08 source checkpoint — NOT DEPLOYED.** The interface has been rebuilt from the supplied ten screenshots and the observed legacy UI. Scan-stage completion, operational progress and private watchlists have regression tests. New browser QA is blocked by the browser URL policy; publication is on hold under the user's acceptance gate. Read [the current evidence, changes and remaining gaps](docs/REBUILD_2026_09_08.md) before relying on older release notes below. Current production remains version 59.
 
 للدليل العربي الكامل الذي يغطي المنتج، المحرك، البيانات، الفحص الخلفي، الواجهة، الإشعارات، الاختبارات، النشر، والفجوات المتبقية، راجع [README_FULL_AR.md](docs/README_FULL_AR.md).
