@@ -5,8 +5,12 @@ import {simulateExit,expiryDate,pointInTime,firmHoldout,firmBootstrap,bonferroni
 import {trailingAnnual,insiderPurchases,latestInstant} from '../../.test-build/sec.mjs';
 import {preliminarySnapshot} from '../../.test-build/bulk.mjs';
 import {yahooPercentAsRatio} from '../../.test-build/providers.mjs';
+import {enrichFinancials} from '../../.test-build/financials.mjs';
+import {derivedEvidence} from '../../.test-build/evidence.mjs';
+import {parseYahooIntraday} from '../../.test-build/chart-data.mjs';
+import {parseOfficialDirectory} from '../../.test-build/directory.mjs';
 const base=fixtures[0];const gate=(s,id,strategy='core')=>evaluateStrategy(strategy,s).checks.find(c=>c.id===id).status;
-test('Core and legacy weight sums = 100',()=>{for(const s of ['core','legacy'])assert.equal(Object.values(SPECS[s].weights).reduce((a,b)=>a+b),100)});
+test('all published score weight sets sum to 100',()=>{for(const weights of [SPECS.core.weights,SPECS.legacy.weights,SPECS.bounce.ranking.weights])assert.equal(Object.values(weights).reduce((a,b)=>a+b),100)});
 test('inclusive Core market cap boundaries',()=>{for(const [cap,status] of [[24999999,'FAIL'],[25e6,'PASS'],[2e9,'PASS'],[2000000001,'FAIL']])assert.equal(gate({...base,marketCap:cap},'cap'),status)});
 test('Core liquidity and EV/S boundaries',()=>{assert.equal(gate({...base,medianDollarVolume20d:150000},'liquidity'),'PASS');assert.equal(gate({...base,medianDollarVolume20d:149999},'liquidity'),'FAIL');assert.equal(gate({...base,evSales:10},'valuation'),'PASS');assert.equal(gate({...base,evSales:10.001},'valuation'),'FAIL')});
 test('profitability OR and missing data semantics',()=>{assert.equal(gate({...base,netIncome:-1,fcf:1},'profitability'),'PASS');assert.equal(gate({...base,netIncome:null,fcf:-1},'profitability'),'UNKNOWN');assert.equal(gate({...base,netIncome:0,fcf:0},'profitability'),'FAIL')});
@@ -17,8 +21,9 @@ test('Bounce decline strict and size inclusive',()=>{assert.equal(gate({...base,
 test('Bounce low inclusive, MA and dilution strict',()=>{assert.equal(gate({...base,price:11,low52w:10},'low','bounce'),'PASS');assert.equal(gate({...base,price:10.5,ma30w:10},'reversal','bounce'),'FAIL');assert.equal(gate({...base,dilution:.25,shareCountRatio:1},'dilution','bounce'),'FAIL');assert.equal(gate({...base,splitAdjusted:false},'dilution','bounce'),'UNKNOWN')});
 test('Bounce dilution passes only after a stable share-count review',()=>{assert.equal(gate({...base,dilution:.10,shareCountRatio:1.08},'dilution','bounce'),'PASS');assert.equal(gate({...base,dilution:.10,shareCountRatio:2.1},'dilution','bounce'),'UNKNOWN')});
 test('Bounce operating liquidity threshold is explicit',()=>{assert.equal(gate({...base,medianDollarVolume20d:150000},'liquidity','bounce'),'PASS');assert.equal(gate({...base,medianDollarVolume20d:149999},'liquidity','bounce'),'FAIL');assert.equal(gate({...base,medianDollarVolume20d:null},'liquidity','bounce'),'UNKNOWN')});
+test('Bounce exposes one deterministic strict ranking out of 100 without rescuing failed gates',()=>{const accepted=evaluateStrategy('bounce',base);assert(accepted.score>=0&&accepted.score<=100);assert.equal(accepted.scoreCoverage,100);assert.equal(accepted.factors.reduce((sum,f)=>sum+f.maxPoints,0),100);const failed=evaluateStrategy('bounce',{...base,return12m:-.2});assert.equal(failed.score,null);assert.equal(failed.screeningQualified,false)});
 test('future evidence is excluded',()=>{const s={...base,provenance:{...base.provenance,marketCap:{...base.provenance.marketCap,availableAt:'2027-01-01T00:00:00Z'}}};assert.equal(gate(s,'provenance'),'UNKNOWN')});
-test('missing research and source conflict never final ranks',()=>{const r=evaluateStrategy('core',{...base,confidence:'D',sourceConflicts:['Revenue disagreement']});assert.equal(r.finalRanked,false);assert.equal(r.checks.find(c=>c.id==='conflict').status,'FAIL')});
+test('missing research and source conflict never final ranks',()=>{const r=evaluateStrategy('core',{...base,confidence:'D',sourceConflicts:['Revenue disagreement']});assert.equal(r.finalRanked,false);assert.equal(r.checks.find(c=>c.id==='conflict').status,'UNKNOWN')});
 test('same data and spec yield identical result and stable hash',()=>{assert.deepEqual(evaluateStrategy('core',base),evaluateStrategy('core',structuredClone(base)));assert.notEqual(specHash('core'),specHash('bounce'))});
 test('split does not create dilution',()=>assert.equal(splitAdjustedDilution(200,100,2),0));
 test('both target and stop in daily bar assumes stop',()=>{const r=simulateExit(100,'2026-01-01',[{date:'2026-01-02',open:100,high:122,low:83,close:105}]);assert.equal(r.reason,'stop');assert.equal(r.fill,85)});
@@ -37,11 +42,51 @@ test('instant latest never future',()=>assert.equal(latestInstant([{end:'2025-01
 test('30 completed consecutive weekly closes, no partial week',()=>{const rows=[];for(let i=0;i<30;i++){const d=new Date('2025-01-03T00:00:00Z');d.setUTCDate(d.getUTCDate()+7*i);rows.push({date:d.toISOString().slice(0,10),close:100})}assert.equal(ma30Weeks(rows,'2025-08-01T00:00:00Z'),100);assert.equal(ma30Weeks(rows.slice(1),'2025-08-01T00:00:00Z'),null)});
 test('Bounce history derives return, low and MA without quote fields',()=>{const rows=[];for(let i=0;i<400;i++){const d=new Date('2024-01-02T00:00:00Z');d.setUTCDate(d.getUTCDate()+i);if(d.getUTCDay()===0||d.getUTCDay()===6)continue;const close=i<150?100-i*.3:55+(i-150)*.2;rows.push({date:d.toISOString().slice(0,10),close,low:close*.95})}const r=bounceHistoryMetrics(rows,'2025-06-30T00:00:00Z');assert(Number.isFinite(r.return12m));assert(Number.isFinite(r.low52w));assert(Number.isFinite(r.ma30w));});
 test('standalone Q3 cannot be misread as YTD',()=>{const rows=[{start:'2024-01-01',end:'2024-12-31',val:100,filed:'2025-02-01',form:'10-K',tag:'CFO'},{start:'2024-07-01',end:'2024-09-30',val:20,filed:'2024-11-01',form:'10-Q',tag:'CFO'},{start:'2025-07-01',end:'2025-09-30',val:30,filed:'2025-11-01',form:'10-Q',tag:'CFO'}];assert.equal(trailingAnnual(rows,'2025-12-01T00:00:00Z'),null)});
-test('future price dependency cannot pass freshness or provenance',()=>{const s={...base,provenance:{...base.provenance,price:{...base.provenance.price,availableAt:'2027-01-01T00:00:00Z'}}};assert.equal(gate(s,'freshness'),'FAIL');assert.equal(gate(s,'provenance'),'UNKNOWN')});
+test('future price dependency cannot pass freshness or provenance',()=>{const s={...base,provenance:{...base.provenance,price:{...base.provenance.price,availableAt:'2027-01-01T00:00:00Z'}}};assert.equal(gate(s,'freshness'),'UNKNOWN');assert.equal(gate(s,'provenance'),'UNKNOWN')});
 test('bulk snapshot derives FCF and valuation without per-company requests',()=>{const fact=(val,tag,end='2025-12-31')=>({cik:1,start:'2025-01-01',end,val,filed:'2026-02-15',form:'10-K',tag,priority:0,url:'https://data.sec.gov/test'});const s=preliminarySnapshot({cik:1,ticker:'TEST',name:'Test Corp',exchange:'Nasdaq',price:10,marketCap:100e6,averageVolume10d:100000},{revenue:fact(50e6,'Revenues'),netIncome:fact(2e6,'NetIncomeLoss'),ocf:fact(6e6,'NetCashProvidedByUsedInOperatingActivities'),capex:fact(1e6,'PaymentsToAcquirePropertyPlantAndEquipment'),cash:fact(10e6,'CashAndCashEquivalentsAtCarryingValue'),debtNoncurrent:fact(20e6,'LongTermDebtNoncurrent')},'2026-03-01T00:00:00.000Z');assert.equal(s.fcf,5e6);assert.equal(s.ps,2);assert.equal(s.evSales,undefined);assert.equal(s.medianDollarVolume20d,undefined);assert.match(s.dataIssues[0],/لا يُستنتج/)});
-test('IFRS cash and borrowings remain usable for EV/S',()=>{const fact=(val,tag)=>({cik:3,start:'2025-01-01',end:'2025-12-31',val,filed:'2026-02-15',form:'20-F',tag,priority:1,url:'https://data.sec.gov/test'});const s=preliminarySnapshot({cik:3,ticker:'IFRS',name:'Foreign Corp',exchange:'NYSE',price:4,marketCap:100e6,averageVolume10d:100000},{revenue:fact(50e6,'RevenueFromContractWithCustomerExcludingAssessedTax'),netIncome:fact(2e6,'ProfitLoss'),cash:{...fact(10e6,'CashAndCashEquivalents'),end:'2026-06-30',start:undefined},debtCurrent:{...fact(5e6,'BorrowingsCurrent'),end:'2026-06-30',start:undefined},debtNoncurrent:{...fact(20e6,'BorrowingsNoncurrent'),end:'2026-06-30',start:undefined}},'2026-03-01T00:00:00.000Z');assert.equal(s.evSales,2.3);});
+test('IFRS cash and borrowings remain usable for EV/S',()=>{const fact=(val,tag)=>({cik:3,start:'2025-01-01',end:'2025-12-31',val,filed:'2026-02-15',form:'20-F',tag,priority:1,url:'https://data.sec.gov/test'});const s=preliminarySnapshot({cik:3,ticker:'IFRS',name:'Foreign Corp',exchange:'NYSE',price:4,marketCap:100e6,averageVolume10d:100000},{revenue:fact(50e6,'RevenueFromContractWithCustomerExcludingAssessedTax'),netIncome:fact(2e6,'ProfitLoss'),cash:{...fact(10e6,'CashAndCashEquivalents'),end:'2026-06-30',start:undefined},debtCurrent:{...fact(5e6,'BorrowingsCurrent'),end:'2026-06-30',start:undefined},debtNoncurrent:{...fact(20e6,'BorrowingsNoncurrent'),end:'2026-06-30',start:undefined}},'2026-07-01T00:00:00.000Z');assert.equal(s.evSales,2.3);});
 test('bulk snapshot never treats missing SEC coverage as zero',()=>{const s=preliminarySnapshot({cik:2,ticker:'MISS',name:'Missing Corp',exchange:'NYSE',price:5,marketCap:50e6},undefined,'2026-03-01T00:00:00.000Z');assert.equal(s.revenue,undefined);assert.equal(evaluateStrategy('core',s).status,'UNKNOWN');assert.match(s.dataIssues[0],/لا توجد تغطية/)});
 test('Yahoo percentage points are normalized exactly once',()=>{assert.equal(yahooPercentAsRatio(25.4),.254);assert(Math.abs(yahooPercentAsRatio(-93.6)+.936)<1e-12);assert.equal(yahooPercentAsRatio(null),undefined)});
 test('UNKNOWN never enters the approval list',()=>{const r=evaluateStrategy('core',{...base,deathSpiral:'unknown'});assert.equal(r.screeningQualified,false);assert.equal(r.status,'UNKNOWN');assert.equal(r.qualified,false);assert.equal(r.gateStatus,'UNKNOWN');assert.equal(r.measurableStatus,'PASS')});
 test('Core exposes a transparent 100-point diagnostic score',()=>{const r=evaluateStrategy('core',base);assert.equal(r.score,63.1);assert.equal(r.factors.reduce((sum,f)=>sum+f.maxPoints,0),100);assert(r.factors.every(f=>f.points>=0&&f.points<=f.maxPoints));assert.equal(r.scoreCoverage,77)});
-test('verified dual-path data passes conflict check while disagreement fails',()=>{assert.equal(gate({...base,confidence:'B',sourceConflicts:[]},'conflict'),'PASS');assert.equal(gate({...base,confidence:'D',sourceConflicts:['marketCap mismatch']},'conflict'),'FAIL')});
+test('verified dual-path data passes conflict check while disagreement fails',()=>{assert.equal(gate({...base,confidence:'B',sourceConflicts:[]},'conflict'),'PASS');assert.equal(gate({...base,confidence:'D',sourceConflicts:['marketCap mismatch']},'conflict'),'UNKNOWN')});
+test('future period end is unusable even when filing timestamp claims the past',()=>{
+ assert.equal(gate({...base,provenance:{...base.provenance,revenue:{...base.provenance.revenue,periodEnd:'2028-01-01'}}},'provenance'),'UNKNOWN');
+ assert.equal(latestInstant([{end:'2027-01-01',val:10,filed:'2025-01-01',form:'10-K'}],'2026-01-01'),null);
+});
+test('an unverified split cannot pass via a stable-looking share ratio',()=>{
+ for(const splitAdjusted of [false,undefined])assert.equal(gate({...base,dilution:.1,shareCountRatio:1.1,splitAdjusted},'dilution','bounce'),'UNKNOWN');
+});
+test('missing or future score inputs receive no points or score coverage',()=>{
+ const p={...base.provenance,evSales:{...base.provenance.evSales,availableAt:'2028-01-01'}};
+ const score=evaluateStrategy('core',{...base,provenance:p});assert.equal(score.factors.find(f=>f.id==='valuation').available,false);
+ const partial=evaluateStrategy('core',{...base,fcf:null});assert.equal(partial.factors.find(f=>f.id==='quality').availableWeight,SPECS.core.weights.Quality/2);assert.equal(partial.scoreCoverage,77-SPECS.core.weights.Quality/2);
+});
+test('derived evidence uses the latest dependency and refuses future dependencies',()=>{
+ const a={...base.provenance.revenue,availableAt:'2026-01-01'},b={...a,availableAt:'2026-08-31'};
+ assert.equal(derivedEvidence('test',[a,b],base.asOf,'formula').availableAt,b.availableAt);
+ assert.equal(derivedEvidence('test',[a,{...b,availableAt:'2028-01-01'}],base.asOf,'formula'),undefined);
+});
+test('bulk financials reject future balance sheets and mismatched cash-flow periods',()=>{
+ const f=(val,start,end)=>({cik:1,val,start,end,filed:'2026-01-01',tag:'test',priority:0,url:'https://data.sec.gov/test'});
+ const c={ticker:'BAD',name:'Synthetic Corp',exchange:'NYSE',cik:1,marketCap:100,price:1};
+ const s=preliminarySnapshot(c,{revenue:f(100,'2025-01-01','2025-12-31'),ocf:f(20,'2025-01-01','2025-12-31'),capex:f(3,'2025-10-01','2025-12-31'),cash:f(10,undefined,'2027-01-01'),debtCurrent:f(1,undefined,'2025-12-31'),debtNoncurrent:f(2,undefined,'2025-12-31')},'2026-09-01T00:00:00Z');
+ assert.equal(s.fcf,undefined);assert.equal(s.cash,undefined);assert.equal(s.evSales,undefined);assert.equal(s.debt,3);
+});
+test('deep financial enrichment derives cash debt EV/S without treating missing debt as zero',()=>{
+ const row=val=>({val,end:'2026-06-30',filed:'2026-08-01',form:'10-Q'});
+ const facts={'us-gaap':Object.fromEntries([['CashAndCashEquivalentsAtCarryingValue',20e6],['LongTermDebtCurrent',3e6],['LongTermDebtNoncurrent',7e6]].map(([tag,val])=>[tag,{units:{USD:[row(val)]}}]))};
+ const s=enrichFinancials(base,facts,'https://data.sec.gov/test');assert.equal(s.cash,20e6);assert.equal(s.debt,10e6);assert.equal(s.evSales,(base.marketCap-10e6)/base.revenue);
+ const missing=structuredClone(facts);delete missing['us-gaap'].LongTermDebtCurrent;
+ const partial=enrichFinancials({...base,evSales:undefined},missing,'https://data.sec.gov/test');assert.equal(partial.debt,undefined);assert.equal(partial.evSales,undefined);
+});
+test('intraday parser removes null, duplicate and future points and uses previous close baseline',()=>{
+ const asOf='2026-09-08T15:00:00Z',cut=Math.floor(Date.parse(asOf)/1000);
+ const r=parseYahooIntraday({chart:{result:[{timestamp:[cut-600,cut-300,cut-300,cut+300],indicators:{quote:[{close:[10,null,11,12]}]},meta:{chartPreviousClose:8}}]}},asOf);
+ assert.deepEqual(r.points,[{t:cut-600,c:10},{t:cut-300,c:11}]);assert.equal(r.baseline,8);assert.equal(r.changePct,.375);
+});
+test('official directory excludes ETF and test issues and joins SEC CIKs',()=>{
+ const nasdaq='Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF|NextShares\nAAA|AAA old|Q|N|N|100|N|N\nETFZ|Fund|Q|N|N|100|Y|N\nTEST|Test|Q|Y|N|100|N|N';
+ const other='ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|Round Lot Size|Test Issue|NASDAQ Symbol\nBBB|BBB Inc|N|BBB|N|100|N|BBB\nOTC|OTC Inc|U|OTC|N|100|N|OTC';
+ assert.deepEqual(parseOfficialDirectory(nasdaq,other,{'0':{ticker:'AAA',title:'AAA SEC',cik_str:123},'1':{ticker:'BBB',title:'BBB SEC',cik_str:456}}),[{ticker:'AAA',name:'AAA SEC',exchange:'Nasdaq',cik:123},{ticker:'BBB',name:'BBB SEC',exchange:'NYSE',cik:456}]);
+});

@@ -88,7 +88,9 @@ async function scheduleNext(request: Request, runId: string, env: Env) {
     if (cookie) headers.Cookie = cookie;
     try {
       const response = await fetch(target, { method: "POST", headers, body: JSON.stringify({ runId }),signal:AbortSignal.timeout(5000) });
-      if (response.ok) return;
+      const contentType=response.headers.get('content-type')||'';
+      const payload=contentType.includes('application/json')?await response.json().catch(()=>null):null;
+      if (response.ok && (payload as any)?.accepted===true) return;
       await log(runId, "background", `Background baton attempt ${attempt + 1}: HTTP ${response.status}`);
     }catch(error){await log(runId,'background',`Baton attempt ${attempt+1}: ${error instanceof Error?error.message:'network failure'}`);}
     await delay(400 * (attempt + 1));
@@ -99,7 +101,7 @@ async function scheduleNext(request: Request, runId: string, env: Env) {
 async function runBackgroundBatch(request: Request, runId: string, env: Env) {
   try {
     const result = await processScanBatch(runId);
-    if (result.busy) {
+    if ('busy' in result && result.busy) {
       // A duplicate or restarted worker must not abandon the only live baton.
       await delay(Math.min(10_000,Math.max(500,Number(result.run.lease_until)-Date.now())));
       await scheduleNext(request,runId,env);return;
@@ -110,6 +112,7 @@ async function runBackgroundBatch(request: Request, runId: string, env: Env) {
     } else await scheduleNext(request, runId, env);
   } catch (error) {
     await log(runId, "background", error instanceof Error ? error.message : "خطأ في المهمة الخلفية").catch(() => {});
+    if(error&&typeof error==='object'&&'status'in error&&[404,409].includes(Number(error.status)))return;
     await delay(1_000);
     await scheduleNext(request, runId, env).catch(() => {});
   }
@@ -175,6 +178,20 @@ const worker = {
         ctx.waitUntil(runBackgroundBatch(request, run.id, env));
         return json({ run, background: true }, 202);
       } catch (error: any) { return json({ error: error.message || "تعذّر بدء الفحص" }, error.status || 503) }
+    }
+
+    if (url.pathname === "/api/background-scan/resume" && request.method === "POST") {
+      try {
+        sameOrigin(request);
+        const input=await request.json() as any;
+        if(typeof input?.runId!=="string")return json({error:"معرّف الفحص غير صالح"},400);
+        await ensureSchema();
+        const run=await db().prepare("SELECT id,status,stage FROM strategy_runs WHERE id=?").bind(input.runId).first() as any;
+        if(!run)return json({error:"الفحص غير موجود"},404);
+        if(!["running","partial"].includes(run.status)||Number(run.stage)>=13)return json({resumed:false,reason:"الجولة منتهية"});
+        ctx.waitUntil(runBackgroundBatch(request,run.id,env));
+        return json({resumed:true},202);
+      }catch(error:any){return json({error:error.message||"تعذّر استئناف الفحص"},error.status||503)}
     }
 
     if (url.pathname === "/__radar-background" && request.method === "POST") {

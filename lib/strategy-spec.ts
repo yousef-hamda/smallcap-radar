@@ -8,7 +8,7 @@
 export const SPECS = {
   core: {
     id: 'CORE_VALUE_V2',
-    version: '2.0.0-draft.2',
+    version: '2.0.0-draft.4-evidence',
     marketCap: { min: 25e6, max: 2e9 },
     liquidity: 150e3,
     liquidityMetric: 'medianDollarVolume20d',
@@ -32,7 +32,7 @@ export const SPECS = {
   },
   bounce: {
     id: 'BOUNCE_V2',
-    version: '2.0.0-draft.2',
+    version: '2.0.0-draft.4-evidence',
     marketCap: { min: 25e6, max: 600e6 },
     liquidity: 150e3,
     liquidityMetric: 'medianDollarVolume20d',
@@ -42,10 +42,18 @@ export const SPECS = {
     shareCountRatio: { minExclusive: 0.5, maxExclusive: 1.5 },
     maMultiplier: 1.05,
     weeklyCloses: 30,
+    ranking: {
+      weights: { collapse: 25, reversal: 25, liquidity: 20, dilution: 15, offLow: 10, size: 5 },
+      collapseFloor: -0.8,
+      reversalCeiling: 0.25,
+      liquidityCeiling: 3e6,
+      offLowAnchor: 0.25,
+      offLowRange: 0.55,
+    },
     exit: { target: 0.2, stop: -0.15, months: 3 },
     weights: {},
-    scoreStatus: 'gates-only',
-    policy: 'ارتداد بوابات فقط؛ لا توجد درجة تنبؤية من 100 في المواصفة.',
+    scoreStatus: 'research-ranking-not-predictive',
+    policy: 'القبول تحدده البوابات فقط. درجة 100 ترتب قوة القياسات الموثقة ولا تمثل احتمال الربح.',
   },
   legacy: {
     id: 'LEGACY_BENCHMARK',

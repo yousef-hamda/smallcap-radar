@@ -13,17 +13,18 @@ export async function GET(request: Request) {
     await ensureSchema();
     // Version the deep cache whenever the enrichment contract changes so a
     // previous partial response cannot mask newly available fields.
-    const cacheKey = `deep:v4:${symbol}`;
+    const cacheKey = `deep:v5:${symbol}`;
     const cached = await db().prepare('SELECT retrieved_at,payload FROM raw_cache WHERE key=?').bind(cacheKey).first() as any;
     if (cached && Date.now() - Date.parse(cached.retrieved_at) < 30 * 60_000) return json({ snapshot: JSON.parse(cached.payload), cached: true });
-    const company = companyBySymbol(symbol);
+    const previousRow = await db().prepare('SELECT payload FROM fundamental_snapshots WHERE symbol=? ORDER BY as_of DESC LIMIT 1').bind(symbol).first() as any;
+    const previous=previousRow?.payload?JSON.parse(previousRow.payload) as Snapshot:null;
+    const company = companyBySymbol(symbol)||(previous?{ticker:symbol,name:previous.name,cik:Number(previous.cik)||0,exchange:previous.exchange||'',sector:previous.sector,industry:previous.industry,price:previous.price??undefined,marketCap:previous.marketCap??undefined}:null);
     if (!company) return json({ error: 'الشركة غير موجودة في الدليل' }, 404);
     let work=pending.get(symbol);
     if(!work){
      work=(async()=>{
       const snapshot=await companySnapshot(company);
-      const previousRow = await db().prepare('SELECT payload FROM fundamental_snapshots WHERE symbol=? ORDER BY as_of DESC LIMIT 1').bind(symbol).first() as any;
-      const result = reconcile(snapshot, previousRow?.payload ? JSON.parse(previousRow.payload) : null);
+      const result = reconcile(snapshot, previous);
       await db().prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(cacheKey, 'Nasdaq history + SEC Company Facts', new Date().toISOString(), JSON.stringify(result)).run();
       return result;
      })().finally(()=>pending.delete(symbol));

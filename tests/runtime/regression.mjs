@@ -6,15 +6,19 @@ import {scanProgress} from '../../.test-build/scan-progress.mjs';
 import {visitor} from '../../.test-build/visitor.mjs';
 import {numeric,parseNews,fetchJson} from '../../.test-build/providers.mjs';
 import {reconcile} from '../../.test-build/reconcile.mjs';
-import {setHistoryResult,setUniverse,universeCalls} from './providers.mjs';
+import {setHistoryResult,setUniverse,universeCalls,setIntradayResult} from './providers.mjs';
 import {evaluateStrategy} from '../../.test-build/engine.mjs';
 import {fixtures} from '../../.test-build/fixtures.mjs';
 import {ensureSchema,db,currentHash,readState,insertSnapshot} from '../../.test-build/storage.mjs';
 import {processScanBatch,startScan,bounceHistoryCandidate,historyCandidate} from '../../.test-build/scanner.mjs';
 import {GET,POST} from '../../.test-build/radar-api.mjs';
+import {GET as chartGET} from '../../.test-build/chart-api.mjs';
 import worker from '../../.test-build/worker.mjs';
 import {validPushSubscription} from '../../.test-build/push-validation.mjs';
 import {createECDH,randomBytes} from 'node:crypto';
+import {fetchBulkFundamentals} from '../../.test-build/bulk.mjs';
+import {importSchema} from '../../.test-build/validation.mjs';
+import {apiJson} from '../../.test-build/client-json.mjs';
 import webpush from 'web-push';
 await ensureSchema();
 sqlite.exec(await fs.readFile('drizzle/0003_solid_spot.sql','utf8'));
@@ -33,14 +37,15 @@ test('missing numeric provider fields stay null, while actual zero is zero',()=>
 test('ten-day volume proxy cannot reject a historical candidate',()=>{
  const s={...base,securityType:'common',marketCap:100e6,price:10,return12m:-.5,low52w:5,averageVolume10d:0};assert(bounceHistoryCandidate(s));assert(historyCandidate(s));assert(historyCandidate({...s,averageVolume10d:undefined}));
 });
-test('source conflict prevents both screening and final qualification',()=>{for(const strategy of ['core','bounce']){const e=evaluateStrategy(strategy,{...base,sourceConflicts:['injected conflict']});assert.equal(e.screeningQualified,false);assert.equal(e.status,'FAIL');assert.equal(e.finalRanked,false)}});
+test('source conflict prevents both screening and final qualification',()=>{for(const strategy of ['core','bounce']){const e=evaluateStrategy(strategy,{...base,sourceConflicts:['injected conflict']});assert.equal(e.screeningQualified,false);assert.equal(e.status,'UNKNOWN');assert.equal(e.finalRanked,false)}});
 test('visitor isolation and cookie flags',()=>{
  const a=visitor(new Request('https://radar.test')),b=visitor(new Request('https://radar.test'));assert.notEqual(a.owner,b.owner);assert.match(a.cookie,/HttpOnly; SameSite=Lax; Secure/);assert.equal(visitor(new Request('https://radar.test',{headers:{cookie:a.cookie.split(';')[0]}})).owner,a.owner);
 });
-test('stage9 must hand off stage10 without completion or lost processed count',async()=>{
+test('stage9 persists rows and hands only history candidates to stage10',async()=>{
  await db().prepare('INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,strategy_hash) VALUES(?,?,?,?,?,?,?,?,?)').bind('scan-test','2026-09-08T00:00:00Z','2026-09-08T00:00:00Z','running','Bulk Quotes/SEC Frames v7 · full',1,JSON.stringify([{ticker:'TEST',name:'Synthetic test only',cik:99,exchange:'Nasdaq',marketCap:1e9,price:10}]),9,currentHash()).run();
- const result=await processScanBatch('scan-test');assert.equal(result.done,false);assert.equal(result.run.stage,10);assert.equal(result.run.offset,0);assert.equal(result.run.processed,1);assert.equal(result.run.status,'running');
- const final=await processScanBatch('scan-test');assert.equal(final.done,true);assert.equal(final.run.stage,13);assert.equal(final.run.processed,1);assert.equal(final.run.status,'complete');
+ const result=await processScanBatch('scan-test');assert.equal(result.done,false);assert.equal(result.run.stage,10);assert.equal(result.run.offset,0);assert.equal(result.run.total,0);assert.equal(result.run.processed,0);assert.equal(result.run.status,'running');
+ assert.equal((await db().prepare("SELECT COUNT(*) AS n FROM fundamental_snapshots WHERE run_id='scan-test'").first()).n,1);
+ const final=await processScanBatch('scan-test');assert.equal(final.done,true);assert.equal(final.run.stage,13);assert.equal(final.run.processed,0);assert.equal(final.run.status,'complete');
 });
 test('completed result with legacy processed=0 remains selectable; partial never replaces it',async()=>{
  await db().prepare("UPDATE strategy_runs SET processed=0 WHERE id='scan-test'").run();assert.equal((await readState()).dataRunId,'scan-test');
@@ -59,6 +64,21 @@ test('API personal favorites start at zero, writes are idempotent and isolated',
 test('API rejects cross-origin and malformed favorite writes',async()=>{
  const cross=await POST(new Request('https://radar.test/api/radar',{method:'POST',headers:{origin:'https://other.test'},body:'{}'}));assert.equal(cross.status,403);
  const invalid=await POST(new Request('https://radar.test/api/radar',{method:'POST',headers:{origin:'https://radar.test'},body:JSON.stringify({action:'favorite',symbol:'BAD!',saved:true})}));assert.equal(invalid.status,400);
+});
+test('client API parser translates HTML route failures instead of leaking JSON syntax errors',async()=>{
+ const original=globalThis.fetch;
+ try{
+  globalThis.fetch=async()=>new Response('<!DOCTYPE html><title>error</title>',{status:503,headers:{'content-type':'text/html'}});
+  await assert.rejects(apiJson('/api/test'),error=>/استجابة غير صالحة/.test(error.message)&&!/Unexpected token/.test(error.message));
+  globalThis.fetch=async()=>Response.json({ok:true});assert.deepEqual(await apiJson('/api/test'),{ok:true});
+ }finally{globalThis.fetch=original;}
+});
+test('intraday chart API validates symbols, returns JSON and reuses its short cache',async()=>{
+ assert.equal((await chartGET(new Request('https://radar.test/api/chart?symbol=BAD!'))).status,400);
+ assert.equal((await chartGET(new Request('https://radar.test/api/chart?symbol=NONE'))).status,404);
+ const first=await chartGET(new Request('https://radar.test/api/chart?symbol=TEST'));assert.equal(first.status,200);assert.equal((await first.json()).points.length,2);
+ setIntradayResult(Error('provider should not be called while cached'));
+ try{const cached=await chartGET(new Request('https://radar.test/api/chart?symbol=TEST'));const payload=await cached.json();assert.equal(cached.status,200);assert.equal(payload.cached,true);}finally{setIntradayResult({points:[{t:1,c:10},{t:2,c:11}],baseline:9,changePct:2/9,baselineLabel:'TEST',source:'TEST_ONLY',availableAt:'2026-09-08T00:00:00Z'});}
 });
 test('live lease prevents a duplicate batch',async()=>{await db().prepare("UPDATE strategy_runs SET status='running',stage=10,offset=0,lease_until=? WHERE id='scan-test'").bind(Date.now()+60000).run();const r=await processScanBatch('scan-test');assert.equal(r.busy,true);assert.equal(r.done,false)});
 
@@ -97,7 +117,8 @@ test('concurrent quick/full starts share one durable run before any network call
  const results=await Promise.all([startScan('full'),startScan('quick'),startScan('full')]);
  assert.equal(new Set(results.map(r=>r.id)).size,1);assert.equal(results[0].stage,0);assert.equal(universeCalls,before);
  setUniverse([{ticker:'INIT',name:'Synthetic initialized company',price:10,marketCap:100e6,cik:123}]);
- const initialized=await processScanBatch(results[0].id);assert.equal(initialized.done,false);assert.equal(initialized.run.total,1);assert.equal(initialized.run.stage,4);
+ const initialized=await processScanBatch(results[0].id);assert.equal(initialized.done,false);assert.equal(initialized.run.total,1);assert.equal(initialized.run.stage,1);
+ const quoted=await processScanBatch(results[0].id);assert.equal(quoted.run.stage,4);assert.equal(quoted.run.total,1);
  await db().prepare("UPDATE strategy_runs SET stage=13,status='complete' WHERE id=?").bind(results[0].id).run();setUniverse([]);
 });
 test('initialization outage retries after restart and terminates after three attempts',async()=>{
@@ -105,6 +126,18 @@ test('initialization outage retries after restart and terminates after three att
  for(let i=0;i<3;i++){
   const r=await processScanBatch('init-outage');assert.equal(r.done,i===2);assert.equal(r.run.status,i===2?'failed':'running');assert.equal(r.run.stage,0);
  }
+});
+test('missing quote checkpoint terminates after bounded retries instead of sticking',async()=>{
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,strategy_hash) VALUES('missing-quotes','2030-01-01','2030-01-01','running','Bulk Quotes/SEC Frames v7 · full',1000,'paged-v1',1,?)").bind(currentHash()).run();
+ for(let i=0;i<3;i++){const result=await processScanBatch('missing-quotes');assert.equal(result.done,i===2);assert.equal(result.run.status,i===2?'failed':'running');}
+});
+test('exhausted SEC checkpoint recovery resets score cursor before continuing',async()=>{
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,offset,strategy_hash) VALUES('missing-ciks','2030-01-02','2030-01-02','running','Bulk Quotes/SEC Frames v7 · full',1,'paged-v1',4,8,?)").bind(currentHash()).run();
+ for(let i=0;i<3;i++){const result=await processScanBatch('missing-ciks');if(i===2){assert.equal(result.run.stage,9);assert.equal(result.run.offset,0);}}
+});
+test('status API ignores incompatible active runs from previous strategy hashes',async()=>{
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,strategy_hash) VALUES('old-hash-active','2031-01-01','2031-01-01','running','Bulk Quotes/SEC Frames v6 · full',1,'[]',4,'old-hash')").run();
+ const payload=await (await GET(new Request('https://radar.test/api/radar?status=1'))).json();assert.notEqual(payload.run?.id,'old-hash-active');
 });
 test('status polling is compact and does not send snapshots or the universe',async()=>{
  const response=await GET(new Request('https://radar.test/api/radar?status=1'));const raw=await response.text(),data=JSON.parse(raw);
@@ -152,4 +185,35 @@ test('push ownership, same-origin, key validation, delivery acceptance and expir
   status=410;assert.equal((await send('/api/push/test',{endpoint:subscription.endpoint},cookie)).status,410);
   assert.equal((await send('/api/push/test',{endpoint:subscription.endpoint},cookie)).status,404);assert.equal(calls,2);
  }finally{globalThis.fetch=original;}
+});
+
+test('SEC pages checkpoint and classify the optional boundary correctly',async()=>{
+ const original=globalThis.fetch;let requests=0;
+ globalThis.fetch=async()=>{requests++;return Response.json({data:[{cik:999999,end:'2025-12-31',val:100}]});};
+ try{
+  let initial=new Map(),offset=0,success=0,optional=0;
+  for(let page=0;page<4;page++){
+   const result=await fetchBulkFundamentals([999999],new Date('2026-09-08T00:00:00Z'),{offset,limit:4,initial});
+   assert.equal(result.nextOffset,offset+4);assert.equal(result.done,page===3);initial=result.fundamentals;offset=result.nextOffset;success+=result.success;optional+=result.optionalSuccess;
+  }
+  assert.equal(requests,16);assert.equal(success,13);assert.equal(optional,3);assert(initial.has(999999));
+ }finally{globalThis.fetch=original;}
+});
+test('import preserves share ratio and enrichment, rejecting unrecognized fields instead of silently dropping them',()=>{
+ const value={...base,shareCountRatio:1.02,cash:1,debt:0,targetMean:12,news:[{title:'TEST ONLY',link:'https://example.test/story',publishedAt:base.asOf}]};
+ const parsed=importSchema.parse([value])[0];assert.equal(parsed.shareCountRatio,1.02);assert.equal(parsed.cash,1);assert.equal(parsed.news[0].title,'TEST ONLY');
+ assert.equal(importSchema.safeParse([{...value,unexpectedSecret:'TEST'}]).success,false);
+});
+test('15000 directory rows use bounded durable pages and resume quote progress',async()=>{
+ const companies=Array.from({length:15000},(_,i)=>({ticker:`SYN${i}`,name:'Synthetic company only',cik:i+1,exchange:'NYSE',price:5,marketCap:100e6}));
+ setUniverse(companies);
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,strategy_hash) VALUES('large-directory','2000-01-01','2000-01-01','running','Bulk Quotes/SEC Frames v7 · full',?)").bind(currentHash()).run();
+ try{
+  const initialized=await processScanBatch('large-directory');assert.equal(initialized.run.total,15000);assert.equal(initialized.run.stage,1);
+  const max=sqlite.prepare("SELECT MAX(length(payload)) AS bytes,COUNT(*) AS pages FROM raw_cache WHERE key LIKE 'universe:large-directory:quotes:%'").get();assert.equal(max.pages,15);assert(max.bytes<1_000_000);
+  for(let page=0;page<15;page++){const result=await processScanBatch('large-directory');assert.equal(result.run.stage,page===14?4:1);if(page<14)assert.equal(result.run.offset,(page+1)*1000);}
+  assert.equal(sqlite.prepare("SELECT universe FROM strategy_runs WHERE id='large-directory'").get().universe,'paged-v1');
+  await db().prepare("UPDATE strategy_runs SET stage=9,offset=1200 WHERE id='large-directory'").run();
+  const scored=await processScanBatch('large-directory');assert.equal(scored.run.offset,1400);assert.equal(sqlite.prepare("SELECT COUNT(*) n FROM fundamental_snapshots WHERE run_id='large-directory'").get().n,200);
+ }finally{setUniverse([]);}
 });

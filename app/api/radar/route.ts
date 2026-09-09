@@ -1,4 +1,4 @@
-import {readState,db,createRun,insertSnapshot,ensureSchema} from '@/lib/storage';
+import {readState,db,createRun,insertSnapshot,ensureSchema,currentHash} from '@/lib/storage';
 import {sameOrigin,json,body} from '@/lib/http';
 import {importSchema} from '@/lib/validation';
 import {visitor} from '@/lib/visitor';
@@ -8,7 +8,7 @@ export async function GET(req:Request){
   const url=new URL(req.url), identity=visitor(req);
   if(url.searchParams.get('status')==='1'){
    await ensureSchema();
-   const row=await db().prepare('SELECT id,status,source,stage,offset,processed,total,failed,created_at,updated_at,error,lease_until,universe_total,quote_coverage,fundamental_coverage,sec_failed,json_array_length(retry_queue) AS retryPending FROM strategy_runs ORDER BY created_at DESC LIMIT 1').first();
+   const row=await db().prepare('SELECT id,status,source,stage,offset,processed,total,failed,created_at,updated_at,error,lease_until,universe_total,quote_coverage,fundamental_coverage,sec_failed,sec_success,sec_requests,json_array_length(retry_queue) AS retryPending FROM strategy_runs WHERE strategy_hash=? ORDER BY created_at DESC LIMIT 1').bind(currentHash()).first();
    return json({run:row});
   }
   const strategy=url.searchParams.get('strategy'),limit=Number(url.searchParams.get('limit')||40),offset=Number(url.searchParams.get('offset')||0);
@@ -26,7 +26,9 @@ export async function POST(req:Request){
    if(!b.saved)await db().prepare('DELETE FROM personal_watchlist WHERE owner=? AND symbol=?').bind(identity.owner,b.symbol).run();
    else {
     const row=await db().prepare('SELECT payload FROM fundamental_snapshots WHERE symbol=? ORDER BY as_of DESC LIMIT 1').bind(b.symbol).first() as any;
-    const cached=row||await db().prepare('SELECT payload FROM raw_cache WHERE key=?').bind('deep:v4:'+b.symbol).first() as any;
+    const cached=row
+      ||await db().prepare('SELECT payload FROM raw_cache WHERE key=?').bind('deep:v5:'+b.symbol).first() as any
+      ||await db().prepare('SELECT payload FROM raw_cache WHERE key=?').bind('deep:v4:'+b.symbol).first() as any;
     if(!cached)return json({error:'افتح ملف الشركة أولًا للحصول على لقطة موثقة.'},404);
     const snapshot=JSON.parse(cached.payload);delete snapshot.history;
     await db().prepare('INSERT INTO personal_watchlist(owner,symbol,created_at,payload) VALUES(?,?,?,?) ON CONFLICT(owner,symbol) DO UPDATE SET payload=excluded.payload').bind(identity.owner,b.symbol,new Date().toISOString(),JSON.stringify(snapshot)).run();

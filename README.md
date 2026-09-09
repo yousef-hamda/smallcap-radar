@@ -1,6 +1,6 @@
 # Small-Cap Radar V2
 
-**Deployment update:** version 61 is published at the user's explicit request on 2026-09-08. [Release record](docs/DEPLOYMENT_61.md). Browser acceptance remains pending; the source-checkpoint note below records the earlier state.
+**Deployment update:** version 61 is the latest published baseline. The reliability and scoring campaign dated 2026-09-09 is implemented and awaiting its verified release record. Browser/device acceptance remains evidence-gated.
 
 **حملة التحسين الحالية:** راجع [التغييرات والأدلة والفجوات](docs/IMPROVEMENT_CAMPAIGN_2026_09_08.md). ملاحظات الإصدارات الأقدم أدناه تاريخية؛ لا تثبت أداء النسخة الحالية أو اكتمال القبول.
 
@@ -10,16 +10,16 @@ Arabic RTL mobile-first PWA, published through Sites. It is a working research p
 
 ## Implemented
 
-- Professional Arabic RTL research terminal with a desktop stock cards, responsive mobile layout, Core/Bounce/favorites tabs, company gate/evidence sheet, seven chart period controls (intraday unavailable), persistent favorites, JSON snapshot import and audit export.
+- Professional Arabic RTL research terminal with desktop stock cards, responsive mobile layout, Core/Bounce/favorites tabs, company gate/evidence sheet, seven chart periods including an on-demand 1D intraday view, persistent favorites, JSON snapshot import and audit export.
 - Cloudflare D1 self-initializing schema and migrations, immutable run identifiers and per-run snapshots/evaluations, explicit provider errors and a server-owned cursor with lease/offset concurrency protection. The background baton is implemented, but its production continuation must be re-verified after the authentication fix; see `docs/DIAGNOSTIC_REPORT_AR.md`.
 - Standards-based Web Push completion notifications with VAPID signing and an explicit subscribe-and-test panel. On iPhone, install the PWA on the Home Screen, open it from the icon, and use the separate **تفعيل الإشعارات** and **اختبار الإشعار** buttons.
-- The full scan follows the legacy system's bulk-first architecture: Yahoo quotes in groups of 250 symbols, 13 required SEC XBRL Frames datasets plus optional IFRS overlays, then deterministic local evaluation in pages of 600 companies. Exact 20-session liquidity and historical Bounce metrics are verified from dated bars when a candidate reaches the history stage; a 10-day volume proxy never passes a gate. A bundled official SEC/Nasdaq directory and a dated official Frames snapshot are labeled as fallback data.
+- The full scan follows a bulk-first architecture: the current Nasdaq/NYSE directory and SEC ticker-to-CIK map are loaded in bulk, quotes are requested in groups, 13 SEC XBRL Frames datasets plus optional IFRS overlays are merged, and evaluation runs in bounded pages of 200 companies. Exact 20-session liquidity and historical Bounce metrics are verified from dated bars only for surviving candidates; a 10-day volume proxy never passes a gate. Bundled official SEC/Nasdaq data remain a dated, labeled fallback.
 - Historical pre-rebuild benchmark recorded on 2026-09-06 (not proof of the current full-history scan): 7,675 exchange-listed securities loaded; 6,320 had quote coverage; 4,765 were removed by preliminary gates; all 2,910 candidates were evaluated in 27.1 seconds with zero processing failures. The 13 Frames datasets covered 2,381 candidates (81.8%). The browser was closed mid-run for 36 seconds; the same server run completed at stage 13 and appeared after reopening.
-- Shared versioned gate engine, Core/Legacy documented weights, and a transparent Core diagnostic score from 100 with per-factor points and coverage. The score is deliberately diagnostic until the point-in-time validation gates are approved; failed hard gates cannot be rescued by a score. Bounce remains documented gates plus research ranking, not an invented production score.
+- Shared versioned gate engine, Core/Legacy documented weights, and transparent scores from 100 with per-factor points and coverage. Bounce uses an explicit six-factor strict ranking from 100; it is diagnostic rather than a claimed probability. Every list entry still requires every acceptance check to be PASS, so no score can rescue a failed or UNKNOWN gate.
 - Conservative SEC annual + current YTD − prior YTD normalization, provenance, foreign-filer flag, unavailable-data handling. Some issuers require custom taxonomy support and remain incomplete.
 - PIT availability filter, deterministic firm holdout assignment, firm bootstrap, Bonferroni correction, conservative Bounce exit simulation and costs.
 - Web manifest and icons; device cache stores the last viewed snapshot; offline fallback reading is not implemented in the rebuilt UI. Installation and notification receipt still require final verification on the owner's physical phone; server-side VAPID request generation is covered by automated tests.
-- 39 engine/normalization tests, 22 runtime/API/provider tests, 9 UI/Web-Push component tests, and 3 SQLite tests, TypeScript checking, ESLint and a verified production build.
+- 48 engine/normalization tests and 30 runtime/API/provider tests currently pass. The release workflow also reruns UI/Web-Push and SQLite tests, TypeScript checking, ESLint and a verified production build before publication.
 
 ## Not complete / not validated
 
@@ -43,7 +43,7 @@ Current implementation uses **Vinext/React instead of the plan's TanStack Start*
 
 ## Strategy contract
 
-`lib/strategy-spec.ts` is the strategy configuration source and `lib/engine.ts` is the evaluator. All absent critical metrics become UNKNOWN. Positive net income OR FCF passes the definitive profitability branch. Inflection has no invented substitute. Core/Legacy expose diagnostic factor scores, returning null after hard-gate failure; Bounce exposes gate completion and no validated predictive score. UI candidate qualification is not a final research rank. Draft versions identify unvalidated implementation conventions.
+`lib/strategy-spec.ts` is the single strategy configuration source and `lib/engine.ts` is the evaluator. All absent, future-dated, stale or unsupported critical metrics become UNKNOWN. Positive net income OR FCF passes the definitive profitability branch. Core, Bounce and Legacy expose auditable factor scores and coverage, returning a null score after hard-gate failure. UI candidate qualification is not an investment recommendation. Draft versions identify unvalidated research conventions.
 
 Operational conventions: 20-day median dollar volume for Core and Bounce (Bounce requires at least $150k); 3 calendar days quote freshness; 200-day fundamental period freshness; 30 fully completed consecutive weekly closing prices; calendar-month expiry clamped at month end, then first observed tradable open. These are conservative implementation choices, **not reproduced original settings**. SEC date-only filing records become available at end of filing day, intentionally conservative.
 
@@ -51,8 +51,10 @@ Operational conventions: 20-day median dollar volume for Core and Bounce (Bounce
 
 - `GET /api/radar?strategy=core|bounce|favorites&limit=150&offset=0`: paged qualified/favorite snapshots plus counts; explicit `dataRunId` identifies displayed data. This bounded contract avoids returning the full historical snapshot table in one response.
 - `GET /api/company?symbol=...`: on-demand deep verification using detailed history and SEC Company Facts, cached for 30 minutes; this deliberately stays outside the market-wide hot path.
+- `GET /api/chart?symbol=...`: on-demand current-session 5-minute chart data for the 1D period, with bounded caching and explicit Arabic provider errors.
 - `POST /api/radar`: same-origin `{action:'favorite',symbol,saved:boolean}` or `{action:'import',records: Snapshot[]}`. Favorites are private by platform identity or opaque visitor cookie and stored in D1. A new visitor starts with zero; legacy global favorites are not migrated to an arbitrary owner. Import max 500 records / 4MB; rejects duplicate symbols and malformed provenance.
 - `POST /api/background-scan/start`: starts or revives a server-owned quick/full scan and returns immediately. The Worker passes a signed internal baton between bounded stages/pages, so browser suspension does not control progress.
+- `POST /api/background-scan/resume`: same-origin recovery kick for an expired scan lease. The client may call it after observing a stale run; the scan cursor, retry queue and results remain server-owned.
 - `GET /api/push/key` and `POST /api/push/subscribe`: create the device subscription used for the completion alert. Expired subscriptions are removed automatically.
 - `POST /api/scan`: retained as a bounded diagnostic/manual recovery API. Failed symbols enter a persistent queue with up to three total attempts; exhausted failures keep the run partial.
 - `GET /api/export?kind=spec`, `?kind=schema`, or `?kind=audit`: strategy JSON, documented synthetic schema example, or bounded run/audit log export.

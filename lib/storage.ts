@@ -28,11 +28,12 @@ export async function ensureSchema(){
   await d.prepare("UPDATE fundamental_snapshots SET payload=json_remove(payload,'$.history') WHERE instr(payload,'\"history\"')>0").run();
   await d.prepare("INSERT INTO diag(id,stage,created_at,message) VALUES(?,?,?,?)").bind(crypto.randomUUID(),'compact-history-v1',new Date().toISOString(),'Removed historical bars from durable radar rows; detailed history remains on-demand.').run();
  }
+ await d.prepare("UPDATE strategy_runs SET status='failed',error='تغيّرت نسخة الاستراتيجية؛ ابدأ فحصًا جديدًا.',lease_until=0,updated_at=? WHERE status IN ('running','partial') AND stage<13 AND strategy_hash<>?").bind(new Date().toISOString(),currentHash()).run();
  })().catch(e=>{schemaPromise=null;throw e});
  return schemaPromise;
 }
 export const currentHash=()=>`${specHash('core')}:${specHash('bounce')}`;
-export async function readState(options:{strategy?:'core'|'bounce'|'favorites';limit?:number;offset?:number;owner?:string;query?:string}={}){await ensureSchema();const d=db();const active=await d.prepare("SELECT * FROM strategy_runs ORDER BY created_at DESC LIMIT 1").first();
+export async function readState(options:{strategy?:'core'|'bounce'|'favorites';limit?:number;offset?:number;owner?:string;query?:string}={}){await ensureSchema();const d=db();const active=await d.prepare("SELECT * FROM strategy_runs WHERE strategy_hash=? ORDER BY created_at DESC LIMIT 1").bind(currentHash()).first();
  // A quick sample may be newer than a full scan. It must not silently replace
  // the user's main result set; prefer the newest full-market snapshot whenever
  // one has produced rows, then fall back to the newest available run.

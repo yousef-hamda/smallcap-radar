@@ -8,7 +8,7 @@ export function reconcile(current:Snapshot,previous:Snapshot|null):Snapshot {
  for(const key of ['marketCap','revenue','netIncome','fcf','evSales'] as const){
   const a=current[key],b=previous?.[key],pa=current.provenance[key],pb=previous?.provenance[key];
   if(!Number.isFinite(a)||!Number.isFinite(b)||!pa||!pb)continue;
-  if(!pa.periodEnd||pa.periodEnd!==pb.periodEnd){next.dataIssues!.push(`${key}: تاريخا القياس مختلفان؛ لم تُعتبر المقارنة تعارض مصادر.`);continue;}
+  if(!pa.periodEnd||pa.periodEnd!==pb.periodEnd||pa.periodStart!==pb.periodStart){next.dataIssues!.push(`${key}: تاريخا القياس مختلفان؛ لم تُعتبر المقارنة تعارض مصادر.`);continue;}
   if(Date.parse(pa.availableAt)>Date.parse(current.asOf)||Date.parse(pb.availableAt)>Date.parse(current.asOf))continue;
   compared++;
   const denominator=Math.max(Math.abs(a!),Math.abs(b!));

@@ -4,12 +4,18 @@ import { ma30Weeks } from './research';
 import { observations, latestInstant, trailingAnnual, provenance, REVENUE_TAGS } from './sec';
 import bundledUniverse from './universe.generated.json';
 import quickCache from './quick-cache.generated.json';
+import {enrichFinancials} from './financials';
+import {parseYahooIntraday,type ChartPayload} from './chart-data';
+import {parseOfficialDirectory} from './directory';
 
 export type Company = { cik: number; name: string; ticker: string; exchange: string; price?: number; dailyChange?: number; marketCap?: number; volume?: number; averageVolume10d?: number; return52w?: number; low52w?: number; high52w?: number; ma50d?: number; ma200d?: number; sector?: string; industry?: string; quoteSource?: string; quoteAvailableAt?: string };
 type NasdaqRow = { symbol: string; name?: string; lastsale?: string; marketCap?: string; volume?: string; sector?: string; industry?: string };
 type CachedQuick = { history: NonNullable<Snapshot['history']>; financials: Record<string, number>; provenance: Record<string, Provenance>; issues: string[] };
 
-const NASDAQ_SCREENER = 'https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=5000&download=true';
+const NASDAQ_SCREENER = 'https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=10000&download=true';
+const NASDAQ_LISTED='https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt';
+const OTHER_LISTED='https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt';
+const SEC_TICKERS='https://www.sec.gov/files/company_tickers.json';
 export const quickSymbols = Object.keys(quickCache.symbols);
 const browserAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124 Safari/537.36';
 const secAgent = 'SmallCapRadar/2.1 research-contact:yousef-hamda@users.noreply.github.com';
@@ -22,6 +28,12 @@ const inflight = new Map<string, Promise<unknown>>();
 const providerIssues: string[] = [];
 const recordProviderIssue = (message: string) => { providerIssues.push(message.slice(0, 500)); if (providerIssues.length > 50) providerIssues.shift(); };
 export const consumeProviderIssues = () => providerIssues.splice(0, providerIssues.length);
+
+async function fetchText(url:string,timeoutMs=4000){
+ const response=await fetch(url,{headers:requestHeaders(url),signal:AbortSignal.timeout(timeoutMs)});
+ if(!response.ok)throw Error(`${new URL(url).hostname}: HTTP ${response.status}`);
+ return response.text();
+}
 
 export function companyBySymbol(symbol: string): Company | null {
   return (bundledUniverse.companies as Company[]).find((company) => company.ticker === symbol.toUpperCase()) ?? null;
@@ -81,19 +93,28 @@ function quotePatch(row?: NasdaqRow) {
   return { ...(price != null && price > 0 ? { price } : {}), ...(marketCap != null && marketCap > 0 ? { marketCap } : {}), ...(volume != null && volume >= 0 ? { volume } : {}), ...(row.sector ? { sector: row.sector } : {}), ...(row.industry ? { industry: row.industry } : {}) };
 }
 
-export async function universe(): Promise<Company[]> {
+export async function universe(options?:{skipYahoo?:boolean}): Promise<Company[]> {
   const base = (bundledUniverse.companies as Company[]).map((company) => ({ ...company, quoteSource: 'bundled official dated snapshot', quoteAvailableAt: bundledUniverse.generatedAt }));
-  let nasdaq = base;
-  try {
-    const latest = await fetchJson(NASDAQ_SCREENER) as { data?: { rows?: NasdaqRow[] } };
+  const [latestResult,directoryResult]=await Promise.allSettled([
+    fetchJson(NASDAQ_SCREENER,3_000) as Promise<{data?:{rows?:NasdaqRow[]}}>,
+    Promise.all([fetchText(NASDAQ_LISTED),fetchText(OTHER_LISTED),fetchJson(SEC_TICKERS,5000,6*60*60_000)]).then(([nasdaq,other,sec])=>parseOfficialDirectory(nasdaq,other,sec as Record<string,any>)),
+  ]);
+  let directory:Company[]=base;
+  if(directoryResult.status==='fulfilled'&&directoryResult.value.length){
+    const old=new Map(base.map(company=>[company.ticker,company]));
+    directory=directoryResult.value.map(company=>({...old.get(company.ticker),...company,quoteSource:old.get(company.ticker)?.quoteSource||'official live listing directory',quoteAvailableAt:old.get(company.ticker)?.quoteAvailableAt||new Date().toISOString()}));
+  }else recordProviderIssue(`Official listing directory: ${directoryResult.status==='rejected'&&directoryResult.reason instanceof Error?directoryResult.reason.message:'empty response'}`);
+  let nasdaq = directory;
+  if(latestResult.status==='fulfilled'){
+    const latest=latestResult.value;
     const quotes = new Map((latest.data?.rows ?? []).map((row) => [row.symbol, row]));
-    nasdaq = base.map(company=>{
+    nasdaq = directory.map(company=>{
       const patch=quotePatch(quotes.get(company.ticker));
       if(!Number.isFinite(patch.price)||!Number.isFinite(patch.marketCap))return company;
       return {...company,...patch,quoteSource:'Nasdaq screener live',quoteAvailableAt:new Date().toISOString()};
     });
-  } catch (error) { recordProviderIssue(`Nasdaq screener: ${error instanceof Error ? error.message : 'provider request failed'}`); }
-  return yahooBulkQuotes(nasdaq);
+  } else recordProviderIssue(`Nasdaq screener: ${latestResult.reason instanceof Error?latestResult.reason.message:'provider request failed'}`);
+  return options?.skipYahoo?nasdaq:yahooBulkQuotes(nasdaq);
 }
 
 let authCache:{expiresAt:number;value:{cookie:string;crumb:string}}|null=null;
@@ -105,11 +126,11 @@ async function yahooAuth() {
   return authRequest;
 }
 async function loadYahooAuth() {
-  const first = await fetch('https://fc.yahoo.com/', { redirect: 'manual', headers: { 'User-Agent': browserAgent, Accept: '*/*' }, signal: AbortSignal.timeout(8_000) });
+  const first = await fetch('https://fc.yahoo.com/', { redirect: 'manual', headers: { 'User-Agent': browserAgent, Accept: '*/*' }, signal: AbortSignal.timeout(4_000) });
   const rawCookie = first.headers.get('set-cookie');
   if (!rawCookie) throw Error('Yahoo cookie unavailable');
   const cookie = rawCookie.split(';', 1)[0];
-  const crumbResponse = await fetch('https://query1.finance.yahoo.com/v1/test/getcrumb', { headers: { 'User-Agent': browserAgent, Cookie: cookie, Accept: 'text/plain' }, signal: AbortSignal.timeout(8_000) });
+  const crumbResponse = await fetch('https://query1.finance.yahoo.com/v1/test/getcrumb', { headers: { 'User-Agent': browserAgent, Cookie: cookie, Accept: 'text/plain' }, signal: AbortSignal.timeout(4_000) });
   if (!crumbResponse.ok) throw Error(`Yahoo crumb HTTP ${crumbResponse.status}`);
   const crumb = (await crumbResponse.text()).trim();
   if (!crumb || crumb.includes('<')) throw Error('Yahoo crumb invalid');
@@ -121,7 +142,7 @@ async function yahooCompanyProfile(symbol: string) {
     const auth = await yahooAuth();
     const modules = 'assetProfile,calendarEvents,earningsHistory,earningsTrend,financialData';
     const url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(symbol)}?modules=${modules}&crumb=${encodeURIComponent(auth.crumb)}`;
-    const response = await fetch(url, { headers: { 'User-Agent': browserAgent, Cookie: auth.cookie, Accept: 'application/json' }, signal: AbortSignal.timeout(10_000) });
+    const response = await fetch(url, { headers: { 'User-Agent': browserAgent, Cookie: auth.cookie, Accept: 'application/json' }, signal: AbortSignal.timeout(6_000) });
     if (!response.ok) throw Error(`Yahoo profile HTTP ${response.status}`);
     return (await response.json() as any)?.quoteSummary?.result?.[0] ?? null;
   } catch (error) {
@@ -156,7 +177,7 @@ async function enrichWithYahooProfile(snapshot: Snapshot, symbol: string, now: s
   return snapshot;
 }
 
-async function yahooBulkQuotes(companies: Company[]): Promise<Company[]> {
+export async function yahooBulkQuotes(companies: Company[]): Promise<Company[]> {
   try {
     const auth = await yahooAuth();
     const chunks: Company[][] = [];
@@ -167,7 +188,7 @@ async function yahooBulkQuotes(companies: Company[]): Promise<Company[]> {
       const payloads = await Promise.allSettled(group.map(async (chunk) => {
         const symbols = chunk.map((company) => company.ticker).join(',');
         const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbols)}&crumb=${encodeURIComponent(auth.crumb)}`;
-        const response = await fetch(url, { headers: { 'User-Agent': browserAgent, Cookie: auth.cookie, Accept: 'application/json' }, signal: AbortSignal.timeout(10_000) });
+        const response = await fetch(url, { headers: { 'User-Agent': browserAgent, Cookie: auth.cookie, Accept: 'application/json' }, signal: AbortSignal.timeout(6_000) });
         if (!response.ok) throw Error(`Yahoo quote HTTP ${response.status}`);
         return response.json() as Promise<{ quoteResponse?: { result?: any[] } }>;
       }));
@@ -227,6 +248,14 @@ export async function historicalMarketData(symbol: string, asOf = new Date().toI
   return { url, history, source:'Nasdaq historical API',retrievedAt:asOf,availableAt:asOf };
 }
 
+export async function intradayMarketData(symbol:string,asOf=new Date().toISOString()):Promise<ChartPayload>{
+ const url=`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=5m&includePrePost=false&events=div%2Csplits`;
+ const payload=await fetchJson(url,6000,60_000);
+ const result=parseYahooIntraday(payload,asOf);
+ if(result.points.length<2)throw Error(`${symbol}: لا تتوفر نقطتان لحظيتان موثقتان لهذه الجلسة`);
+ return result;
+}
+
 async function fetchInsiderPurchases(cik: number) {
   const submissionsUrl = submissionsUrlFor(cik);
   try {
@@ -280,7 +309,7 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
   const last = history.at(-1), quoteDate = last?.date ?? bundledUniverse.generatedAt.slice(0, 10), quoteAvailableAt = last ? `${last.date}T21:00:00.000Z` : bundledUniverse.generatedAt;
   const quoteEvidence: Provenance = { source: historySource, url: historyUrl, periodEnd: quoteDate, availableAt: quoteAvailableAt > now ? now : quoteAvailableAt, retrievedAt: historyRetrievedAt, currency: 'USD', confidence: historySource.includes('fallback')?'low':'medium' };
   const price = last?.close ?? company.price ?? null;
-  const snapshot: Snapshot = { symbol, name: company.name, description: 'الوصف غير متاح من مصدر موثق لهذه اللقطة.', asOf: now, exchange: company.exchange, sector: company.sector, industry: company.industry, securityType: commonSecurity(company.name) ? 'common' : 'unknown', price, marketCap: company.marketCap ?? null, confidence: 'C', deathSpiral: 'unknown', provenance: {}, history, dataIssues: issues, research: { financials: false, valuation: false, analysts: false, sector: !!company.sector } };
+  const snapshot: Snapshot = { symbol, name: company.name, cik: company.cik, description: 'الوصف غير متاح من مصدر موثق لهذه اللقطة.', asOf: now, exchange: company.exchange, sector: company.sector, industry: company.industry, securityType: commonSecurity(company.name) ? 'common' : 'unknown', price, marketCap: company.marketCap ?? null, confidence: 'C', deathSpiral: 'unknown', provenance: {}, history, dataIssues: issues, research: { financials: false, valuation: false, analysts: false, sector: !!company.sector } };
 
   if (price != null) snapshot.provenance.price = quoteEvidence;
   if(history.length>1&&history.at(-2)!.close>0){snapshot.dailyChange=history.at(-1)!.close/history.at(-2)!.close-1;snapshot.provenance.dailyChange={...quoteEvidence,tag:'last close / previous close - 1'};}
@@ -355,8 +384,8 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
     if (annual) { (snapshot as unknown as Record<string, unknown>)[key] = annual.val; snapshot.provenance[key] = provenance(annual, factsUrl, now); if (['20-F', '40-F'].includes(annual.form)) snapshot.foreignFiler = true }
   }
   const operational = snapshot as Snapshot & { ocf?: number; capex?: number };
-  if (operational.ocf != null && operational.capex != null && snapshot.provenance.ocf.periodEnd === snapshot.provenance.capex.periodEnd) {
-    snapshot.fcf = operational.ocf - operational.capex;
+  if (operational.ocf != null && operational.capex != null && snapshot.provenance.ocf.periodEnd === snapshot.provenance.capex.periodEnd && snapshot.provenance.ocf.periodStart===snapshot.provenance.capex.periodStart) {
+    snapshot.fcf = operational.ocf - Math.abs(operational.capex);
     snapshot.provenance.fcf = { ...snapshot.provenance.ocf, tag: 'OperatingCashFlow − PaymentsToAcquirePropertyPlantAndEquipment', availableAt: [snapshot.provenance.ocf.availableAt, snapshot.provenance.capex.availableAt].sort().at(-1)! };
   }
   delete operational.ocf; delete operational.capex;
@@ -366,7 +395,7 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
   }
   await enrichWithYahooProfile(snapshot, symbol, now, profilePromise);
   snapshot.research = { financials: !!snapshot.revenue, valuation: snapshot.evSales != null || snapshot.ps != null, analysts: snapshot.analystTarget != null, sector: !!snapshot.sector };
-  return snapshot;
+  return enrichFinancials(snapshot,facts,factsUrl);
 }
 
 export function parseNews(xml:string,asOf:string) {
