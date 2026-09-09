@@ -2,7 +2,7 @@ import ts from 'typescript';
 import fs from 'node:fs/promises';
 import {spawnSync} from 'node:child_process';
 await fs.mkdir('.test-build',{recursive:true});
-for(const [name,path] of [['scan-progress','lib/scan-progress.ts'],['visitor','lib/visitor.ts'],['http','lib/http.ts'],['client-json','lib/client-json.ts'],['validation','lib/validation.ts'],['storage','lib/storage.ts'],['scanner','lib/scanner.ts'],['reconcile','lib/reconcile.ts'],['push-validation','lib/push-validation.ts'],['worker','worker/index.ts'],['radar-api','app/api/radar/route.ts'],['chart-api','app/api/chart/route.ts']]) {
+for(const [name,path] of [['scan-progress','lib/scan-progress.ts'],['visitor','lib/visitor.ts'],['http','lib/http.ts'],['client-json','lib/client-json.ts'],['validation','lib/validation.ts'],['storage','lib/storage.ts'],['scanner','lib/scanner.ts'],['reconcile','lib/reconcile.ts'],['push-validation','lib/push-validation.ts'],['worker','worker/index.ts'],['radar-api','app/api/radar/route.ts'],['scan-report-api','app/api/scan-report/route.ts'],['chart-api','app/api/chart/route.ts']]) {
  let js=ts.transpileModule(await fs.readFile(path,'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
  js=js.replace(/from ['"](?:\.\/|@\/lib\/)([^'"]+)['"]/g,(_,p)=>`from './${p}.mjs'`);
  js=js.replace("from 'cloudflare:workers'","from '../tests/runtime/env.mjs'");

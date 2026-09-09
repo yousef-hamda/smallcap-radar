@@ -1,14 +1,15 @@
 import { currentHash, db, ensureSchema, insertSnapshot, log } from './storage';
 import { companySnapshot, consumeProviderIssues, historicalMarketData, quickSymbols, universe,yahooBulkQuotes } from './providers';
 import { fetchBulkFundamentals, preliminarySnapshot, type BulkFundamentals } from './bulk';
-import { bounceHistoryMetrics } from './research';
+import { bounceHistoryMetrics, reviewShareSplits } from './research';
 import { NON_TRADABLE_NAME, SPECS } from './strategy-spec';
 import { evaluateStrategy } from './engine';
 
 const BATCH_SIZE = 1;
-const HISTORY_BATCH_SIZE = 6;
+const HISTORY_BATCH_SIZE = 18;
+const PROVIDER_CONCURRENCY = 6;
 const SCORE_BATCH_SIZE = 200;
-export const SCAN_SOURCE_VERSION = 'Bulk Quotes/SEC Frames v8';
+export const SCAN_SOURCE_VERSION = 'Bulk Quotes/SEC Frames v9';
 const UNIVERSE_PAGE=1000;
 async function saveUniverse(runId:string,companies:any[],kind='candidates'){
  const statements=[];
@@ -214,16 +215,17 @@ export async function processScanBatch(runId: string) {
     const writes: any[] = [];
     const rows=entries.length?(await database.prepare(`SELECT symbol,payload FROM fundamental_snapshots WHERE run_id=? AND symbol IN (${entries.map(()=>'?').join(',')})`).bind(run.id,...entries.map((c:any)=>c.ticker)).all()).results:[];
     const bySymbol=new Map<string,any>(rows.map((row:any)=>[row.symbol,row]));
-    const outcomes = await Promise.all(entries.map(async (company: any) => {
+    const outcomes:any[]=[];
+    for(let start=0;start<entries.length;start+=PROVIDER_CONCURRENCY)outcomes.push(...await Promise.all(entries.slice(start,start+PROVIDER_CONCURRENCY).map(async (company: any) => {
       const row = bySymbol.get(company.ticker);
       if (!row) {await log(run.id,'history',`${company.ticker}: snapshot missing`);return {company,failed:true};}
-      const snapshot = JSON.parse(row.payload);
+      let snapshot = JSON.parse(row.payload);
       if (!historyCandidate(snapshot)) return { snapshot, company, skipped: true };
       snapshot.dataIssues=(snapshot.dataIssues??[]).filter((issue:string)=>!issue.startsWith('تعذّر تحميل تاريخ'));
       try {
-        const cacheKey=`scan-history:v1:${company.ticker}:${now.slice(0,10)}`;
+        const cacheKey=`scan-history:v2:${company.ticker}:${now.slice(0,10)}`;
         const cached=await database.prepare('SELECT retrieved_at,payload FROM raw_cache WHERE key=?').bind(cacheKey).first() as any;
-        const historical:Awaited<ReturnType<typeof historicalMarketData>>=cached&&Date.parse(now)-Date.parse(cached.retrieved_at)<15*60_000?JSON.parse(cached.payload):await historicalMarketData(company.ticker, now, 450);
+        const historical:Awaited<ReturnType<typeof historicalMarketData>>=cached&&Date.parse(now)-Date.parse(cached.retrieved_at)<24*60*60_000?JSON.parse(cached.payload):await historicalMarketData(company.ticker, now, 550);
         if(!cached||cached.retrieved_at!==historical.retrievedAt)await database.prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(cacheKey,historical.source,historical.retrievedAt,JSON.stringify(historical)).run();
         const history = historical.history.filter((bar): bar is typeof bar & { close: number } => Number.isFinite(bar.close));
         const metrics = bounceHistoryMetrics(history, now);
@@ -233,6 +235,7 @@ export async function processScanBatch(runId: string) {
         snapshot.asOf = now;
         const last = history.at(-1);
         const historyEvidence={source:historical.source,url:historical.url,retrievedAt:historical.retrievedAt,availableAt:historical.availableAt,periodEnd:last?.date??now.slice(0,10),confidence:'medium' as const};
+        snapshot=reviewShareSplits(snapshot,historical.splits,history[0]?.date??'',last?.date??'',historyEvidence);
         if (metrics.return12m != null) {
           snapshot.return12m = metrics.return12m;
           snapshot.provenance.return12m = { ...historyEvidence,tag:'12-month return' };
@@ -267,7 +270,7 @@ export async function processScanBatch(runId: string) {
         await log(run.id,'history',`${company.ticker}: ${snapshot.dataIssues.at(-1)}`);
       }
       return { snapshot, company, failed: snapshot.dataIssues?.some((issue: string) => issue.startsWith('تعذّر تحميل تاريخ')) === true };
-    }));
+    })));
     const historyFailed = outcomes.filter(outcome => outcome?.failed).length;
     for (const [index,outcome] of outcomes.entries()) {
       if(outcome.snapshot&&!outcome.skipped)writes.push(insertSnapshot(run.id,outcome.snapshot));

@@ -4,16 +4,17 @@ import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
 import {Star,RefreshCw,Download,Bell,Database,Search,X,ChevronDown} from 'lucide-react';
 import {Tabs,TabsList,TabsTrigger} from '@/components/ui/tabs';
 import {Progress} from '@/components/ui/progress';
-import {Dialog,DialogContent,DialogTitle,DialogDescription} from '@/components/ui/dialog';
+import {Dialog,DialogContent,DialogTitle,DialogDescription,DialogClose} from '@/components/ui/dialog';
 import {evaluateStrategy,SPECS,type Snapshot} from '@/lib/engine';
 import {scanProgress,type ScanRun} from '@/lib/scan-progress';
 import {saveOffline} from '@/lib/offline';
 import {money,price,percent,day,mark,checkLabel} from './radar-format';
 import CompanySheet from './company-sheet';
+import ScanReport from './scan-report';
 import {apiJson} from '@/lib/client-json';
 
 type View='core'|'bounce'|'favorites';
-type RadarData={run:ScanRun|null;dataRun:ScanRun|null;dataRunId?:string;snapshots:Snapshot[];favorites:string[];summary:{total:number;coreQualified:number;bounceQualified:number;coreUnknown:number;bounceUnknown:number};page:{hasMore:boolean}};
+type RadarData={run:ScanRun|null;dataRun:ScanRun|null;dataRunId?:string;snapshots:Snapshot[];favorites:string[];summary:{total:number;coreQualified:number;bounceQualified:number;coreUnknown:number;bounceUnknown:number;coreFailed?:number;bounceFailed?:number;stale?:boolean};page:{hasMore:boolean}};
 const names:Record<View,string>={bounce:'فرص الارتداد',core:'القيمة الأساسية',favorites:'المفضلة'};
 const request=apiJson;
 const post=(data:unknown)=>({method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
@@ -23,6 +24,7 @@ export default function RadarApp(){
  const [data,setData]=useState<RadarData|null>(null),[rows,setRows]=useState<Snapshot[]>([]),[favorites,setFavorites]=useState<string[]>([]);
  const [loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
  const [selected,setSelected]=useState<Snapshot|null>(null),[selectedEvaluation,setSelectedEvaluation]=useState<ReturnType<typeof evaluateStrategy>|null>(null),[detailLoading,setDetailLoading]=useState(false),[detailError,setDetailError]=useState('');
+ const [reportOpen,setReportOpen]=useState(false);
  const [settings,setSettings]=useState(false),[notificationBusy,setNotificationBusy]=useState(false),[saving,setSaving]=useState<string|null>(null);
  const [hasMore,setHasMore]=useState(false),[copied,setCopied]=useState('');
  const selection=useRef<AbortController|null>(null),lastView=useRef({view,search}),listRequest=useRef<AbortController|null>(null);
@@ -53,7 +55,8 @@ export default function RadarApp(){
     if(payload.run&&scanProgress(payload.run).active&&Date.now()-Date.parse(payload.run.updated_at)>15_000&&Date.now()>Number(payload.run.lease_until||0)&&Date.now()-lastResume.current>15_000){
      lastResume.current=Date.now();void request('/api/background-scan/resume',post({runId:payload.run.id})).catch(()=>{});
     }
-    if(!scanProgress(payload.run).active)await refresh();
+    const next=scanProgress(payload.run);
+    if(!next.active){setNotice(next.phase);await refresh();}
    }catch(e){if(!controller.signal.aborted)setError(e instanceof Error?e.message:'تعذّر تحديث حالة الفحص');}
    finally{pending=false;}
   },2500);
@@ -118,7 +121,8 @@ export default function RadarApp(){
   </div></header>
   <main className="radar-main">
    {(error||notice)&&<div className={`message ${error?'error':''}`} role={error?'alert':'status'}><span>{error||notice}</span><button aria-label="إغلاق الرسالة" onClick={()=>{setError('');setNotice('')}}><X size={16}/></button></div>}
-   {(data?.run||busy)&&<section className="scan-panel" aria-label="تقدم فحص السوق"><div className="scan-heading"><b>{busy&&!data?.run?'تجهيز الفحص':progress.phase}</b><strong dir="ltr">{progress.percent.toFixed(2)}<small> / 100.00%</small></strong></div><Progress value={progress.percent} aria-label="تقدم الفحص" aria-valuetext={`${progress.percent.toFixed(2)} بالمئة، ${progress.phase}`}/><div className="scan-meta"><span>{(data?.run?.stage===10?data.run.offset:data?.run?.processed??0).toLocaleString('en-US')} / {(data?.run?.total??0).toLocaleString('en-US')} في المرحلة</span><span>{progress.active?'الفحص مستمر على الخادم':data?.run?.failed?`${data.run.failed} طلبًا غير مكتمل`:'النتائج محفوظة'}</span></div>{data?.run?.error&&<p className="muted">{data.run.error}</p>}<details><summary>تفاصيل التقدم</summary><p>النسبة تمثل مراحل العمل المنجزة، وليست نسبة الوقت المتبقي. لا تتحرك دون تحديث محفوظ من الخادم.</p><p dir="ltr">{data?.run?.id}</p><p>آخر تحديث: {data?.run?.updated_at||'بانتظار الخادم'}</p></details></section>}
+   {(data?.run||busy)&&<section className="scan-panel" aria-label="تقدم فحص السوق"><div className="scan-heading"><b>{busy&&!data?.run?'تجهيز الفحص':progress.phase}</b><strong dir="ltr">{progress.percent.toFixed(2)}<small> / 100.00%</small></strong></div><Progress value={progress.percent} aria-label="تقدم الفحص" aria-valuetext={`${progress.percent.toFixed(2)} بالمئة، ${progress.phase}`}/><div className="scan-meta"><span>{(data?.run?.stage===10?data.run.offset:data?.run?.processed??0).toLocaleString('en-US')} / {(data?.run?.total??0).toLocaleString('en-US')} في المرحلة</span><span>{progress.active?'الفحص مستمر على الخادم':data?.run?.failed?`${data.run.failed} شركة تعذّر جلب تاريخها`:'النتائج محفوظة'}</span></div>{data?.run?.error&&<p className="muted">{data.run.error}</p>}<details><summary>تفاصيل التقدم</summary><p>النسبة تمثل مراحل العمل المنجزة، وليست نسبة الوقت المتبقي. لا تتحرك دون تحديث محفوظ من الخادم.</p><p dir="ltr">{data?.run?.id}</p><p>آخر تحديث: {data?.run?.updated_at||'بانتظار الخادم'}</p></details></section>}
+   {(data?.run||data?.dataRun)&&<p><button className="text-button" onClick={()=>{setReportOpen(true);setSettings(true)}}>عرض نتائج الجولة وأسباب عدم التأهيل</button>{data?.run&&data?.dataRun&&data.run.id!==data.dataRun.id&&<span> · القوائم تعرض آخر نتيجة محفوظة؛ تقرير الجولة يعرض الفحص الأحدث.</span>}</p>}
    <Tabs value={view} onValueChange={v=>{setView(v as View);setQuery('');setSearch('')}} dir="rtl" className="main-tabs"><TabsList aria-label="القوائم الرئيسية">{(['bounce','core','favorites'] as View[]).map(v=><TabsTrigger key={v} value={v} className={v}>{names[v]} <span>({v==='favorites'?favorites.length:v==='core'?data?.summary.coreQualified??0:data?.summary.bounceQualified??0})</span></TabsTrigger>)}</TabsList></Tabs>
    <section className={`strategy-brief ${view}`}>
     {view==='favorites'?<><div className="section-line"><h2>المفضلة ({favorites.length})</h2><button className="text-button" onClick={()=>setView('bounce')}>عودة للكل</button></div><p>قائمتك الخاصة. الحفظ لا يجعل السهم مؤهلًا للاستراتيجية.</p></>:<>
@@ -135,13 +139,14 @@ export default function RadarApp(){
     <div className="stock-price"><b dir="ltr">{price(s.price)}</b><span className={s.dailyChange==null?'muted':s.dailyChange>=0?'pass':'fail'}>{s.dailyChange==null?'تغير الجلسة غير متاح':`${percent(s.dailyChange)} آخر جلسة`}</span></div><p className="stock-meta" dir="auto">{s.exchange||'السوق غير متاح'} · ${money(s.marketCap)}</p>
     <div className="check-chips">{e.checks.filter(c=>!['provenance','freshness','filingFreshness','conflict'].includes(c.id)).map(c=><span key={c.id} className={c.status.toLowerCase()}>{mark[c.status]} {checkLabel[c.id]||c.label}</span>)}</div>
     {view==='favorites'&&!e.screeningQualified&&<p className="card-warning">{e.status==='FAIL'?'لم يجتز شروط القائمة':'القبول غير مثبت'}: {e.checks.filter(c=>c.status!=='PASS').map(c=>checkLabel[c.id]||c.label).join('، ')}</p>}
-   </li>)}</ul>:<section className="empty-state"><h2>{view==='favorites'?'لم تضف أي سهم إلى المفضلة':search?'لا توجد نتائج مطابقة':data?.dataRun?'لا توجد أسهم مكتملة الشروط في هذه القائمة':'لم تُنشأ لقطة سوق بعد'}</h2><p>{view==='favorites'?'اضغط النجمة بجانب السهم لحفظه هنا.':search?'ابحث برمز سهم لفتح ملفه، أو امسح البحث لرؤية القائمة.':'ابدأ فحص السوق. ستظهر النتائج المقبولة بعد التحقق؛ البيانات الناقصة تبقى خارج القائمة.'}</p>{!data?.dataRun&&view!=='favorites'&&<button className="scan-button" onClick={()=>scan()} disabled={busy||progress.active}>فحص السوق</button>}</section>}
+   </li>)}</ul>:<section className="empty-state"><h2>{view==='favorites'?'لم تضف أي سهم إلى المفضلة':search?'لا توجد نتائج مطابقة':data?.dataRun?'لا توجد أسهم مكتملة الشروط في هذه القائمة':'لم تُنشأ لقطة سوق بعد'}</h2><p>{view==='favorites'?'اضغط النجمة بجانب السهم لحفظه هنا.':search?'ابحث برمز سهم لفتح ملفه، أو امسح البحث لرؤية القائمة.':data?.dataRun?'الجولة محفوظة، لكن لم يجتز أي سهم جميع البوابات الموثقة. البيانات الناقصة لا تُعرض كنجاح.':'ابدأ فحص السوق. ستظهر النتائج المقبولة بعد التحقق؛ البيانات الناقصة تبقى خارج القائمة.'}</p>{!data?.dataRun&&view!=='favorites'&&<button className="scan-button" onClick={()=>scan()} disabled={busy||progress.active}>فحص السوق</button>}</section>}
    {hasMore&&!loading&&<button className="load-more" onClick={()=>refresh(true)}>عرض المزيد <ChevronDown size={16}/></button>}
    <footer className="radar-footer"><h3>ما لا تفعله هذه الأداة</h3><p>لا تقرأ العقود تلقائيًا، ولا تعرف لماذا السهم راكد. الشراء الداخلي يُجلب من نماذج Form 4 عند فتح السهم. الدرجة تقيس مطابقة المعايير لا العائد المتوقع.</p><button onClick={()=>setSettings(true)}>المنهجية والمصادر وسجل التدقيق</button></footer>
   </main>
   <CompanySheet snapshot={selected} strategy={strategy} baselineEvaluation={selectedEvaluation} loading={detailLoading} error={detailError} onClose={closeCompany} onRetry={()=>selected&&openCompany(selected,selectedEvaluation)} favorite={selected?favorites.includes(selected.symbol):false} onFavorite={()=>selected&&favorite(selected)} onCopy={()=>selected&&copy(selected.symbol)}/>
-  <Dialog open={settings} onOpenChange={setSettings}><DialogContent className="settings-dialog" dir="rtl"><DialogTitle>مركز البيانات والإشعارات</DialogTitle><DialogDescription>حالة المصادر والفحص، وأدوات حفظ النتائج ومراجعتها.</DialogDescription>
+  <Dialog open={settings} onOpenChange={setSettings}><DialogContent className="settings-dialog" dir="rtl" showCloseButton={false}><DialogClose className="absolute top-4 left-4" aria-label="إغلاق مركز البيانات"><X size={20}/></DialogClose><DialogTitle>مركز البيانات والإشعارات</DialogTitle><DialogDescription>حالة المصادر والفحص، وأدوات حفظ النتائج ومراجعتها.</DialogDescription>
    <div className="settings-scroll">{(error||notice)&&<div className={`message ${error?'error':''}`} role={error?'alert':'status'}>{error||notice}</div>}<section><h3>إشعار اكتمال الفحص</h3><p>على iPhone: افتح الموقع في Safari ← أضف إلى الشاشة الرئيسية ← افتحه من الأيقونة ← فعّل الإشعارات ← وافق على الإذن ← اختبر الإشعار.</p><div className="action-pair"><button onClick={()=>notifications()} disabled={notificationBusy}>تفعيل الإشعارات</button><button onClick={()=>notifications(true)} disabled={notificationBusy}>اختبار الإشعار</button></div><small>قبول الإرسال من المزود ليس دليل وصول على الهاتف.</small></section>
+   {reportOpen&&(data?.run||data?.dataRun)&&<ScanReport key={`${data?.run?.id??data?.dataRun?.id}:${strategy}`} runId={(data?.run?.id??data?.dataRun?.id)!} strategy={strategy} onOpen={symbol=>{setSettings(false);void openCompany({symbol,name:symbol,asOf:new Date().toISOString(),provenance:{}},null)}}/>}
    <section><h3>تغطية آخر فحص</h3><dl className="data-grid"><div><dt>دليل السوق</dt><dd>{data?.run?.universe_total??'—'}</dd></div><div><dt>أسعار متاحة</dt><dd>{data?.run?.quote_coverage??'—'}</dd></div><div><dt>أساسيات متاحة</dt><dd>{data?.run?.fundamental_coverage??'—'}</dd></div><div><dt>طلبات غير مكتملة</dt><dd>{data?.run?.failed??'—'}</dd></div></dl><p>{data?.run?.source||'لا يوجد فحص بعد'}</p><p>قد تُستخدم لقطات مؤرخة عند تعذر المزود. راجع مصدر كل قيمة وتاريخ توفرها داخل ملف الشركة.</p><div className="action-pair"><button onClick={()=>scan('quick')} disabled={busy||progress.active}>فحص عينة 12 سهمًا</button><button onClick={()=>refresh()}>تحديث الحالة</button></div></section>
    <section><h3>التصدير والاستيراد</h3><div className="export-links"><a href="/api/export?kind=audit" download>سجل التدقيق</a><a href="/api/export?kind=spec" download>مواصفة المحرك</a><a href="/api/export?kind=schema" download>قالب البيانات</a></div><label className="file-import">استيراد لقطة JSON موثقة<input type="file" accept="application/json" disabled={busy} onChange={e=>importFile(e.target.files?.[0])}/></label></section>
    <section><h3>خصوصية المفضلة</h3><p>المفضلة منفصلة لكل هوية دخول، أو لكل متصفح للزائر غير المسجل، ومحفوظة على الخادم. لم تُنقل عناصر القائمة المشتركة السابقة إلى قائمتك. حذف ملفات تعريف الارتباط للزائر غير المسجل يفقده مفتاح قائمته.</p></section></div>

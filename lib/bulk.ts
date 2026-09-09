@@ -196,8 +196,9 @@ export function preliminarySnapshot(company: Company, facts: BulkFundamentals | 
   if (facts.shares && facts.priorShares && facts.priorShares.val > 0) {
     snapshot.shareCountRatio = facts.shares.val / facts.priorShares.val;
     snapshot.dilution = snapshot.shareCountRatio - 1;
-    snapshot.provenance.dilution = derivedEvidence('SEC reported share ratio; corporate actions unverified',[frameProvenance(facts.shares,retrievedAt),frameProvenance(facts.priorShares,retrievedAt)],retrievedAt,'current / prior − 1')!;
+    snapshot.provenance.dilution = {...derivedEvidence('SEC reported share ratio; corporate actions unverified',[frameProvenance(facts.shares,retrievedAt),frameProvenance(facts.priorShares,retrievedAt)],retrievedAt,'current / prior − 1')!,periodStart:facts.priorShares.end,periodEnd:facts.shares.end};
     snapshot.provenance.shareCountRatio=snapshot.provenance.dilution;
+    snapshot.splitAdjusted=false;
     // A material split changes the reported share count by more than 2x (or
     // below 0.5x for a reverse split). Such rows remain UNKNOWN rather than
     // being promoted with an unadjusted dilution figure.

@@ -4,7 +4,8 @@ import {fixtures} from '../../.test-build/fixtures.mjs';
 import {simulateExit,expiryDate,pointInTime,firmHoldout,firmBootstrap,bonferroni,splitAdjustedDilution,ma30Weeks,bounceHistoryMetrics} from '../../.test-build/research.mjs';
 import {trailingAnnual,insiderPurchases,latestInstant} from '../../.test-build/sec.mjs';
 import {preliminarySnapshot} from '../../.test-build/bulk.mjs';
-import {yahooPercentAsRatio} from '../../.test-build/providers.mjs';
+import {yahooPercentAsRatio,parseYahooDaily} from '../../.test-build/providers.mjs';
+import {reviewShareSplits} from '../../.test-build/research.mjs';
 import {enrichFinancials} from '../../.test-build/financials.mjs';
 import {derivedEvidence} from '../../.test-build/evidence.mjs';
 import {parseYahooIntraday} from '../../.test-build/chart-data.mjs';
@@ -26,6 +27,28 @@ test('future evidence is excluded',()=>{const s={...base,provenance:{...base.pro
 test('missing research and source conflict never final ranks',()=>{const r=evaluateStrategy('core',{...base,confidence:'D',sourceConflicts:['Revenue disagreement']});assert.equal(r.finalRanked,false);assert.equal(r.checks.find(c=>c.id==='conflict').status,'UNKNOWN')});
 test('same data and spec yield identical result and stable hash',()=>{assert.deepEqual(evaluateStrategy('core',base),evaluateStrategy('core',structuredClone(base)));assert.notEqual(specHash('core'),specHash('bounce'))});
 test('split does not create dilution',()=>assert.equal(splitAdjustedDilution(200,100,2),0));
+test('daily history ignores dividends, incomplete sessions, invalid and duplicate bars',()=>{
+ const t=Date.parse('2026-08-28T13:30:00Z')/1000;
+ const result=parseYahooDaily({chart:{result:[{timestamp:[t,t,t+86400,NaN,t+86400*4],indicators:{quote:[{close:[10,12,null,40,99],low:[9,11,null,38,90]}],adjclose:[{adjclose:[5,6,null,20,50]}]}}]}},'2026-09-01T15:00:00Z');
+ assert.deepEqual(result.history.map(r=>r.close),[12]);assert.deepEqual(result.splits,[]);
+ assert.equal(parseYahooDaily({chart:{error:{code:'oops'}}}).splits,null);
+ const bad={chart:{result:[{events:{splits:{a:{date:t,numerator:2,denominator:0}}}}]}};assert.equal(parseYahooDaily(bad,'2026-09-01').splits,null);
+});
+test('split review is evidence-based, interval-bound and idempotent',()=>{
+ const p={...base.provenance.dilution,periodStart:'2025-06-30',periodEnd:'2026-06-30'};
+ const s={...base,splitAdjusted:false,shareCountRatio:2.2,dilution:1.2,provenance:{...base.provenance,dilution:p,shareCountRatio:p}};
+ const h={...p,source:'TEST ONLY SPLIT EVENTS'};
+ const events=[{date:'2025-08-01',factor:2},{date:'2025-08-01',factor:2}];
+ const result=reviewShareSplits(s,events,'2025-06-01','2026-08-28',h);
+ assert.equal(result.splitAdjusted,true);assert(Math.abs(result.dilution-.1)<1e-9);assert.equal(result.shareCountRatio,1.1);
+ assert.deepEqual(reviewShareSplits(result,events,'2025-06-01','2026-08-28',h),result);
+ assert.equal(reviewShareSplits(s,null,'2025-06-01','2026-08-28',h).splitAdjusted,false);
+ assert.equal(reviewShareSplits(s,[],'2025-07-01','2026-08-28',h).splitAdjusted,false);
+ assert.equal(reviewShareSplits(s,[],'2025-06-01','2026-05-01',h).splitAdjusted,false);
+ assert.equal(reviewShareSplits(s,[{date:'2025-08-01',factor:0}],'2025-06-01','2026-08-28',h).splitAdjusted,false);
+ assert.equal(reviewShareSplits(s,events,'2025-06-01','2026-08-28',{...h,availableAt:'2028-01-01'}).splitAdjusted,false);
+ assert.equal(reviewShareSplits(s,[],'2025-06-01','2026-08-28',h).splitAdjusted,true);
+});
 test('both target and stop in daily bar assumes stop',()=>{const r=simulateExit(100,'2026-01-01',[{date:'2026-01-02',open:100,high:122,low:83,close:105}]);assert.equal(r.reason,'stop');assert.equal(r.fill,85)});
 test('gap below stop fills at open',()=>assert.equal(simulateExit(100,'2026-01-01',[{date:'2026-01-02',open:75,high:80,low:70,close:78}]).fill,75));
 test('target touch and conservative gap-up',()=>assert.equal(simulateExit(100,'2026-01-01',[{date:'2026-01-02',open:130,high:135,low:125,close:129}]).fill,120));

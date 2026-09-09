@@ -46,7 +46,7 @@ function requestHeaders(url: string): Record<string, string> {
 }
 
 const wait = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
-export async function fetchJson(url: string, timeoutMs = 8_000, ttlMs = 30_000) {
+export async function fetchJson(url: string, timeoutMs = 8_000, ttlMs = 30_000, attempts = 3) {
   const now = Date.now(), cached = responseCache.get(url);
   if (cached && cached.expiresAt > now) return cached.value;
   const host=new URL(url).hostname;
@@ -55,7 +55,7 @@ export async function fetchJson(url: string, timeoutMs = 8_000, ttlMs = 30_000) 
   if (existing) return existing;
   const request = (async () => {
     let lastError: unknown;
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < attempts; attempt++) {
       try {
         const response = await fetch(url, { headers: requestHeaders(url), signal: AbortSignal.timeout(timeoutMs) });
         if (response.ok) {
@@ -73,10 +73,10 @@ export async function fetchJson(url: string, timeoutMs = 8_000, ttlMs = 30_000) 
         const retryHeader=response.headers.get('retry-after')||'0';
         const retryAfter=Number.isFinite(Number(retryHeader))?Number(retryHeader):Math.max(0,(Date.parse(retryHeader)-Date.now())/1000);
         if(retryAfter>5){cooldowns.set(host,Date.now()+retryAfter*1000);lastError=Error(`${host}: rate limited; retry after ${retryAfter}s`);break;}
-        await wait(Math.min(5000,Math.max(retryAfter * 1000, 250 * 2 ** attempt)));
+        if(attempt+1<attempts)await wait(Math.min(5000,Math.max(retryAfter * 1000, 250 * 2 ** attempt)));
       } catch (error) {
         lastError = error;
-        if (attempt < 2) await wait(250 * 2 ** attempt);
+        if (attempt+1 < attempts) await wait(250 * 2 ** attempt);
       }
     }
     const message = lastError instanceof Error ? lastError.message : 'provider request failed';
@@ -231,21 +231,59 @@ function isoDate(date: string) { const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exe
 function dateOffset(iso: string, days: number) { const date = new Date(iso); date.setUTCDate(date.getUTCDate() + days); return date.toISOString().slice(0, 10) }
 function commonSecurity(name: string) { return !NON_TRADABLE_NAME.test(name) }
 
+export function parseYahooDaily(payload:any,asOf=new Date().toISOString()){
+ const result=payload?.chart?.result?.[0];
+ const timestamps=Array.isArray(result?.timestamp)?result.timestamp:[];
+ const quote=result?.indicators?.quote?.[0]??{};
+ const cutoff=Date.parse(asOf);
+ const bars=new Map<string,NonNullable<Snapshot['history']>[number]>();
+ for(let index=0;index<timestamps.length;index++){
+  const timestamp=timestamps[index];
+  if(!Number.isFinite(timestamp)||timestamp*1000>cutoff)continue;
+  const date=new Date(timestamp*1000).toISOString().slice(0,10);
+  // Daily quote OHLC is split-adjusted. adjclose additionally adjusts cash
+  // dividends and must not be mixed with the current price/52-week range.
+  const close=numeric(quote.close?.[index]);
+  if(close==null||close<=0||Date.parse(`${date}T23:59:59Z`)>cutoff)continue;
+  const value=(field:string)=>{const n=numeric(quote[field]?.[index]);return n!=null&&n>=0?n:undefined};
+  bars.set(date,{date,close,open:value('open'),high:value('high'),low:value('low'),volume:value('volume')});
+ }
+ const history=[...bars.values()].sort((a,b)=>a.date.localeCompare(b.date));
+ const splits:{date:string;factor:number}[]=[];
+ let validEvents=!!result&&payload?.chart?.error==null;
+ for(const event of Object.values(result?.events?.splits??{}) as any[]){
+  const numerator=numeric(event.numerator),denominator=numeric(event.denominator);
+  const ratioParts=String(event.splitRatio??'').split(':').map(Number);
+  const factor=numerator!=null&&denominator!=null?numerator/denominator:ratioParts.length===2?ratioParts[0]/ratioParts[1]:NaN;
+  if(!Number.isFinite(event.date)||!Number.isFinite(factor)||factor<=0){validEvents=false;continue;}
+  const date=new Date(event.date*1000).toISOString().slice(0,10);
+  if(Date.parse(`${date}T23:59:59Z`)>cutoff)continue;
+  splits.push({date,factor});
+ }
+ return {history,splits:validEvents?splits.sort((a,b)=>a.date.localeCompare(b.date)):null};
+}
+
 export async function historicalMarketData(symbol: string, asOf = new Date().toISOString(), days = 1900) {
   const cached = (quickCache.symbols as Record<string, CachedQuick>)[symbol];
   const to = asOf.slice(0, 10), from = dateOffset(asOf, -days);
+  const period1=Math.floor(Date.parse(`${from}T00:00:00Z`)/1000),period2=Math.floor(Date.parse(asOf)/1000)+86400;
+  const yahooUrl=`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?period1=${period1}&period2=${period2}&interval=1d&events=div%2Csplits&includeAdjustedClose=true`;
+  try{
+   const parsed=parseYahooDaily(await fetchJson(yahooUrl,3000,86_400_000,1),asOf);
+   if(parsed.history.length)return {url:yahooUrl,...parsed,source:'Yahoo Finance chart API · adjusted daily history and split events',retrievedAt:asOf,availableAt:asOf};
+  }catch(error){recordProviderIssue(`${symbol}: Yahoo daily history unavailable: ${error instanceof Error?error.message:String(error)}; trying Nasdaq`);}
   const url = `https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/historical?assetclass=stocks&fromdate=${from}&todate=${to}&limit=5000`;
   let payload: { data?: { tradesTable?: { rows?: Array<Record<string, string>> } } };
-  try { payload = await fetchJson(url,6000,300_000) as typeof payload; }
+  try { payload = await fetchJson(url,3000,300_000,1) as typeof payload; }
   catch(error) {
    if(!cached?.history?.length)throw error;
    recordProviderIssue(`${symbol}: historical API unavailable; dated bundled history fallback`);
-   return {url,history:cached.history.filter(row=>row.date>=from&&row.date<=to),source:'Nasdaq historical · bundled dated fallback',retrievedAt:quickCache.generatedAt,availableAt:quickCache.generatedAt};
+   return {url,history:cached.history.filter(row=>row.date>=from&&row.date<=to),splits:null,source:'Nasdaq historical · bundled dated fallback',retrievedAt:quickCache.generatedAt,availableAt:quickCache.generatedAt};
   }
   const history = (payload.data?.tradesTable?.rows ?? []).map((row) => ({ date: isoDate(row.date), close: numeric(row.close), open: numeric(row.open), high: numeric(row.high), low: numeric(row.low), volume: numeric(row.volume) }))
     .filter((row) => row.date && row.date<=to && row.date>=from && row.close != null && row.close > 0 && row.low != null && row.low > 0).sort((a, b) => a.date.localeCompare(b.date));
   if(!history.length)throw Error(`${symbol}: no historical sessions returned`);
-  return { url, history, source:'Nasdaq historical API',retrievedAt:asOf,availableAt:asOf };
+  return { url, history, splits:null,source:'Nasdaq historical API · corporate actions unavailable',retrievedAt:asOf,availableAt:asOf };
 }
 
 export async function intradayMarketData(symbol:string,asOf=new Date().toISOString()):Promise<ChartPayload>{

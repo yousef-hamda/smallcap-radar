@@ -12,6 +12,7 @@ import {fixtures} from '../../.test-build/fixtures.mjs';
 import {ensureSchema,db,currentHash,readState,insertSnapshot} from '../../.test-build/storage.mjs';
 import {processScanBatch,startScan,bounceHistoryCandidate,historyCandidate} from '../../.test-build/scanner.mjs';
 import {GET,POST} from '../../.test-build/radar-api.mjs';
+import {GET as reportGET} from '../../.test-build/scan-report-api.mjs';
 import {GET as chartGET} from '../../.test-build/chart-api.mjs';
 import worker from '../../.test-build/worker.mjs';
 import {validPushSubscription} from '../../.test-build/push-validation.mjs';
@@ -30,8 +31,12 @@ test('progress is monotonic at all full-scan phase transitions',()=>{
  const sequence=[run(),run({stage:4}),run({stage:9}),run({stage:9,offset:100}),run({stage:10}),run({stage:10,offset:99}),run({stage:10,offset:100}),run({stage:13,offset:100,status:'complete'})].map(s=>scanProgress(s).percent);
  assert(sequence.every((n,i)=>i===0||n>=sequence[i-1]));assert.equal(sequence.at(-1),100);assert(sequence.slice(0,-1).every(n=>n<100));
 });
-test('partial, failed, empty and active retry runs never claim 100%',()=>{
- for(const r of [null,run({stage:13,offset:100,status:'partial',failed:1}),run({stage:10,offset:100,status:'failed'}),run({stage:13,offset:100,retryPending:1}),run({stage:4,total:0})])assert(scanProgress(r).percent<100);
+test('failed, empty and active retry runs never claim 100%',()=>{
+ for(const r of [null,run({stage:10,offset:100,status:'failed'}),run({stage:13,offset:100,retryPending:1}),run({stage:4,total:0})])assert(scanProgress(r).percent<100);
+});
+test('terminal partial completes work at 100 while explicitly retaining missing-data status',()=>{
+ const r=scanProgress(run({stage:13,offset:100,status:'partial',failed:26}));assert.equal(r.percent,100);assert.equal(r.active,false);assert.match(r.phase,/نقص/);
+ assert.equal(scanProgress(run({stage:10,offset:100,status:'partial',retryPending:1})).active,true);
 });
 test('missing numeric provider fields stay null, while actual zero is zero',()=>{for(const n of [null,undefined,'','  ','N/A','--',NaN,Infinity,false,{},[]])assert.equal(numeric(n),null);assert.equal(numeric('$1,234.50'),1234.5);assert.equal(numeric('0'),0)});
 test('ten-day volume proxy cannot reject a historical candidate',()=>{
@@ -64,6 +69,15 @@ test('API personal favorites start at zero, writes are idempotent and isolated',
 test('API rejects cross-origin and malformed favorite writes',async()=>{
  const cross=await POST(new Request('https://radar.test/api/radar',{method:'POST',headers:{origin:'https://other.test'},body:'{}'}));assert.equal(cross.status,403);
  const invalid=await POST(new Request('https://radar.test/api/radar',{method:'POST',headers:{origin:'https://radar.test'},body:JSON.stringify({action:'favorite',symbol:'BAD!',saved:true})}));assert.equal(invalid.status,400);
+});
+test('scan report retains rejected and unknown rows, validates paging and never promotes them',async()=>{
+ const url='https://radar.test/api/scan-report?runId=scan-test&strategy=core';
+ const response=await reportGET(new Request(url));assert.equal(response.status,200);
+ const payload=await response.json();assert.equal(payload.counts.total,1);assert.equal(payload.rows[0].symbol,'TEST');assert(payload.blockers.length>0);assert.equal(payload.counts.passed,0);assert.equal(payload.page.hasMore,false);
+ assert.equal((await reportGET(new Request(url+'&offset=-1'))).status,400);
+ assert.equal((await reportGET(new Request(url.replace('core','bad')))).status,400);
+ assert.equal((await reportGET(new Request(url.replace('scan-test','absent')))).status,404);
+ assert.equal((await reportGET(new Request(url+'&offset=25'))).status,200);
 });
 test('client API parser translates HTML route failures instead of leaking JSON syntax errors',async()=>{
  const original=globalThis.fetch;
@@ -98,6 +112,24 @@ test('local evaluation benchmarks at 2000, 10000 and 15000 synthetic companies',
   for(let i=0;i<size;i++){const s={...base,symbol:`SYNTHETIC${i}`};if(evaluateStrategy('bounce',s).status)count++;}
   const elapsed=performance.now()-start;assert.equal(count,size);assert(elapsed<15000);t.diagnostic(`${size}: ${elapsed.toFixed(1)} ms (local engine only; excludes providers and browser)`);
  }
+});
+test('full history stage can qualify a completely evidenced Bounce candidate while Core review remains UNKNOWN',async()=>{
+ const now=new Date().toISOString(),date=days=>new Date(Date.parse(now)-days*864e5).toISOString().slice(0,10);
+ const history=[];
+ for(let days=550;days>=1;days--){const day=date(days);const weekday=new Date(day).getUTCDay();if(weekday===0||weekday===6)continue;const close=days>250?26:days<5?12:8;history.push({date:day,close,open:close,high:close,low:close,volume:100000});}
+ const latest=history.at(-1).date;
+ const p={...base.provenance.price,availableAt:now,retrievedAt:now,periodEnd:latest};
+ const shares={...p,periodStart:date(400),periodEnd:date(30)};
+ const snapshot={...base,symbol:'REBOUND',asOf:now,marketCap:100e6,price:12,return12m:-.5,low52w:8,ma30w:null,medianDollarVolume20d:null,splitAdjusted:false,shareCountRatio:1.05,dilution:.05,deathSpiral:'unknown',riskEvidence:undefined,provenance:{...base.provenance,price:p,marketCap:p,dilution:shares,shareCountRatio:shares}};
+ await db().prepare('INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,strategy_hash) VALUES(?,?,?,?,?,?,?,?,?)').bind('rebound-evidence',now,now,'running','Bulk Quotes/SEC Frames v9 · full',1,JSON.stringify([{ticker:'REBOUND'}]),10,currentHash()).run();
+ await insertSnapshot('rebound-evidence',snapshot).run();
+ setHistoryResult({history,splits:[],source:'SYNTHETIC TEST ONLY',url:'https://example.test/splits',retrievedAt:now,availableAt:now});
+ try{
+  const result=await processScanBatch('rebound-evidence');assert.equal(result.done,true);
+  const stored=sqlite.prepare("SELECT payload,evaluation FROM fundamental_snapshots WHERE run_id='rebound-evidence'").get();
+  const e=JSON.parse(stored.evaluation);assert.equal(e.bounce.screeningQualified,true,JSON.stringify(e.bounce.checks));assert.equal(e.core.screeningQualified,false);
+  assert.equal(JSON.parse(stored.payload).splitAdjusted,true);assert.equal(JSON.parse(stored.payload).history,undefined);
+ }finally{setHistoryResult(null);}
 });
 
 test('history retries recover without double-counting failures or retaining stale errors',async()=>{

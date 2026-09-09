@@ -1,4 +1,31 @@
 import {SPECS} from './engine';
+import type {Snapshot,Provenance} from './engine';
+import {derivedEvidence,usableEvidence} from './evidence';
+
+/** Only a complete, valid split-event response can verify reported shares. */
+export function reviewShareSplits(snapshot:Snapshot,events:{date:string;factor:number}[]|null|undefined,coverageStart:string,coverageEnd:string,evidence:Provenance):Snapshot {
+ if(snapshot.splitAdjusted===true)return snapshot;
+ const shares=snapshot.provenance.shareCountRatio;
+ if(!Array.isArray(events)||!shares?.periodStart||!shares.periodEnd||!usableEvidence(shares,snapshot.asOf)||!usableEvidence(evidence,snapshot.asOf))return snapshot;
+ const start=Date.parse(shares.periodStart),end=Date.parse(shares.periodEnd);
+ if(!Number.isFinite(start)||!Number.isFinite(end)||start>=end||!(Date.parse(coverageStart)<=start)||!(Date.parse(coverageEnd)>=end))return snapshot;
+ if(!Number.isFinite(snapshot.shareCountRatio)||snapshot.shareCountRatio!<=0)return snapshot;
+ const unique=new Map<string,number>();
+ for(const event of events){
+  const date=Date.parse(event.date);
+  if(!Number.isFinite(date)||!Number.isFinite(event.factor)||event.factor<=0||date>Date.parse(snapshot.asOf))return snapshot;
+  if(unique.has(event.date)&&unique.get(event.date)!==event.factor)return snapshot;
+  unique.set(event.date,event.factor);
+ }
+ let factor=1;
+ for(const [date,value] of unique)if(Date.parse(date)>start&&Date.parse(date)<=end)factor*=value;
+ const ratio=snapshot.shareCountRatio!/factor;
+ if(!Number.isFinite(ratio)||ratio<=0)return snapshot;
+ const p=derivedEvidence('SEC share counts + Yahoo split events',[shares,evidence],snapshot.asOf,`reported share ratio / split factor ${factor}`);
+ if(!p)return snapshot;
+ const adjusted={...p,url:evidence.url,tag:`${p.tag}; SEC shares: ${shares.url??shares.source}`,periodStart:shares.periodStart,periodEnd:shares.periodEnd};
+ return {...snapshot,shareCountRatio:ratio,dilution:ratio-1,splitAdjusted:true,provenance:{...snapshot.provenance,dilution:adjusted,shareCountRatio:adjusted},dataIssues:snapshot.dataIssues?.filter(issue=>!issue.includes('corporate actions'))};
+}
 export type Bar={date:string;open:number;high:number;low:number;close:number};
 export function expiryDate(entry:string,months=SPECS.bounce.exit.months){const d=new Date(entry+'T00:00:00Z');const day=d.getUTCDate();d.setUTCDate(1);d.setUTCMonth(d.getUTCMonth()+months);const last=new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth()+1,0)).getUTCDate();d.setUTCDate(Math.min(day,last));return d.toISOString().slice(0,10)}
 export function simulateExit(entry:number,entryDate:string,bars:Bar[],cost={slippageBps:0,commission:0,shares:1}){
