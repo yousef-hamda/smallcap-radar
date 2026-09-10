@@ -4,7 +4,7 @@ import type { Provenance, Snapshot } from './engine';
 import bundledFrames from './sec-frames.generated.json';
 import {REVENUE_TAGS} from './sec';
 import {derivedEvidence,usableEvidence} from './evidence';
-import {NON_TRADABLE_NAME} from './strategy-spec';
+import {NON_TRADABLE_NAME, SEC_FRAME_DATASET_COUNT} from './strategy-spec';
 
 type FrameFact = { cik: number; entityName?: string; start?: string; end: string; val: number; filed?: string; form?: string; accn?: string; frame?: string };
 type StoredFact = FrameFact & { tag: string; priority: number; url: string; fallback?: boolean; observedAt?:string };
@@ -121,7 +121,7 @@ export async function fetchBulkFundamentals(candidateCiks: number[], asOf = new 
       }
     }
   }
-  return { fundamentals, changed:[...changed],nextOffset:stop,totalConfigs:configs.length,done:stop>=configs.length, requests: requiredConfigs.length, optionalRequests: optionalConfigs.length, success, failed, optionalSuccess, optionalFailed, fallbackUsed, errors: [...new Set(errors)].slice(0, 8), annual, instant };
+  return { fundamentals, changed:[...changed],nextOffset:stop,totalConfigs:SEC_FRAME_DATASET_COUNT,done:stop>=configs.length, requests: requiredConfigs.length, optionalRequests: optionalConfigs.length, success, failed, optionalSuccess, optionalFailed, fallbackUsed, errors: [...new Set(errors)].slice(0, 8), annual, instant };
 }
 
 function frameProvenance(fact: StoredFact, retrievedAt: string): Provenance {

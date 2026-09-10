@@ -96,6 +96,9 @@ export const SPECS = {
   },
 } as const;
 
+/** Required and optional SEC Frames datasets traversed by the bulk stage. */
+export const SEC_FRAME_DATASET_COUNT = 16;
+
 export type StrategyKey = keyof typeof SPECS;
 
 export const INVESTABLE_EXCHANGES = [

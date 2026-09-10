@@ -70,7 +70,7 @@ async function sendCompletionPush(env: Env, run: any) {
   return true;
 }
 
-async function scheduleNext(request: Request, runId: string, env: Env) {
+async function scheduleNext(request: Request, runId: string, env: Env): Promise<boolean> {
   const target = new URL("/__radar-background", request.url);
   const cookie = request.headers.get("Cookie");
   // Some existing Sites deployments have the optional dedicated secret unset.
@@ -79,7 +79,7 @@ async function scheduleNext(request: Request, runId: string, env: Env) {
   const batonSecret = env.BACKGROUND_SCAN_SECRET || env.VAPID_PRIVATE_KEY;
   if (!batonSecret) {
     await log(runId, "background", "BACKGROUND_SCAN_SECRET/VAPID_PRIVATE_KEY غير مضبوط؛ أوقفنا baton بدل إعادة المحاولة بلا حماية.");
-    return;
+    return false;
   }
   for (let attempt = 0; attempt < 3; attempt++) {
     const headers: Record<string, string> = { "X-Radar-Background": batonSecret, "Content-Type": "application/json" };
@@ -90,31 +90,44 @@ async function scheduleNext(request: Request, runId: string, env: Env) {
       const response = await fetch(target, { method: "POST", headers, body: JSON.stringify({ runId }),signal:AbortSignal.timeout(5000) });
       const contentType=response.headers.get('content-type')||'';
       const payload=contentType.includes('application/json')?await response.json().catch(()=>null):null;
-      if (response.ok && (payload as any)?.accepted===true) return;
+      if (response.ok && (payload as any)?.accepted===true) return true;
       await log(runId, "background", `Background baton attempt ${attempt + 1}: HTTP ${response.status}`);
     }catch(error){await log(runId,'background',`Baton attempt ${attempt+1}: ${error instanceof Error?error.message:'network failure'}`);}
     await delay(400 * (attempt + 1));
   }
   await log(runId, "background", "تعذّر تمرير مهمة الفحص إلى الدفعة التالية بعد ثلاث محاولات.");
+  return false;
 }
 
-async function runBackgroundBatch(request: Request, runId: string, env: Env) {
+async function continueAfterBatonFailure(request: Request, runId: string, env: Env, directHops: number) {
+  // Sites may reject a worker-to-worker self-request at the edge (401 or an
+  // HTML fallback page). Do not abandon the durable cursor in that case: run a
+  // small bounded number of batches inline. The bound prevents an accidental
+  // infinite loop; the browser's resume endpoint can safely continue later.
+  if (directHops >= 6) return;
+  await log(runId, "background", `تشغيل دفعة مباشرة بعد فشل baton (${directHops + 1}/6).`);
+  await delay(150);
+  await runBackgroundBatch(request, runId, env, directHops + 1);
+}
+
+async function runBackgroundBatch(request: Request, runId: string, env: Env, directHops = 0) {
   try {
     const result = await processScanBatch(runId);
     if ('busy' in result && result.busy) {
       // A duplicate or restarted worker must not abandon the only live baton.
       await delay(Math.min(10_000,Math.max(500,Number(result.run.lease_until)-Date.now())));
-      await scheduleNext(request,runId,env);return;
+      if (!await scheduleNext(request,runId,env)) await continueAfterBatonFailure(request,runId,env,directHops);
+      return;
     }
     if (result.done) {
       const delivered = await sendCompletionPush(env, result.run);
-      if (!delivered) { await delay(1_000); await scheduleNext(request, runId, env) }
-    } else await scheduleNext(request, runId, env);
+      if (!delivered) { await delay(1_000); if (!await scheduleNext(request, runId, env)) await continueAfterBatonFailure(request,runId,env,directHops); }
+    } else if (!await scheduleNext(request, runId, env)) await continueAfterBatonFailure(request,runId,env,directHops);
   } catch (error) {
     await log(runId, "background", error instanceof Error ? error.message : "خطأ في المهمة الخلفية").catch(() => {});
     if(error&&typeof error==='object'&&'status'in error&&[404,409].includes(Number(error.status)))return;
     await delay(1_000);
-    await scheduleNext(request, runId, env).catch(() => {});
+    if (!await scheduleNext(request, runId, env)) await continueAfterBatonFailure(request,runId,env,directHops);
   }
 }
 

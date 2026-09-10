@@ -38,3 +38,12 @@ test('unknown and failed safety states never enter the learning sample',async()=
  await fs.writeFile(input,[{...base,safety:{tradable:'PASS',conflict:'PASS',criticalData:'PASS'}},{...base,symbol:'B',safety:{tradable:'PASS',conflict:'PASS',criticalData:'UNKNOWN'}},{...base,symbol:'C',safety:{tradable:'FAIL',conflict:'PASS',criticalData:'PASS'}}].map(JSON.stringify).join('\n'));
  const result=await runLab({strategy:'bounce',input});assert.equal(result.counts.validRows,1);assert.equal(result.counts.excludedRows,2);assert(result.blockers.some(x=>x.includes('valid rows 1')));
 });
+
+test('firm holdout identity is stable across ticker aliases',async()=>{
+ const dir=await fs.mkdtemp(path.join(os.tmpdir(),'radar-lab-')),input=path.join(dir,'bounce.jsonl');
+ const row=(symbol,asOf,label)=>({symbol,firmId:'CIK-42',asOf,features:{collapse:.5,reversal:.5,liquidity:.5,dilution:.5,offLow:.5,size:.5},availableAt:{collapse:asOf,reversal:asOf,liquidity:asOf,dilution:asOf,offLow:asOf,size:asOf},safety:{tradable:'PASS',conflict:'PASS',criticalData:'PASS'},outcome:{label,observedAt:'2025-01-01'}});
+ await fs.writeFile(input,[row('OLD','2023-01-01',1),row('NEW','2023-02-01',0)].map(JSON.stringify).join('\n'));
+ const result=await runLab({strategy:'bounce',input});
+ assert(result.blockers.some(x=>x.includes('firm holdout AUC')||x.includes('one or more chronological')));
+ assert.equal(result.counts.firms,1);assert.equal(result.protocol.holdout.includes('firm identity'),true);
+});

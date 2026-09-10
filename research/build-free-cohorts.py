@@ -25,6 +25,12 @@ def survival(last: str) -> str:
     if last < "2020-01-01": return "ended_during_2019"
     return "continued_into_2020"
 
+def write_csv(path: Path, rows: list[dict[str, str]], fieldnames: list[str]) -> None:
+    with path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--summary", type=Path, required=True)
@@ -54,12 +60,18 @@ def main() -> None:
     ended = sorted([r for r in firms if r["survival_stratum"] != "continued_into_2020"], key=lambda r: key("core-firm", r["cik"]))
     continuing = sorted([r for r in firms if r["survival_stratum"] == "continued_into_2020"], key=lambda r: key("core-firm", r["cik"]))
     core = sorted(ended[:min(len(ended), a.core_size // 3)] + continuing[:max(0, a.core_size - min(len(ended), a.core_size // 3))], key=lambda r: r["symbol"])
+    if a.core_size < 1: raise SystemExit("--core-size must be positive")
+    for row in core:
+        aliases = sorted(r["symbol"] for r in by_cik[row["cik"]])
+        row["alias_count"] = str(len(aliases))
+        row["representative_selection"] = "stable-sha256"
+    aliases = sorted(candidates, key=lambda r: (r["cik"], r["symbol"]))
     a.output.mkdir(parents=True, exist_ok=True)
-    for name, rows in (("bounce-free-cohort-v1.csv", bounce), ("core-free-cohort-v1.csv", core)):
-        with (a.output / name).open("w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=list(rows[0])); w.writeheader(); w.writerows(rows)
+    write_csv(a.output / "bounce-free-cohort-v1.csv", bounce, ["symbol", "first_price_date", "last_price_date", "price_rows", "survival_stratum", "selection_key"])
+    write_csv(a.output / "core-free-cohort-v1.csv", core, ["symbol", "cik", "first_price_date", "last_price_date", "price_rows", "survival_stratum", "selection_key", "alias_count", "representative_selection"])
+    write_csv(a.output / "core-free-alias-map-v1.csv", aliases, ["cik", "symbol", "first_price_date", "last_price_date", "price_rows", "survival_stratum", "selection_key"])
     audit = json.loads(a.price_audit.read_text())
-    manifest = {"version":"free-cohort-v1", "selection":"SHA-256 deterministic selection; no outcome/future-return field read", "signalWindow":["2010-01-01","2019-12-31"], "bounce":{"companies":len(bounce),"file":"bounce-free-cohort-v1.csv"}, "core":{"companies":len(core),"eligibleBeforeSampling":len(firms),"tickerRowsBeforeFirmDeduplication":len(candidates),"file":"core-free-cohort-v1.csv"}, "mapping":{"uniqueTickers":len(unique),"ambiguousTickersExcluded":ambiguous,"malformedRowsExcluded":malformed}, "priceAudit":audit, "inputHashes":{"datasetSummarySha256":sha(a.summary),"tickerCikSha256":sha(a.ticker_ciks)}, "limitations":["Early last-price date is a stratum, not proof of delisting.","The source is not an official survivorship-free security master.","No accuracy percentage is publishable until PIT facts, corporate actions, outcomes, and holdouts pass audit."]}
+    manifest = {"version":"free-cohort-v1", "selection":"SHA-256 deterministic selection; no outcome/future-return field read", "signalWindow":["2010-01-01","2019-12-31"], "bounce":{"companies":len(bounce),"file":"bounce-free-cohort-v1.csv"}, "core":{"companies":len(core),"eligibleBeforeSampling":len(firms),"tickerRowsBeforeFirmDeduplication":len(candidates),"aliasMapRows":len(aliases),"file":"core-free-cohort-v1.csv","aliasMapFile":"core-free-alias-map-v1.csv"}, "mapping":{"uniqueTickers":len(unique),"ambiguousTickersExcluded":ambiguous,"malformedRowsExcluded":malformed}, "priceAudit":audit, "inputHashes":{"datasetSummarySha256":sha(a.summary),"tickerCikSha256":sha(a.ticker_ciks),"priceAuditSha256":sha(a.price_audit)}, "limitations":["Early last-price date is a stratum, not proof of delisting.","The source is not an official survivorship-free security master.","The Core CSV has one representative ticker per CIK; the alias map must be used for historical ticker stitching.","No accuracy percentage is publishable until PIT facts, corporate actions, outcomes, and holdouts pass audit."]}
     (a.output / "free-cohort-v1.manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps({"bounce":manifest["bounce"],"core":manifest["core"],"mapping":manifest["mapping"]}, ensure_ascii=False, indent=2))
 

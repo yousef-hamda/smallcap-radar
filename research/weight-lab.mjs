@@ -19,9 +19,14 @@ const sigmoid = value => 1 / (1 + Math.exp(-Math.max(-30, Math.min(30, value))))
 const mean = values => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
 const hash = text => crypto.createHash('sha256').update(text).digest('hex');
 
-function firmBucket(symbol) {
+export function firmIdentity(row) {
+  const value = row?.firmId ?? row?.firm ?? row?.cik ?? row?.companyId ?? row?.symbol;
+  return value == null ? '' : String(value).trim();
+}
+
+function firmBucket(firmId) {
   let value = 2166136261;
-  for (const character of `fixed-research-salt:${symbol}`) {
+  for (const character of `fixed-research-salt:${firmId}`) {
     value ^= character.charCodeAt(0);
     value = Math.imul(value, 16777619);
   }
@@ -49,10 +54,16 @@ function validate(rows, strategy) {
   const ids = FEATURE_IDS[strategy];
   const seen = new Set();
   const errors = [];
+  const firmDates = new Set();
   for (const row of rows) {
     const key = `${row.symbol ?? ''}:${row.asOf ?? ''}`;
+    const firm = firmIdentity(row);
+    const firmDateKey = `${firm}:${row.asOf ?? ''}`;
     if (seen.has(key)) errors.push(`${key}: duplicate observation`);
     seen.add(key);
+    if (!firm) errors.push(`${key}: firm identity missing`);
+    else if (firmDates.has(firmDateKey)) errors.push(`${key}: duplicate firm/date observation`);
+    firmDates.add(firmDateKey);
 
     const asOf = Date.parse(row.asOf ?? '');
     const observedAt = Date.parse(row.outcome?.observedAt ?? '');
@@ -130,8 +141,8 @@ function chooseThreshold(model, rows) {
 }
 
 function metrics(model, rows, threshold = 0.5) {
-  const scored = rows.map(row => ({row, score: modelScore(model, row), probability: sigmoid(modelScore(model, row))}));
-  const predicted = scored.filter(item => item.probability >= threshold);
+  const scored = rows.map(row => ({row, score: modelScore(model, row), rawProbability: sigmoid(modelScore(model, row))}));
+  const predicted = scored.filter(item => item.rawProbability >= threshold);
   const positives = rows.filter(row => row.outcome.label === 1).length;
   const truePositives = predicted.filter(item => item.row.outcome.label === 1).length;
   return {
@@ -141,9 +152,13 @@ function metrics(model, rows, threshold = 0.5) {
     threshold,
     precision: predicted.length ? truePositives / predicted.length : 0,
     recall: positives ? truePositives / positives : 0,
-    brier: rows.length ? mean(scored.map(item => (item.probability - item.row.outcome.label) ** 2)) : null,
-    logLoss: rows.length ? -mean(scored.map(item => {
-      const probability = Math.max(1e-9, Math.min(1 - 1e-9, item.probability));
+    // The logistic output is deliberately not a publishable probability. No
+    // calibration model has passed the locked validation protocol yet.
+    probability: null,
+    calibrationStatus: 'uncalibrated',
+    rawProbabilityBrier: rows.length ? mean(scored.map(item => (item.rawProbability - item.row.outcome.label) ** 2)) : null,
+    rawProbabilityLogLoss: rows.length ? -mean(scored.map(item => {
+      const probability = Math.max(1e-9, Math.min(1 - 1e-9, item.rawProbability));
       return item.row.outcome.label * Math.log(probability) + (1 - item.row.outcome.label) * Math.log(1 - probability);
     })) : null,
     topDecileLift: (() => {
@@ -239,9 +254,10 @@ export async function runLab({strategy, input, output} = {}) {
   const model = fit(train, FEATURE_IDS[strategy]);
   const threshold = chooseThreshold(model, validation);
   const testMetrics = metrics(model, test, threshold);
-  const holdoutSymbols = new Set([...symbols].filter(symbol => firmBucket(symbol) >= 80));
-  const firmTrain = train.filter(row => !holdoutSymbols.has(row.symbol));
-  const firmTest = test.filter(row => holdoutSymbols.has(row.symbol));
+  const firms = new Set(validRows.map(firmIdentity));
+  const holdoutFirms = new Set([...firms].filter(firm => firmBucket(firm) >= 80));
+  const firmTrain = train.filter(row => !holdoutFirms.has(firmIdentity(row)));
+  const firmTest = test.filter(row => holdoutFirms.has(firmIdentity(row)));
   const holdoutModel = fit(firmTrain, FEATURE_IDS[strategy]);
   const holdout = metrics(holdoutModel, firmTest, threshold);
   const weightResult = exactWeights(model);
@@ -269,13 +285,14 @@ export async function runLab({strategy, input, output} = {}) {
       features: FEATURE_IDS[strategy],
       minimum,
       split: '60/20/20 chronological by unique asOf date with outcome-overlap purging',
-      holdout: 'fixed 20% symbol hash bucket >= 80; holdout symbols excluded from holdout training',
+      holdout: 'fixed 20% firm hash bucket >= 80; firm identity uses firmId/firm/CIK before symbol, and all aliases are excluded from holdout training',
       regularization: 'logistic L2 lambda=0.2',
       labels: 'provided point-in-time future outcomes; no synthetic labels',
       missingFeatureTreatment: 'training median only; missingness remains in source coverage and cannot become PASS',
+      probability: 'not available until post-fit calibration passes the locked validation protocol; raw sigmoid is diagnostics only',
       safety: 'FAIL/UNKNOWN safety rows excluded from learning; they remain non-qualified in production',
     },
-    counts: {rawRows: rows.length, validRows: validRows.length, excludedRows: rows.length - validRows.length, companies: symbols.size, train: train.length, validation: validation.length, test: test.length, firmHoldout: firmTest.length},
+    counts: {rawRows: rows.length, validRows: validRows.length, excludedRows: rows.length - validRows.length, companies: symbols.size, firms: firms.size, holdoutFirms: holdoutFirms.size, train: train.length, validation: validation.length, test: test.length, firmHoldout: firmTest.length},
     metrics: {test: {...testMetrics, rankCorrelation: rankCorrelation(model, test)}, firmHoldout: {...holdout, rankCorrelation: rankCorrelation(holdoutModel, firmTest)}},
     outcomeCoverage: {netUtility: utilityCoverage},
     stability,

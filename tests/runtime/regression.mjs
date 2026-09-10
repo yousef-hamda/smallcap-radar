@@ -83,7 +83,7 @@ test('client API parser translates HTML route failures instead of leaking JSON s
  const original=globalThis.fetch;
  try{
   globalThis.fetch=async()=>new Response('<!DOCTYPE html><title>error</title>',{status:503,headers:{'content-type':'text/html'}});
-  await assert.rejects(apiJson('/api/test'),error=>/استجابة غير صالحة/.test(error.message)&&!/Unexpected token/.test(error.message));
+  await assert.rejects(apiJson('/api/test'),error=>/HTML بدل JSON/.test(error.message)&&!/Unexpected token/.test(error.message));
   globalThis.fetch=async()=>Response.json({ok:true});assert.deepEqual(await apiJson('/api/test'),{ok:true});
  }finally{globalThis.fetch=original;}
 });
