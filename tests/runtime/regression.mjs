@@ -249,3 +249,17 @@ test('15000 directory rows use bounded durable pages and resume quote progress',
   const scored=await processScanBatch('large-directory');assert.equal(scored.run.offset,1400);assert.equal(sqlite.prepare("SELECT COUNT(*) n FROM fundamental_snapshots WHERE run_id='large-directory'").get().n,200);
  }finally{setUniverse([]);}
 });
+
+test('radar pages contain every row and rank current scores descending',async()=>{
+ const now='2099-01-01T00:00:00Z';
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES('ranked-order','2099-01-01','2099-01-01','complete','Bulk Quotes/SEC Frames v10 · full',3,3,13,?)").bind(currentHash()).run();
+ await insertSnapshot('ranked-order',{...base,symbol:'RANK-HIGH',name:'High score fixture',asOf:now,marketCap:50e6,return12m:-.2,evSales:1,ps:1,revenueGrowth:.25,operatingMarginTrend:.12,insiderBuyValue:50000,cash:20e6,debt:1e6}).run();
+ await insertSnapshot('ranked-order',{...base,symbol:'RANK-LOW',name:'Low score fixture',asOf:now,marketCap:1.8e9,return12m:-.6,evSales:9,ps:9,revenueGrowth:-.2,operatingMarginTrend:-.1,insiderBuyValue:0,cash:1e6,debt:50e6}).run();
+ await insertSnapshot('ranked-order',{...base,symbol:'RANK-FAIL',name:'Failed gate fixture',asOf:now,marketCap:5e9,return12m:.4}).run();
+ const first=await readState({strategy:'core',limit:2});
+ assert.equal(first.summary.total,3);assert.equal(first.summary.coreRanked,3);assert.equal(first.snapshots.length,2);assert.equal(first.page.hasMore,true);
+ const second=await readState({strategy:'core',limit:10,offset:2});assert.equal(second.snapshots.length,1);
+ const all=await readState({strategy:'core',limit:10});assert.equal(all.snapshots.length,3);const failed=all.snapshots.find(s=>s.symbol==='RANK-FAIL');assert(failed);assert.equal(evaluateStrategy('core',failed).status,'FAIL');
+ const scores=all.snapshots.map(s=>evaluateStrategy('core',s).score);for(let i=1;i<scores.length;i++){const previous=scores[i-1]??-Infinity;const current=scores[i]??-Infinity;assert(previous>=current)}
+ assert.deepEqual([...first.snapshots,...second.snapshots].map(s=>s.symbol),all.snapshots.map(s=>s.symbol));
+});

@@ -49,7 +49,7 @@ Operational conventions: 20-day median dollar volume for Core and Bounce (Bounce
 
 ## Data and API
 
-- `GET /api/radar?strategy=core|bounce|favorites&limit=150&offset=0`: paged qualified/favorite snapshots plus counts; explicit `dataRunId` identifies displayed data. This bounded contract avoids returning the full historical snapshot table in one response.
+- `GET /api/radar?strategy=core|bounce|favorites&limit=150&offset=0`: paged snapshots for the selected ranking (all rows, highest current 0–100 score first; unrated rows last) plus separate qualified/unknown counts; explicit `dataRunId` identifies displayed data. This bounded contract avoids returning the full historical snapshot table in one response.
 - `GET /api/company?symbol=...`: on-demand deep verification using detailed history and SEC Company Facts, cached for 30 minutes; this deliberately stays outside the market-wide hot path.
 - `GET /api/chart?symbol=...`: on-demand current-session 5-minute chart data for the 1D period, with bounded caching and explicit Arabic provider errors.
 - `POST /api/radar`: same-origin `{action:'favorite',symbol,saved:boolean}` or `{action:'import',records: Snapshot[]}`. Favorites are private by platform identity or opaque visitor cookie and stored in D1. A new visitor starts with zero; legacy global favorites are not migrated to an arbitrary owner. Import max 500 records / 4MB; rejects duplicate symbols and malformed provenance.

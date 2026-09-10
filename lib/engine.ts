@@ -126,11 +126,16 @@ export function evaluateStrategy(strategy:keyof typeof SPECS,s:Snapshot){
  // published gates, with UNKNOWN and FAIL both receiving zero. It is never
  // used to promote a stock or replace the gate result.
  const gateScore=strategy==='bounce'?Math.round(100*hardGateIds.filter(id=>checks.find(c=>c.id===id)?.status==='PASS').length/hardGateIds.length*10)/10:null;
- const score=!hardGates.some(c=>c.status==='FAIL')?Math.round(factors.reduce((total,f)=>total+f.points,0)*10)/10:null;
+ const rawScore=Math.round(factors.reduce((total,f)=>total+f.points,0)*10)/10;
  const scoreCoverage=Math.round(factors.filter(f=>f.available).reduce((t,f)=>t+(f.availableWeight??f.maxPoints),0)*10)/10;
+ // A 100-point rating is a weighted average of the evidenced factors. Missing
+ // factors are excluded from the denominator and exposed through coverage;
+ // they are never silently converted to zero. Qualification remains governed
+ // by the screening gates below, so a high score cannot rescue FAIL/UNKNOWN.
+ const score=scoreCoverage>0?Math.round(rawScore/scoreCoverage*1000)/10:null;
  // A row is approved only when every screening check passes. Measurable-only
  // completion is retained as a diagnostic, but must never enter the approval
  // list or be presented as a recommendation.
  const screeningQualified=status==='PASS';
- return {strategy:spec.id,version:spec.version,hash:specHash(strategy),status,qualified:status==='PASS',gateStatus,screeningQualified,measurableStatus,score,gateScore,scoreCoverage,factors,scoreStatus:spec.scoreStatus,checks,researchComplete,finalRanked:false,finalReason:'الترتيب النهائي يتطلب اكتمال التحقق والزوايا الأربع'};
+ return {strategy:spec.id,version:spec.version,hash:specHash(strategy),status,qualified:status==='PASS',gateStatus,screeningQualified,measurableStatus,score,rawScore,gateScore,scoreCoverage,factors,scoreStatus:spec.scoreStatus,checks,researchComplete,finalRanked:false,finalReason:'الترتيب النهائي يتطلب اكتمال التحقق والزوايا الأربع'};
 }
