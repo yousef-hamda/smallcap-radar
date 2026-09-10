@@ -1,6 +1,6 @@
 # مختبر أوزان رادار الشركات الصغيرة
 
-مواصفة بناء البيانات التفصيلية موجودة في [DATASET_SPEC_AR.md](./DATASET_SPEC_AR.md)، وخطة اعتماد الإنتاج في [WEIGHTING_RESEARCH_PLAN_AR.md](../docs/WEIGHTING_RESEARCH_PLAN_AR.md).
+مواصفة بناء البيانات التفصيلية موجودة في [DATASET_SPEC_AR.md](./DATASET_SPEC_AR.md)، وخطة اعتماد الإنتاج المختصرة في [WEIGHTING_RESEARCH_PLAN_AR.md](../docs/WEIGHTING_RESEARCH_PLAN_AR.md)، والخطة العلمية والتنفيذية الكاملة في [PREDICTIVE_RATING_VALIDATION_PLAN_AR.md](../docs/PREDICTIVE_RATING_VALIDATION_PLAN_AR.md).
 
 هذا المجلد يفصل البحث الإحصائي عن درجة الإنتاج. لا يجوز تعديل `lib/strategy-spec.ts` أو نشر أوزان جديدة لأن تجربة واحدة بدت جيدة.
 
