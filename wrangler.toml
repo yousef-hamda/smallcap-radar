@@ -1,0 +1,36 @@
+name = "smallcap-radar"
+type = "javascript"
+account_id = ""
+workers_dev = true
+main = "dist/index.js"
+site = { bucket = "dist" }
+compatibility_date = "2024-01-15"
+
+# Cloudflare D1 Database (SQLite)
+[[d1_databases]]
+binding = "DB"
+database_name = "smallcap-radar"
+database_id = ""
+
+# KV Namespace for caching
+[[kv_namespaces]]
+binding = "CACHE"
+id = ""
+preview_id = ""
+
+# Environment Variables
+[env.production]
+name = "smallcap-radar"
+routes = [
+  { pattern = "smallcap-radar.higgsfield.app/*", zone_name = "higgsfield.app" }
+]
+
+# Build Configuration
+[build]
+command = "npm run build"
+cwd = "./"
+watch_paths = ["app/src/**/*.{ts,tsx}"]
+
+# Dev Configuration
+[env.development]
+name = "smallcap-radar-dev"

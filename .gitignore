@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+npm-debug.log
+yarn-error.log
+pnpm-debug.log
+
+# Build outputs
+dist/
+build/
+.output/
+.dist/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Higgsfield/Cloudflare
+wrangler.toml.local
+wrangler.dev.toml
+
+# Cache
+.cache/
+.turbo/
+cache/
+
+# Local
+*.sqlite
+*.db
+.sqlite3
+
+# Results
+results.json
+lock_firms*.json
