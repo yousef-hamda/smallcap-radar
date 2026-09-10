@@ -51,14 +51,23 @@ export async function readState(options:{strategy?:'core'|'bounce'|'favorites';l
  const offset=Math.max(0,Math.floor(options.offset??0));
  const fav=options.owner?(await d.prepare(strategy==='favorites'?'SELECT symbol,payload FROM personal_watchlist WHERE owner=? ORDER BY created_at DESC':'SELECT symbol FROM personal_watchlist WHERE owner=? ORDER BY created_at DESC').bind(options.owner).all()).results as any[]:[];
  const statusSql=(key:'core'|'bounce',status:string)=>`SUM(CASE WHEN json_extract(evaluation, '$.${key}.screeningQualified') = ${status==='PASS'?1:0} THEN 1 ELSE 0 END)`;
- const summaryRow=currentData?await d.prepare(`SELECT COUNT(*) AS total, ${statusSql('core','PASS')} AS coreQualified, ${statusSql('bounce','PASS')} AS bounceQualified, COUNT(*) AS coreRanked, COUNT(*) AS bounceRanked, SUM(CASE WHEN json_extract(evaluation, '$.core.status')='UNKNOWN' THEN 1 ELSE 0 END) AS coreUnknown, SUM(CASE WHEN json_extract(evaluation, '$.bounce.status')='UNKNOWN' THEN 1 ELSE 0 END) AS bounceUnknown, SUM(CASE WHEN json_extract(evaluation, '$.core.status')='FAIL' THEN 1 ELSE 0 END) AS coreFailed, SUM(CASE WHEN json_extract(evaluation, '$.bounce.status')='FAIL' THEN 1 ELSE 0 END) AS bounceFailed FROM fundamental_snapshots WHERE run_id=?`).bind(latest.id).first() as any: null;
+ let summaryRow=currentData?await d.prepare(`SELECT COUNT(*) AS total, ${statusSql('core','PASS')} AS coreQualified, ${statusSql('bounce','PASS')} AS bounceQualified, COUNT(*) AS coreRanked, COUNT(*) AS bounceRanked, SUM(CASE WHEN json_extract(evaluation, '$.core.status')='UNKNOWN' THEN 1 ELSE 0 END) AS coreUnknown, SUM(CASE WHEN json_extract(evaluation, '$.bounce.status')='UNKNOWN' THEN 1 ELSE 0 END) AS bounceUnknown, SUM(CASE WHEN json_extract(evaluation, '$.core.status')='FAIL' THEN 1 ELSE 0 END) AS coreFailed, SUM(CASE WHEN json_extract(evaluation, '$.bounce.status')='FAIL' THEN 1 ELSE 0 END) AS bounceFailed FROM fundamental_snapshots WHERE run_id=?`).bind(latest.id).first() as any: null;
  const search=options.query?.trim().toLowerCase().slice(0,100)||'';
  // Re-evaluate every row with the current engine before ranking. Durable rows
  // can predate a scoring-version change; sorting the persisted evaluation would
  // otherwise leave old null scores and stale weights in front of the user.
  const query=latest&&strategy!=='favorites'?`SELECT payload FROM fundamental_snapshots WHERE run_id=? AND (?='' OR instr(lower(symbol),?)>0 OR instr(lower(json_extract(payload,'$.name')),?)>0)`:null;
  const params=latest?[latest.id,search,search,search]:[];
- let rows:any[]=currentData&&query?(await d.prepare(query).bind(...params).all()).results.map((r:any)=>{const s=JSON.parse(r.payload);return {payload:r.payload,evaluation:JSON.stringify({core:evaluateStrategy('core',s),bounce:evaluateStrategy('bounce',s)})}}):[];
+ let rows:any[]=query?(await d.prepare(query).bind(...params).all()).results.map((r:any)=>{const s=JSON.parse(r.payload);return {payload:r.payload,evaluation:JSON.stringify({core:evaluateStrategy('core',s),bounce:evaluateStrategy('bounce',s)})}}):[];
+ // A strategy-version change must not make the product look empty. Re-evaluate
+ // the last completed snapshot with the current engine and label it stale until
+ // a new scan replaces it. The prior data timestamp and run remain visible.
+ if(latest&&!currentData){
+  const all=search?(await d.prepare('SELECT payload FROM fundamental_snapshots WHERE run_id=?').bind(latest.id).all()).results as any[]:rows;
+  const totals={total:all.length,coreQualified:0,bounceQualified:0,coreRanked:all.length,bounceRanked:all.length,coreUnknown:0,bounceUnknown:0,coreFailed:0,bounceFailed:0};
+  for(const row of all){const s=JSON.parse(row.payload),core=evaluateStrategy('core',s),bounce=evaluateStrategy('bounce',s);if(core.status==='PASS')totals.coreQualified++;else if(core.status==='UNKNOWN')totals.coreUnknown++;else totals.coreFailed++;if(bounce.status==='PASS')totals.bounceQualified++;else if(bounce.status==='UNKNOWN')totals.bounceUnknown++;else totals.bounceFailed++;}
+  summaryRow=totals;
+ }
  if(strategy!=='favorites')rows.sort((a:any,b:any)=>{const ae=JSON.parse(a.evaluation)[strategy],be=JSON.parse(b.evaluation)[strategy];const score=(e:any)=>e.score==null?Number.NEGATIVE_INFINITY:e.score;return score(be)-score(ae)||(be.scoreCoverage??0)-(ae.scoreCoverage??0)||JSON.parse(a.payload).symbol.localeCompare(JSON.parse(b.payload).symbol)});
  if(strategy==='favorites'){
   rows=fav.filter(r=>!search||`${r.symbol} ${JSON.parse(r.payload).name}`.toLowerCase().includes(search)).map(r=>{const s=JSON.parse(r.payload);return {payload:r.payload,evaluation:JSON.stringify({core:evaluateStrategy('core',s),bounce:evaluateStrategy('bounce',s)})}});

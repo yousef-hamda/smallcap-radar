@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import {MINIMUM} from './weight-lab.mjs';
 
 const cachePath = process.argv[2] ?? path.resolve('lib/quick-cache.generated.json');
 const cache = JSON.parse(await fs.readFile(cachePath, 'utf8'));
@@ -17,8 +18,8 @@ const report = {
   delistedUniverse: false,
   futureOutcomeLabels: false,
   blockers: [
-    'Bounce requires at least 100 companies and 1000 point-in-time observations; cache has ' + entries.length + ' symbols and no labeled future outcomes.',
-    'Bounce coverage is ' + months.toFixed(1) + ' months; the research protocol requires 24 months.',
+    `Bounce requires at least ${MINIMUM.bounce.companies} companies and ${MINIMUM.bounce.rows} point-in-time observations; cache has ${entries.length} symbols and no labeled future outcomes.`,
+    `Bounce coverage is ${months.toFixed(1)} months; the research protocol requires ${MINIMUM.bounce.months} months.`,
     'Core requires historical fundamentals with availableAt, periodEnd and filing source; this cache is a current quick snapshot, not a PIT panel.',
     'A survivorship-free study also requires delisted securities and corporate-action history; neither is present in this cache.',
   ],

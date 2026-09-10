@@ -9,8 +9,8 @@ export const FEATURE_IDS = Object.freeze({
 });
 
 export const MINIMUM = Object.freeze({
-  bounce: Object.freeze({rows: 1000, companies: 100, months: 24}),
-  core: Object.freeze({rows: 2000, companies: 250, months: 36}),
+  bounce: Object.freeze({rows: 10000, companies: 1000, months: 120}),
+  core: Object.freeze({rows: 20000, companies: 1500, months: 96}),
 });
 
 const SAFETY_KEYS = Object.freeze(['tradable', 'conflict', 'criticalData']);
@@ -141,7 +141,40 @@ function metrics(model, rows, threshold = 0.5) {
     threshold,
     precision: predicted.length ? truePositives / predicted.length : 0,
     recall: positives ? truePositives / positives : 0,
+    brier: rows.length ? mean(scored.map(item => (item.probability - item.row.outcome.label) ** 2)) : null,
+    logLoss: rows.length ? -mean(scored.map(item => {
+      const probability = Math.max(1e-9, Math.min(1 - 1e-9, item.probability));
+      return item.row.outcome.label * Math.log(probability) + (1 - item.row.outcome.label) * Math.log(1 - probability);
+    })) : null,
+    topDecileLift: (() => {
+      if (scored.length < 10) return null;
+      const top = [...scored].sort((a, b) => b.score - a.score).slice(0, Math.max(1, Math.floor(scored.length / 10)));
+      const baseRate = mean(rows.map(row => row.outcome.label));
+      return baseRate > 0 ? mean(top.map(item => item.row.outcome.label)) / baseRate : null;
+    })(),
   };
+}
+
+function rankCorrelation(model, rows) {
+  const usable = rows.filter(row => finite(row.outcome?.netUtility));
+  if (usable.length < 3) return null;
+  const rank = (values) => {
+    const ordered = values.map((value, index) => ({value, index})).sort((a, b) => a.value - b.value);
+    const result = Array(values.length);
+    for (let start = 0; start < ordered.length;) {
+      let end = start + 1;
+      while (end < ordered.length && ordered[end].value === ordered[start].value) end += 1;
+      const average = (start + end - 1) / 2;
+      for (let index = start; index < end; index += 1) result[ordered[index].index] = average;
+      start = end;
+    }
+    return result;
+  };
+  const x = rank(usable.map(row => modelScore(model, row))), y = rank(usable.map(row => row.outcome.netUtility));
+  const mx = mean(x), my = mean(y);
+  const numerator = x.reduce((sum, value, index) => sum + (value - mx) * (y[index] - my), 0);
+  const denominator = Math.sqrt(x.reduce((sum, value) => sum + (value - mx) ** 2, 0) * y.reduce((sum, value) => sum + (value - my) ** 2, 0));
+  return denominator ? numerator / denominator : null;
 }
 
 function exactWeights(model) {
@@ -196,13 +229,17 @@ export async function runLab({strategy, input, output} = {}) {
   const spanMonths = dates.length ? (dates.at(-1) - dates[0]) / (30.44 * 864e5) : 0;
   const trainEnd = dates[Math.max(0, Math.floor(dates.length * 0.6) - 1)] ?? 0;
   const validationEnd = dates[Math.max(0, Math.floor(dates.length * 0.8) - 1)] ?? 0;
-  const train = validRows.filter(row => Date.parse(row.asOf) <= trainEnd);
-  const validation = validRows.filter(row => Date.parse(row.asOf) > trainEnd && Date.parse(row.asOf) <= validationEnd);
+  const validationStart = dates.find(date => date > trainEnd) ?? Infinity;
+  const testStart = dates.find(date => date > validationEnd) ?? Infinity;
+  // Purge overlapping labels: a row may train a split only when its outcome was
+  // fully observed before the next split began.
+  const train = validRows.filter(row => Date.parse(row.asOf) <= trainEnd && Date.parse(row.outcome.observedAt) < validationStart);
+  const validation = validRows.filter(row => Date.parse(row.asOf) >= validationStart && Date.parse(row.asOf) <= validationEnd && Date.parse(row.outcome.observedAt) < testStart);
   const test = validRows.filter(row => Date.parse(row.asOf) > validationEnd);
   const model = fit(train, FEATURE_IDS[strategy]);
   const threshold = chooseThreshold(model, validation);
   const testMetrics = metrics(model, test, threshold);
-  const holdoutSymbols = new Set([...symbols].filter(symbol => firmBucket(symbol) >= 20));
+  const holdoutSymbols = new Set([...symbols].filter(symbol => firmBucket(symbol) >= 80));
   const firmTrain = train.filter(row => !holdoutSymbols.has(row.symbol));
   const firmTest = test.filter(row => holdoutSymbols.has(row.symbol));
   const holdoutModel = fit(firmTrain, FEATURE_IDS[strategy]);
@@ -217,6 +254,9 @@ export async function runLab({strategy, input, output} = {}) {
   if (!train.length || !validation.length || !test.length) blockers.push('one or more chronological splits are empty');
   if (testMetrics.auc == null || testMetrics.auc < 0.55) blockers.push(`final test AUC ${testMetrics.auc ?? 'unknown'} < 0.55`);
   if (holdout.auc == null || holdout.auc < 0.53) blockers.push(`firm holdout AUC ${holdout.auc ?? 'unknown'} < 0.53`);
+  const utilityCoverage = validRows.length ? validRows.filter(row => finite(row.outcome?.netUtility)).length / validRows.length : 0;
+  if (utilityCoverage < 0.95) blockers.push(`netUtility coverage ${(utilityCoverage * 100).toFixed(1)}% < 95%`);
+  if (testMetrics.topDecileLift == null || testMetrics.topDecileLift <= 1) blockers.push(`final test top-decile lift ${testMetrics.topDecileLift ?? 'unknown'} <= 1`);
   if (!weightResult.total) blockers.push('no learned signal; refusing to invent equal weights');
   for (const [id, value] of Object.entries(stability)) if (value != null && value < 2 / 3) blockers.push(`${id} sign stability ${value.toFixed(2)} < 0.67`);
 
@@ -228,15 +268,16 @@ export async function runLab({strategy, input, output} = {}) {
     protocol: {
       features: FEATURE_IDS[strategy],
       minimum,
-      split: '60/20/20 chronological by unique asOf date',
-      holdout: 'fixed symbol hash bucket >= 20; holdout symbols excluded from holdout training',
+      split: '60/20/20 chronological by unique asOf date with outcome-overlap purging',
+      holdout: 'fixed 20% symbol hash bucket >= 80; holdout symbols excluded from holdout training',
       regularization: 'logistic L2 lambda=0.2',
       labels: 'provided point-in-time future outcomes; no synthetic labels',
       missingFeatureTreatment: 'training median only; missingness remains in source coverage and cannot become PASS',
       safety: 'FAIL/UNKNOWN safety rows excluded from learning; they remain non-qualified in production',
     },
     counts: {rawRows: rows.length, validRows: validRows.length, excludedRows: rows.length - validRows.length, companies: symbols.size, train: train.length, validation: validation.length, test: test.length, firmHoldout: firmTest.length},
-    metrics: {test: testMetrics, firmHoldout: holdout},
+    metrics: {test: {...testMetrics, rankCorrelation: rankCorrelation(model, test)}, firmHoldout: {...holdout, rankCorrelation: rankCorrelation(holdoutModel, firmTest)}},
+    outcomeCoverage: {netUtility: utilityCoverage},
     stability,
     model: {intercept: model.intercept, medians: model.medians},
     weights: weightResult.rows,

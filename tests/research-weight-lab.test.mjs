@@ -24,7 +24,7 @@ test('weight lab keeps exact 100-point normalization and deterministic learned o
  for(let month=0;month<12;month++) for(let company=0;company<8;company++){
   const asOf=new Date(Date.UTC(2023,month,1)).toISOString().slice(0,10);
   const collapse=company%4/3, reversal=(month%3)/2, label=collapse>.5?1:0;
-  rows.push({symbol:'S'+company,asOf,features:{collapse,reversal,liquidity:.8,dilution:.7,offLow:.6,size:.5},availableAt:{collapse:asOf,reversal:asOf,liquidity:asOf,dilution:asOf,offLow:asOf,size:asOf},safety:{tradable:'PASS',conflict:'PASS',criticalData:'PASS'},outcome:{label,observedAt:new Date(Date.UTC(2024,month,1)).toISOString().slice(0,10)}});
+  rows.push({symbol:'S'+company,asOf,features:{collapse,reversal,liquidity:.8,dilution:.7,offLow:.6,size:.5},availableAt:{collapse:asOf,reversal:asOf,liquidity:asOf,dilution:asOf,offLow:asOf,size:asOf},safety:{tradable:'PASS',conflict:'PASS',criticalData:'PASS'},outcome:{label,netUtility:label ? .2 : -.15,observedAt:new Date(Date.UTC(2023,month,25)).toISOString().slice(0,10)}});
  }
  await fs.writeFile(input,rows.map(JSON.stringify).join('\n'));
  const first=await runLab({strategy:'bounce',input}),second=await runLab({strategy:'bounce',input});
