@@ -15,6 +15,8 @@
     "db:generate": "bash scripts/sites-env.sh -- drizzle-kit generate",
     "test:engine": "node scripts/test-engine.mjs",
     "test:runtime": "npm run test:engine && node scripts/test-runtime.mjs",
+    "test:research": "node --test tests/research-weight-lab.test.mjs",
+    "research:audit": "node research/data-audit.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

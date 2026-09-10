@@ -1,9 +1,45 @@
-# Research protocol
+# مختبر أوزان رادار الشركات الصغيرة
 
-No statistical findings have been generated for this implementation.
+مواصفة بناء البيانات التفصيلية موجودة في [DATASET_SPEC_AR.md](./DATASET_SPEC_AR.md)، وخطة اعتماد الإنتاج في [WEIGHTING_RESEARCH_PLAN_AR.md](../docs/WEIGHTING_RESEARCH_PLAN_AR.md).
 
-Required before promotion: original immutable dataset (including delisted firms), original factor definitions, permanent firm salt, actual filing availability, adjusted security history, training/validation/locked/final splits, pre-registered hypotheses and rejected tests, company bootstrap, multiplicity correction, costs and liquidity stress. Store experiment parameters and all outcomes, including failures. A final holdout becomes consumed once viewed and must not be reused for tuning.
+هذا المجلد يفصل البحث الإحصائي عن درجة الإنتاج. لا يجوز تعديل `lib/strategy-spec.ts` أو نشر أوزان جديدة لأن تجربة واحدة بدت جيدة.
 
-Known unresolved dimensions: inflection; death-spiral severity; factor normalization; Bounce liquidity/ranking; source tolerance; analyst/sector four-angle verification. Do not hardcode apparently successful settings into production.
+## الفكرة
 
-`lib/research.ts` contains deterministic building blocks only, not a complete backtesting engine. `simulateExit` requires an already executable entry price (e.g. next trading open after the signal). Do not pass the signal's same-day close and claim a next-day entry backtest.
+لكل صف بحثي نقطة زمنية `asOf` تمثل المعلومات التي كانت معروفة في ذلك اليوم فقط، ومجموعة `features` مطبّعة بين 0 و1 بحيث تكون القيمة الأعلى أفضل داخل الاستراتيجية. كل عامل يملك حالة توفر ومصدرًا، وكل نتيجة مستقبلية تقع بعد `asOf`. الصفوف التي تحتوي على معلومة مستقبلية أو نتيجة مكررة أو قيمة غير صالحة تُرفض.
+
+يفصل المختبر بين:
+
+- **بوابات السلامة:** سهم عادي قابل للتداول، سعر صالح، عدم وجود تعارض، وعدم وجود خطر حرج مثبت. فشلها أو نقصها يمنع التأهيل مهما ارتفعت الدرجة.
+- **عوامل الترتيب:** التقييم، الربحية، النمو، السيولة، الحجم، التخفيف، الاتجاه الفني، نقطة الدخول، الهوامش، الميزانية، الشراء الداخلي وغيرها. هذه العوامل تسهم في درجة 100 بحسب علاقتها المقاسة بالنتيجة المستقبلية.
+
+## النتائج المستقبلية
+
+في Bounce يستخدم المختبر نتيجة خروج محافظة: الهدف +20%، الوقف −15%، خروج زمني بعد ثلاثة أشهر، الوقف أولًا عند لمس الهدف والوقف في الشمعة نفسها، والتنفيذ عند الافتتاح في الفجوة أو عند أول افتتاح متاح بعد الانتهاء. الصف المفتوح أو الذي ينقصه تاريخ لاحق يصبح censored ولا يدخل تسمية النجاح.
+
+في Core يجب أن تأتي النتيجة من 12 و24 شهرًا مع أقصى هبوط وتكلفة تنفيذ. لا يقبل المختبر ملفًا يقدّم fundamentals الحالية على أنها fundamentals تاريخية؛ يجب أن يكون لكل fact `availableAt` و`periodEnd` و`source`.
+
+## طريقة التعلم
+
+يثبت المختبر تعريف النتيجة قبل تقسيم البيانات. التقسيم زمني: 60% تدريب، 20% تحقق، 20% اختبار نهائي لم يُستخدم في الضبط. يوجد أيضًا holdout ثابت على مستوى الرمز. يتعلم نموذج لوجستي منتظم بمعامل L2، ثم يحول مقدار المعاملات المستقرة إلى أوزان مجموعها 100. الاتجاه السالب يُحفظ في التقرير ولا يُقلب بصمت.
+
+لا تُقبل مجموعة أوزان للنشر إلا إذا حققت الحد الأدنى المسجل في تقرير التجربة: عدد صفوف كافٍ، عدد شركات كافٍ، تغطية زمنية، استقرار الاتجاه بين الطيات، تحسن واضح عن Legacy benchmark، وعدم انهيار الأداء في الاختبار النهائي. التقرير يحفظ seed، hash للبيانات، تعريف النتيجة، الأوزان، المقاييس، وسبب القبول أو الحجب.
+
+## عقد الإدخال
+
+ملف JSONL، صف واحد لكل `symbol + asOf`:
+
+```json
+{"symbol":"ABC","asOf":"2024-06-30","features":{"valuation":0.8,"liquidity":0.7},"availableAt":{"valuation":"2024-05-10","liquidity":"2024-06-30"},"safety":{"tradable":"PASS","conflict":"PASS","criticalData":"PASS"},"outcome":{"label":1,"observedAt":"2025-06-30","return":0.31,"maxDrawdown":-0.12}}
+```
+
+الملف التجريبي لا يدخل الإنتاج تلقائيًا. إنشاء dataset حقيقي يتطلب لقطات fundamentals تاريخية، corporate actions، أسعارًا معدلة، الشركات المشطوبة، وتكاليف التنفيذ. البيانات الحالية المضمنة في التطبيق لا تحتوي هذه السلسلة الكاملة؛ فهي fallback سريع لـ12 رمزًا بمدى تاريخي غير متساوٍ (55–379 شمعة) ولا تحتوي نتائج مستقبلية. لذلك سيصدر المختبر `BLOCKED` بدل اختلاق أوزان.
+
+## التشغيل
+
+```text
+node research/weight-lab.mjs --strategy bounce --input research/datasets/bounce.jsonl --output research/outputs/bounce-weight-candidate.json
+node research/weight-lab.mjs --strategy core --input research/datasets/core.jsonl --output research/outputs/core-weight-candidate.json
+```
+
+المخرجات المرشحة لا تُقرأ من محرك الإنتاج إلا بعد مراجعة التقرير وتسجيل الموافقة في `experiment_registry` وربطها بنسخة استراتيجية جديدة.

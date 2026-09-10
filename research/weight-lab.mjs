@@ -1,0 +1,263 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import {fileURLToPath} from 'node:url';
+
+export const FEATURE_IDS = Object.freeze({
+  core: Object.freeze(['valuation', 'quality', 'shareDiscipline', 'sizeCoverage', 'growth', 'insider', 'marginTrend', 'entry', 'balance']),
+  bounce: Object.freeze(['collapse', 'reversal', 'liquidity', 'dilution', 'offLow', 'size']),
+});
+
+export const MINIMUM = Object.freeze({
+  bounce: Object.freeze({rows: 1000, companies: 100, months: 24}),
+  core: Object.freeze({rows: 2000, companies: 250, months: 36}),
+});
+
+const SAFETY_KEYS = Object.freeze(['tradable', 'conflict', 'criticalData']);
+const finite = value => typeof value === 'number' && Number.isFinite(value);
+const sigmoid = value => 1 / (1 + Math.exp(-Math.max(-30, Math.min(30, value))));
+const mean = values => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+const hash = text => crypto.createHash('sha256').update(text).digest('hex');
+
+function firmBucket(symbol) {
+  let value = 2166136261;
+  for (const character of `fixed-research-salt:${symbol}`) {
+    value ^= character.charCodeAt(0);
+    value = Math.imul(value, 16777619);
+  }
+  return (value >>> 0) % 100;
+}
+
+function auc(rows, score, label = row => row.outcome?.label ?? row.label) {
+  const ranked = rows.map(row => ({row, score: score(row), label: label(row)})).sort((a, b) => a.score - b.score);
+  const positives = ranked.filter(item => item.label === 1);
+  const negatives = ranked.filter(item => item.label === 0);
+  if (!positives.length || !negatives.length) return null;
+  let index = 0;
+  let positiveRankSum = 0;
+  while (index < ranked.length) {
+    let end = index + 1;
+    while (end < ranked.length && ranked[end].score === ranked[index].score) end += 1;
+    const averageRank = (index + 1 + end) / 2;
+    positiveRankSum += ranked.slice(index, end).filter(item => item.label === 1).length * averageRank;
+    index = end;
+  }
+  return (positiveRankSum - positives.length * (positives.length + 1) / 2) / (positives.length * negatives.length);
+}
+
+function validate(rows, strategy) {
+  const ids = FEATURE_IDS[strategy];
+  const seen = new Set();
+  const errors = [];
+  for (const row of rows) {
+    const key = `${row.symbol ?? ''}:${row.asOf ?? ''}`;
+    if (seen.has(key)) errors.push(`${key}: duplicate observation`);
+    seen.add(key);
+
+    const asOf = Date.parse(row.asOf ?? '');
+    const observedAt = Date.parse(row.outcome?.observedAt ?? '');
+    if (!row.symbol || !Number.isFinite(asOf)) errors.push(`${key}: invalid identity/date`);
+    if (![0, 1].includes(row.outcome?.label)) errors.push(`${key}: outcome.label must be 0 or 1`);
+    if (!Number.isFinite(observedAt) || observedAt <= asOf) errors.push(`${key}: outcome must be dated after asOf`);
+
+    for (const id of ids) {
+      const value = row.features?.[id];
+      if (value != null && (!finite(value) || value < 0 || value > 1)) errors.push(`${key}: ${id} must be between 0 and 1`);
+      const availableAt = row.availableAt?.[id];
+      if (availableAt != null) {
+        const available = Date.parse(availableAt);
+        if (!Number.isFinite(available)) errors.push(`${key}: ${id} has invalid availableAt`);
+        else if (available > asOf) errors.push(`${key}: ${id} is future evidence`);
+      }
+    }
+
+    for (const safetyKey of SAFETY_KEYS) {
+      if (!['PASS', 'FAIL', 'UNKNOWN'].includes(row.safety?.[safetyKey])) errors.push(`${key}: ${safetyKey} safety state missing`);
+    }
+  }
+  return errors;
+}
+
+function median(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted.length ? sorted[Math.floor(sorted.length / 2)] : 0.5;
+}
+
+function fit(train, ids, lambda = 0.2) {
+  const medians = Object.fromEntries(ids.map(id => [id, median(train.map(row => row.features?.[id]).filter(finite))]));
+  const coefficients = ids.map(() => 0);
+  let intercept = 0;
+  if (!train.length) return {ids, coefficients, intercept, medians};
+
+  for (let epoch = 0; epoch < 1800; epoch += 1) {
+    const gradient = ids.map(() => 0);
+    let biasGradient = 0;
+    for (const row of train) {
+      const vector = ids.map(id => finite(row.features?.[id]) ? row.features[id] : medians[id]);
+      const linear = intercept + coefficients.reduce((sum, coefficient, index) => sum + coefficient * vector[index], 0);
+      const error = sigmoid(linear) - row.outcome.label;
+      biasGradient += error;
+      for (let index = 0; index < coefficients.length; index += 1) gradient[index] += error * vector[index];
+    }
+    const step = 0.04 / train.length;
+    intercept -= step * biasGradient;
+    for (let index = 0; index < coefficients.length; index += 1) {
+      coefficients[index] -= 0.04 * (gradient[index] / train.length + lambda * coefficients[index]);
+    }
+  }
+  return {ids, coefficients, intercept, medians};
+}
+
+function modelScore(model, row) {
+  return model.intercept + model.ids.reduce((sum, id, index) => {
+    const value = finite(row.features?.[id]) ? row.features[id] : model.medians[id];
+    return sum + model.coefficients[index] * value;
+  }, 0);
+}
+
+function chooseThreshold(model, rows) {
+  if (!rows.length) return 0.5;
+  const candidates = [...new Set(rows.map(row => sigmoid(modelScore(model, row))))].sort((a, b) => a - b);
+  return candidates.reduce((best, threshold) => {
+    const predicted = rows.filter(row => sigmoid(modelScore(model, row)) >= threshold);
+    const positives = rows.filter(row => row.outcome.label === 1).length;
+    const truePositives = predicted.filter(row => row.outcome.label === 1).length;
+    const precision = predicted.length ? truePositives / predicted.length : 0;
+    const recall = positives ? truePositives / positives : 0;
+    const utility = precision * 0.7 + recall * 0.3;
+    return utility > best.utility ? {threshold, utility} : best;
+  }, {threshold: 0.5, utility: -1}).threshold;
+}
+
+function metrics(model, rows, threshold = 0.5) {
+  const scored = rows.map(row => ({row, score: modelScore(model, row), probability: sigmoid(modelScore(model, row))}));
+  const predicted = scored.filter(item => item.probability >= threshold);
+  const positives = rows.filter(row => row.outcome.label === 1).length;
+  const truePositives = predicted.filter(item => item.row.outcome.label === 1).length;
+  return {
+    rows: rows.length,
+    positiveRate: mean(rows.map(row => row.outcome.label)),
+    auc: auc(scored, item => item.score, item => item.row.outcome.label),
+    threshold,
+    precision: predicted.length ? truePositives / predicted.length : 0,
+    recall: positives ? truePositives / positives : 0,
+  };
+}
+
+function exactWeights(model) {
+  const magnitudes = model.coefficients.map(Math.abs);
+  const total = magnitudes.reduce((sum, value) => sum + value, 0);
+  const rows = model.ids.map((id, index) => ({
+    id,
+    coefficient: model.coefficients[index],
+    weight: null,
+    direction: model.coefficients[index] === 0 ? 'neutral' : model.coefficients[index] > 0 ? 'positive' : 'negative',
+  }));
+  if (!total) return {rows, total: 0};
+
+  const basis = magnitudes.map(value => value / total * 10000);
+  let assigned = 0;
+  for (let index = 0; index < rows.length; index += 1) {
+    rows[index].weightBasisPoints = Math.floor(basis[index]);
+    assigned += rows[index].weightBasisPoints;
+  }
+  const remainderOrder = basis.map((value, index) => ({index, remainder: value - Math.floor(value)})).sort((a, b) => b.remainder - a.remainder);
+  for (let index = 0; index < 10000 - assigned; index += 1) rows[remainderOrder[index % remainderOrder.length].index].weightBasisPoints += 1;
+  for (const row of rows) row.weight = row.weightBasisPoints / 100;
+  return {rows, total};
+}
+
+function rollingSignStability(rows, strategy) {
+  const dates = [...new Set(rows.map(row => Date.parse(row.asOf)).filter(Number.isFinite))].sort((a, b) => a - b);
+  if (dates.length < 6) return Object.fromEntries(FEATURE_IDS[strategy].map(id => [id, null]));
+  const signs = Object.fromEntries(FEATURE_IDS[strategy].map(id => [id, []]));
+  for (const fraction of [0.5, 0.65, 0.8]) {
+    const cutoff = dates[Math.floor(dates.length * fraction)];
+    const model = fit(rows.filter(row => Date.parse(row.asOf) <= cutoff), FEATURE_IDS[strategy]);
+    model.ids.forEach((id, index) => signs[id].push(Math.sign(model.coefficients[index])));
+  }
+  return Object.fromEntries(Object.entries(signs).map(([id, values]) => {
+    const nonZero = values.filter(value => value !== 0);
+    if (!nonZero.length) return [id, 0];
+    const positive = nonZero.filter(value => value > 0).length;
+    const negative = nonZero.length - positive;
+    return [id, Math.max(positive, negative) / nonZero.length];
+  }));
+}
+
+export async function runLab({strategy, input, output} = {}) {
+  if (!FEATURE_IDS[strategy]) throw new Error('strategy must be core or bounce');
+  const raw = await fs.readFile(input, 'utf8');
+  const rows = raw.split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
+  const errors = validate(rows, strategy);
+  const validRows = rows.filter(row => !errors.some(error => error.startsWith(`${row.symbol ?? ''}:${row.asOf ?? ''}:`)) && SAFETY_KEYS.every(key => row.safety?.[key] === 'PASS'));
+  const symbols = new Set(validRows.map(row => row.symbol));
+  const dates = [...new Set(validRows.map(row => Date.parse(row.asOf)).filter(Number.isFinite))].sort((a, b) => a - b);
+  const spanMonths = dates.length ? (dates.at(-1) - dates[0]) / (30.44 * 864e5) : 0;
+  const trainEnd = dates[Math.max(0, Math.floor(dates.length * 0.6) - 1)] ?? 0;
+  const validationEnd = dates[Math.max(0, Math.floor(dates.length * 0.8) - 1)] ?? 0;
+  const train = validRows.filter(row => Date.parse(row.asOf) <= trainEnd);
+  const validation = validRows.filter(row => Date.parse(row.asOf) > trainEnd && Date.parse(row.asOf) <= validationEnd);
+  const test = validRows.filter(row => Date.parse(row.asOf) > validationEnd);
+  const model = fit(train, FEATURE_IDS[strategy]);
+  const threshold = chooseThreshold(model, validation);
+  const testMetrics = metrics(model, test, threshold);
+  const holdoutSymbols = new Set([...symbols].filter(symbol => firmBucket(symbol) >= 20));
+  const firmTrain = train.filter(row => !holdoutSymbols.has(row.symbol));
+  const firmTest = test.filter(row => holdoutSymbols.has(row.symbol));
+  const holdoutModel = fit(firmTrain, FEATURE_IDS[strategy]);
+  const holdout = metrics(holdoutModel, firmTest, threshold);
+  const weightResult = exactWeights(model);
+  const stability = rollingSignStability(validRows, strategy);
+  const minimum = MINIMUM[strategy];
+  const blockers = [...errors];
+  if (validRows.length < minimum.rows) blockers.push(`valid rows ${validRows.length} < ${minimum.rows}`);
+  if (symbols.size < minimum.companies) blockers.push(`companies ${symbols.size} < ${minimum.companies}`);
+  if (spanMonths < minimum.months) blockers.push(`coverage ${spanMonths.toFixed(1)} months < ${minimum.months}`);
+  if (!train.length || !validation.length || !test.length) blockers.push('one or more chronological splits are empty');
+  if (testMetrics.auc == null || testMetrics.auc < 0.55) blockers.push(`final test AUC ${testMetrics.auc ?? 'unknown'} < 0.55`);
+  if (holdout.auc == null || holdout.auc < 0.53) blockers.push(`firm holdout AUC ${holdout.auc ?? 'unknown'} < 0.53`);
+  if (!weightResult.total) blockers.push('no learned signal; refusing to invent equal weights');
+  for (const [id, value] of Object.entries(stability)) if (value != null && value < 2 / 3) blockers.push(`${id} sign stability ${value.toFixed(2)} < 0.67`);
+
+  const result = {
+    status: blockers.length ? 'BLOCKED' : 'CANDIDATE',
+    strategy,
+    datasetHash: hash(raw),
+    createdAt: new Date().toISOString(),
+    protocol: {
+      features: FEATURE_IDS[strategy],
+      minimum,
+      split: '60/20/20 chronological by unique asOf date',
+      holdout: 'fixed symbol hash bucket >= 20; holdout symbols excluded from holdout training',
+      regularization: 'logistic L2 lambda=0.2',
+      labels: 'provided point-in-time future outcomes; no synthetic labels',
+      missingFeatureTreatment: 'training median only; missingness remains in source coverage and cannot become PASS',
+      safety: 'FAIL/UNKNOWN safety rows excluded from learning; they remain non-qualified in production',
+    },
+    counts: {rawRows: rows.length, validRows: validRows.length, excludedRows: rows.length - validRows.length, companies: symbols.size, train: train.length, validation: validation.length, test: test.length, firmHoldout: firmTest.length},
+    metrics: {test: testMetrics, firmHoldout: holdout},
+    stability,
+    model: {intercept: model.intercept, medians: model.medians},
+    weights: weightResult.rows,
+    weightBasisPointsTotal: weightResult.rows.reduce((sum, row) => sum + (row.weightBasisPoints ?? 0), 0),
+    blockers,
+  };
+  if (output) {
+    await fs.mkdir(path.dirname(output), {recursive: true});
+    await fs.writeFile(output, JSON.stringify(result, null, 2));
+  }
+  return result;
+}
+
+const isCli = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isCli) {
+  const args = Object.fromEntries(process.argv.slice(2).reduce((values, value, index, all) => value.startsWith('--') ? [...values, [value.slice(2), all[index + 1]]] : values, []));
+  if (!args.input || !args.strategy) {
+    console.error('Usage: node research/weight-lab.mjs --strategy core|bounce --input dataset.jsonl --output report.json');
+    process.exit(2);
+  }
+  const result = await runLab({strategy: args.strategy, input: args.input, output: args.output});
+  console.log(JSON.stringify({status: result.status, counts: result.counts, metrics: result.metrics, stability: result.stability, blockers: result.blockers, weights: result.weights}, null, 2));
+  if (result.status === 'BLOCKED') process.exitCode = 3;
+}
