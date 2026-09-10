@@ -111,8 +111,9 @@ export function evaluateStrategy(strategy:keyof typeof SPECS,s:Snapshot){
   const keys=evidenceRequirements[check.id];
   if(keys&&check.status!=='UNKNOWN'&&!keys.every(key=>usableEvidence(s.provenance[key],s.asOf))){check.status='UNKNOWN';check.explanation+=` · الدليل الزمني غير مكتمل: ${keys.filter(key=>!usableEvidence(s.provenance[key],s.asOf)).join(', ')}`;}
  }
- // Keep measurable screening separate from unresolved research review. UNKNOWN
- // never becomes PASS; it remains visible as an explicit review state.
+ // Eligibility is intentionally strict: a factor documented as an entry
+ // condition is part of the gate set, while the weighted score ranks rows
+ // that survive. UNKNOWN never becomes PASS.
  const hardGateIds='eligibilityGateIds' in spec?[...spec.eligibilityGateIds]:['security','cap','liquidity'];
  const measurableGateIds=hardGateIds.filter(id=>!['deathSpiral','criticalData','freshness','conflict'].includes(id));
  const hardGates=checks.filter(c=>hardGateIds.includes(c.id));
@@ -128,11 +129,11 @@ export function evaluateStrategy(strategy:keyof typeof SPECS,s:Snapshot){
  const factors=strategy==='core'?coreFactors(scoreInput):strategy==='legacy'?legacyFactors(scoreInput):bounceFactors(scoreInput);
  const qualityFactor=factors.find(f=>f.id==='quality'||f.id==='profitability');
  if(qualityFactor)qualityFactor.availableWeight=qualityFactor.maxPoints*([scoreInput.netIncome,scoreInput.fcf].filter(finite).length/2);
- // Bounce has no validated predictive ranking model in the supplied spec.
- // Expose an honest diagnostic percentage instead: equal share of the six
- // published gates, with UNKNOWN and FAIL both receiving zero. It is never
- // used to promote a stock or replace the gate result.
- const gateScore=strategy==='bounce'?Math.round(100*factorChecks.filter(c=>c.status==='PASS').length/Math.max(1,factorChecks.length)*10)/10:null;
+ // Bounce has no validated predictive probability in the supplied spec.
+ // Expose a transparent gate-completeness diagnostic for its four measurable
+ // price/structure conditions. It never promotes a stock or replaces status.
+ const bounceGateChecks=strategy==='bounce'?checks.filter(c=>['collapse','low','dilution','reversal'].includes(c.id)):[];
+ const gateScore=strategy==='bounce'?Math.round(100*bounceGateChecks.filter(c=>c.status==='PASS').length/Math.max(1,bounceGateChecks.length)*10)/10:null;
  const rawScore=Math.round(factors.reduce((total,f)=>total+f.points,0)*10)/10;
  const scoreCoverage=Math.round(factors.filter(f=>f.available).reduce((t,f)=>t+(f.availableWeight??f.maxPoints),0)*10)/10;
  const totalFactorPoints=factors.reduce((t,f)=>t+f.maxPoints,0);

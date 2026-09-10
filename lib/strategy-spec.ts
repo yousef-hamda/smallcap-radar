@@ -8,7 +8,7 @@
 export const SPECS = {
   core: {
     id: 'CORE_VALUE_V2',
-    version: '2.1.0-draft.5-feature-ranking',
+    version: '2.2.0-draft.1-precision-gates',
     marketCap: { min: 25e6, max: 2e9 },
     liquidity: 150e3,
     liquidityMetric: 'medianDollarVolume20d',
@@ -27,11 +27,13 @@ export const SPECS = {
     freshnessDays: 3,
     filingFreshnessDays: 200,
     score: { growthMin: -0.1, growthMax: 0.3, marginMin: -0.1, marginMax: 0.1, insiderScale: 0.01, entryAnchor: -0.1, entryRange: 0.6 },
-    eligibilityGateIds: ['security', 'cap', 'liquidity', 'deathSpiral', 'criticalData', 'freshness', 'conflict'],
-    factorCheckIds: ['revenue', 'valuation', 'profitability', 'filingFreshness'],
+    // The source specification describes a real revenue/valuation/profitability
+    // entry screen. Keep these as gates; the 100-point score ranks survivors.
+    eligibilityGateIds: ['security', 'cap', 'liquidity', 'revenue', 'valuation', 'profitability', 'deathSpiral', 'criticalData', 'freshness', 'filingFreshness', 'conflict'],
+    factorCheckIds: [],
     model: {
       id: 'CORE_DIAGNOSTIC_BASELINE',
-      version: 'diagnostic-2.1.0',
+      version: 'diagnostic-2.2.0-precision-gates',
       validation: 'blocked' as const,
       objective: '12–24 month benchmark-relative risk-adjusted return',
       probabilityAvailable: false,
@@ -42,7 +44,7 @@ export const SPECS = {
   },
   bounce: {
     id: 'BOUNCE_V2',
-    version: '2.1.0-draft.5-feature-ranking',
+    version: '2.2.0-draft.1-precision-gates',
     marketCap: { min: 25e6, max: 600e6 },
     liquidity: 150e3,
     liquidityMetric: 'medianDollarVolume20d',
@@ -61,11 +63,13 @@ export const SPECS = {
       offLowRange: 0.55,
     },
     exit: { target: 0.2, stop: -0.15, months: 3 },
-    eligibilityGateIds: ['security', 'cap', 'liquidity', 'criticalData', 'freshness', 'conflict'],
-    factorCheckIds: ['collapse', 'low', 'dilution', 'reversal'],
+    // The historical Bounce specification names all six conditions as the
+    // entry screen. The score is still used to order the admitted survivors.
+    eligibilityGateIds: ['security', 'cap', 'liquidity', 'collapse', 'low', 'dilution', 'reversal', 'criticalData', 'freshness', 'conflict'],
+    factorCheckIds: [],
     model: {
       id: 'BOUNCE_DIAGNOSTIC_BASELINE',
-      version: 'diagnostic-2.1.0',
+      version: 'diagnostic-2.2.0-precision-gates',
       validation: 'blocked' as const,
       objective: '3-month net risk-adjusted utility; +20% target before −15% stop reported separately',
       probabilityAvailable: false,

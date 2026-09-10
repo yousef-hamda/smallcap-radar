@@ -2,6 +2,8 @@
 
 Status is implementation evidence, not an assertion of historical strategy profitability. Full user plan is preserved in USER_PLAN_AR.md. No section is silently treated as complete.
 
+Precision-gates update (2026-09-10): documented Core entry conditions (revenue, EV/S, profitability/FCF) and all six Bounce entry conditions are now strict eligibility gates; the 100-point score ranks only survivors. This is a precision-policy improvement, not a measured increase in historical hit rate.
+
 Provider/MCP selection and the safe integration gates are recorded in [TOOLING_RESEARCH.md](./TOOLING_RESEARCH.md).
 
 | Plan sections | Scope | Actual status |
