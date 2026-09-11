@@ -1,17 +1,68 @@
 import React, { useState } from 'react'
-import type { Stock } from './types'
+import './App.css'
 
 /**
  * Small-Cap Radar | رادار الشركات الصغيرة
- * 
- * Arabic stock screener for US market.
- * Identifies small-cap "explosion" candidates.
+ * Arabic stock screener for US market
  */
+
+interface Stock {
+  symbol: string
+  name: string
+  score: number
+  marketCap: number
+  revenue: number
+  growthRate: number
+}
 
 export default function App() {
   const [locale, setLocale] = useState<'ar' | 'en'>('ar')
   const [stocks, setStocks] = useState<Stock[]>([])
   const [loading, setLoading] = useState(false)
+
+  // Sample data for demonstration
+  const SAMPLE_STOCKS: Stock[] = [
+    {
+      symbol: 'NVDA',
+      name: 'NVIDIA Corporation',
+      score: 87,
+      marketCap: 1200000000000,
+      revenue: 60000000000,
+      growthRate: 0.245
+    },
+    {
+      symbol: 'MSFT',
+      name: 'Microsoft Corporation',
+      score: 82,
+      marketCap: 2800000000000,
+      revenue: 198000000000,
+      growthRate: 0.16
+    },
+    {
+      symbol: 'GOOGL',
+      name: 'Alphabet Inc.',
+      score: 78,
+      marketCap: 1700000000000,
+      revenue: 307000000000,
+      growthRate: 0.13
+    },
+    {
+      symbol: 'AMZN',
+      name: 'Amazon.com Inc.',
+      score: 75,
+      marketCap: 1900000000000,
+      revenue: 575000000000,
+      growthRate: 0.11
+    },
+    {
+      symbol: 'META',
+      name: 'Meta Platforms Inc.',
+      score: 71,
+      marketCap: 950000000000,
+      revenue: 135000000000,
+      growthRate: 0.19
+    }
+  ]
 
   const t = {
     ar: {
@@ -21,6 +72,12 @@ export default function App() {
       results: 'النتائج',
       noResults: 'لم تُعثر على نتائج',
       loading: 'جاري الفحص...',
+      symbol: 'الرمز',
+      name: 'اسم الشركة',
+      score: 'النقاط',
+      marketCap: 'القيمة السوقية',
+      revenue: 'الإيرادات',
+      growth: 'النمو',
     },
     en: {
       title: 'Small-Cap Radar',
@@ -29,6 +86,12 @@ export default function App() {
       results: 'Results',
       noResults: 'No results found',
       loading: 'Scanning...',
+      symbol: 'Symbol',
+      name: 'Company',
+      score: 'Score',
+      marketCap: 'Market Cap',
+      revenue: 'Revenue',
+      growth: 'Growth',
     }
   }
 
@@ -36,23 +99,21 @@ export default function App() {
 
   const handleScan = async () => {
     setLoading(true)
-    try {
-      // Fetch from scoring engine
-      const response = await fetch('/api/scan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      })
-      const data = await response.json()
-      setStocks(data.stocks || [])
-    } catch (err) {
-      console.error('Scan failed:', err)
-    } finally {
-      setLoading(false)
-    }
+    // Simulate API call
+    await new Promise(resolve => setTimeout(resolve, 1500))
+    setStocks(SAMPLE_STOCKS)
+    setLoading(false)
+  }
+
+  const formatCurrency = (value: number) => {
+    if (value >= 1e12) return '$' + (value / 1e12).toFixed(2) + 'T'
+    if (value >= 1e9) return '$' + (value / 1e9).toFixed(2) + 'B'
+    if (value >= 1e6) return '$' + (value / 1e6).toFixed(2) + 'M'
+    return '$' + value.toFixed(2)
   }
 
   return (
-    <div className={`min-h-screen ${locale === 'ar' ? 'rtl' : 'ltr'}`}>
+    <div className={`min-h-screen ${locale === 'ar' ? 'rtl' : 'ltr'}`} style={{ direction: locale === 'ar' ? 'rtl' : 'ltr' }}>
       {/* Header */}
       <header className="bg-gradient-to-r from-slate-900 to-slate-800 text-white p-6">
         <div className="max-w-7xl mx-auto flex justify-between items-center">
@@ -88,20 +149,22 @@ export default function App() {
             <table className="w-full">
               <thead className="bg-slate-100 border-b">
                 <tr>
-                  <th className="px-4 py-3 text-left font-semibold">Symbol</th>
-                  <th className="px-4 py-3 text-right font-semibold">Score</th>
-                  <th className="px-4 py-3 text-right font-semibold">Market Cap</th>
-                  <th className="px-4 py-3 text-right font-semibold">Revenue</th>
-                  <th className="px-4 py-3 text-right font-semibold">Growth</th>
+                  <th className="px-4 py-3 text-left font-semibold">{strings.symbol}</th>
+                  <th className="px-4 py-3 text-left font-semibold">{strings.name}</th>
+                  <th className="px-4 py-3 text-right font-semibold">{strings.score}</th>
+                  <th className="px-4 py-3 text-right font-semibold">{strings.marketCap}</th>
+                  <th className="px-4 py-3 text-right font-semibold">{strings.revenue}</th>
+                  <th className="px-4 py-3 text-right font-semibold">{strings.growth}</th>
                 </tr>
               </thead>
               <tbody>
                 {stocks.map((stock) => (
                   <tr key={stock.symbol} className="border-b hover:bg-slate-50">
-                    <td className="px-4 py-3 font-semibold">{stock.symbol}</td>
-                    <td className="px-4 py-3 text-right">{stock.score.toFixed(1)}</td>
-                    <td className="px-4 py-3 text-right">${(stock.marketCap / 1e9).toFixed(2)}B</td>
-                    <td className="px-4 py-3 text-right">${(stock.revenue / 1e9).toFixed(2)}B</td>
+                    <td className="px-4 py-3 font-semibold text-blue-600">{stock.symbol}</td>
+                    <td className="px-4 py-3">{stock.name}</td>
+                    <td className="px-4 py-3 text-right font-semibold text-green-600">{stock.score}</td>
+                    <td className="px-4 py-3 text-right text-sm">{formatCurrency(stock.marketCap)}</td>
+                    <td className="px-4 py-3 text-right text-sm">{formatCurrency(stock.revenue)}</td>
                     <td className="px-4 py-3 text-right text-green-600">{(stock.growthRate * 100).toFixed(1)}%</td>
                   </tr>
                 ))}
@@ -112,7 +175,8 @@ export default function App() {
 
         {!loading && stocks.length === 0 && (
           <div className="text-center text-slate-500 py-12">
-            <p>{strings.noResults}</p>
+            <p className="text-lg">{strings.noResults}</p>
+            <p className="text-sm mt-2">{locale === 'ar' ? 'اضغط الزر أعلاه لبدء الفحص' : 'Click the button above to start scanning'}</p>
           </div>
         )}
       </main>
