@@ -1,6 +1,6 @@
 # Small-Cap Radar V2
 
-**Deployment update:** version 62 was published successfully on 2026-09-09 from commit `0319e0642f316f4b41522c61f5db8675b1d68db0`. [Release record](docs/DEPLOYMENT_62.md). Browser/device acceptance remains evidence-gated.
+**Deployment update:** version 71 was published successfully on 2026-09-11 from commit `a1095b5b0a3345f5f02cd21b0778011312baadca`. [Release record](docs/DEPLOYMENT_71.md). Browser/device acceptance remains evidence-gated.
 
 **حملة التحسين الحالية:** راجع [التغييرات والأدلة والفجوات](docs/IMPROVEMENT_CAMPAIGN_2026_09_08.md). ملاحظات الإصدارات الأقدم أدناه تاريخية؛ لا تثبت أداء النسخة الحالية أو اكتمال القبول.
 
