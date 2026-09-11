@@ -46,11 +46,13 @@ test('source conflict prevents both screening and final qualification',()=>{for(
 test('visitor isolation and cookie flags',()=>{
  const a=visitor(new Request('https://radar.test')),b=visitor(new Request('https://radar.test'));assert.notEqual(a.owner,b.owner);assert.match(a.cookie,/HttpOnly; SameSite=Lax; Secure/);assert.equal(visitor(new Request('https://radar.test',{headers:{cookie:a.cookie.split(';')[0]}})).owner,a.owner);
 });
-test('stage9 persists rows and hands only history candidates to stage10',async()=>{
+test('stage9 persists rows and hands every in-range category row to history scoring',async()=>{
  await db().prepare('INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,strategy_hash) VALUES(?,?,?,?,?,?,?,?,?)').bind('scan-test','2026-09-08T00:00:00Z','2026-09-08T00:00:00Z','running','Bulk Quotes/SEC Frames v7 · full',1,JSON.stringify([{ticker:'TEST',name:'Synthetic test only',cik:99,exchange:'Nasdaq',marketCap:1e9,price:10}]),9,currentHash()).run();
- const result=await processScanBatch('scan-test');assert.equal(result.done,false);assert.equal(result.run.stage,10);assert.equal(result.run.offset,0);assert.equal(result.run.total,0);assert.equal(result.run.processed,0);assert.equal(result.run.status,'running');
+ const result=await processScanBatch('scan-test');assert.equal(result.done,false);assert.equal(result.run.stage,10);assert.equal(result.run.offset,0);assert.equal(result.run.total,1);assert.equal(result.run.processed,1);assert.equal(result.run.status,'running');
  assert.equal((await db().prepare("SELECT COUNT(*) AS n FROM fundamental_snapshots WHERE run_id='scan-test'").first()).n,1);
- const final=await processScanBatch('scan-test');assert.equal(final.done,true);assert.equal(final.run.stage,13);assert.equal(final.run.processed,0);assert.equal(final.run.status,'complete');
+ const now=new Date().toISOString();setHistoryResult({history:[{date:now.slice(0,10),open:10,high:10,low:10,close:10,volume:1000}],splits:[],source:'TEST_ONLY',url:'https://example.test',availableAt:now,retrievedAt:now});
+ try { const final=await processScanBatch('scan-test');assert.equal(final.done,true);assert.equal(final.run.stage,13);assert.equal(final.run.processed,1);assert.equal(final.run.status,'complete'); }
+ finally { setHistoryResult(null); }
 });
 test('completed result with legacy processed=0 remains selectable; partial never replaces it',async()=>{
  await db().prepare("UPDATE strategy_runs SET processed=0 WHERE id='scan-test'").run();assert.equal((await readState()).dataRunId,'scan-test');
@@ -259,7 +261,7 @@ test('radar pages contain every row and rank current scores descending',async()=
  const first=await readState({strategy:'core',limit:2});
  assert.equal(first.summary.total,3);assert.equal(first.summary.coreRanked,3);assert.equal(first.snapshots.length,2);assert.equal(first.page.hasMore,true);
  const second=await readState({strategy:'core',limit:10,offset:2});assert.equal(second.snapshots.length,1);
- const all=await readState({strategy:'core',limit:10});assert.equal(all.snapshots.length,3);const failed=all.snapshots.find(s=>s.symbol==='RANK-FAIL');assert(failed);assert.equal(evaluateStrategy('core',failed).status,'FAIL');
+ const all=await readState({strategy:'core',limit:10});assert.equal(all.snapshots.length,3);const failed=all.snapshots.find(s=>s.symbol==='RANK-FAIL');assert(failed);assert.equal(evaluateStrategy('core',failed).status,'UNKNOWN');assert.equal(evaluateStrategy('core',failed).checks.find(c=>c.id==='cap').role,'factor');
  const scores=all.snapshots.map(s=>evaluateStrategy('core',s).score);for(let i=1;i<scores.length;i++){const previous=scores[i-1]??-Infinity;const current=scores[i]??-Infinity;assert(previous>=current)}
  assert.deepEqual([...first.snapshots,...second.snapshots].map(s=>s.symbol),all.snapshots.map(s=>s.symbol));
 });

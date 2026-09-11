@@ -3,7 +3,6 @@ import { companySnapshot, consumeProviderIssues, historicalMarketData, quickSymb
 import { fetchBulkFundamentals, preliminarySnapshot, type BulkFundamentals } from './bulk';
 import { bounceHistoryMetrics, reviewShareSplits } from './research';
 import { NON_TRADABLE_NAME, SPECS } from './strategy-spec';
-import { evaluateStrategy } from './engine';
 
 const BATCH_SIZE = 1;
 const HISTORY_BATCH_SIZE = 18;
@@ -39,22 +38,17 @@ function preliminaryCandidates(companies: any[]) {
 
 export function bounceHistoryCandidate(snapshot: any) {
   if (snapshot?.securityType !== 'common' || Number(snapshot.marketCap) < SPECS.bounce.marketCap.min || Number(snapshot.marketCap) > SPECS.bounce.marketCap.max || Number(snapshot.price) <= 0) return false;
-  // Bulk quotes can disprove many bounce candidates without an expensive
-  // history request. History is reserved for rows that still need MA30W and
-  // the exact 20-session median dollar-volume verification.
-  if (Number.isFinite(snapshot.return12m) && snapshot.return12m >= SPECS.bounce.returnMax) return false;
-  if (Number.isFinite(snapshot.low52w) && snapshot.price < snapshot.low52w * (1 + SPECS.bounce.lowDistanceMin)) return false;
+  // Return, low and MA30W are weighted factors, not rejection filters. Every
+  // in-range common share gets the historical evidence needed to score it.
   return true;
 }
 
 export function historyCandidate(snapshot: any) {
   if (bounceHistoryCandidate(snapshot)) return true;
   if (snapshot?.securityType !== 'common' || Number(snapshot.marketCap) < SPECS.core.marketCap.min || Number(snapshot.marketCap) > SPECS.core.marketCap.max || Number(snapshot.price) <= 0) return false;
-  // History is fetched only for rows that pass the cheap, non-liquidity Core
-  // gates. The exact 20-session dollar-volume median is then verified from
-  // bars; a quote average is never used as a PASS substitute.
-  const evaluation = evaluateStrategy('core', snapshot);
-  return ['security', 'cap', 'revenue', 'valuation', 'profitability'].every(id => evaluation.checks.find(check => check.id === id)?.status === 'PASS');
+  // Core entry economics are weighted. Fetch history for every in-range
+  // common share so the Entry Point factor and audit trail are comparable.
+  return true;
 }
 
 export const publicRun = (run: any) => ({

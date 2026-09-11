@@ -2,7 +2,7 @@
 
 Status is implementation evidence, not an assertion of historical strategy profitability. Full user plan is preserved in USER_PLAN_AR.md. No section is silently treated as complete.
 
-Precision-gates update (2026-09-10): documented Core entry conditions (revenue, EV/S, profitability/FCF) and all six Bounce entry conditions are now strict eligibility gates; the 100-point score ranks only survivors. This is a precision-policy improvement, not a measured increase in historical hit rate.
+Weighted-ranking correction (2026-09-11): Core economic conditions and all six Bounce conditions are weighted factors. Only security, data integrity, freshness and source-conflict checks are hard safety gates. A factor failure lowers the 100-point score but does not remove the company from the category ranking.
 
 Provider/MCP selection and the safe integration gates are recorded in [TOOLING_RESEARCH.md](./TOOLING_RESEARCH.md).
 
@@ -15,7 +15,7 @@ Provider/MCP selection and the safe integration gates are recorded in [TOOLING_R
 | 36–38 | Two-source, confidence, four angles | Missing/conflict surfaced; final ranking disabled; no actual secondary-source enrichment |
 | 39 | Universe cleaning | Bundled 7,675-symbol SEC/Nasdaq directory, exchange filter and conservative name classification; quick cache excludes funds, trusts, units, warrants, preferred instruments and limited partnerships. Not yet a fully verified security master |
 | 40–45 | Database, snapshots, stages, hashes | Self-initializing schema, immutable runs/snapshots/checks/hash and cursor/lease implemented. Full scan uses bulk quotes, 16 Frames datasets (including IFRS alternatives), then a historical enrichment pass for small-cap Bounce candidates (12-company bounded batches) to compute 12-month return, 52-week low and 30 completed weekly closes; quick mode retains bounded deep batches and a retry queue. Server tasks continue after the page closes. Research-only stages beyond the production screener remain incomplete |
-| 46–50 | Dashboard/cards/excluded/incomplete | Professional dark RTL terminal, dense table, explicit status language and synthetic mode clearly separated. Approval list now contains PASS only; UNKNOWN is never promoted |
+| 46–50 | Dashboard/cards/excluded/incomplete | Professional dark RTL terminal, dense table, explicit status language and synthetic mode clearly separated. Category ranking includes every in-scope row ordered by its 100-point factor score; only safety-PASS rows are verified, and UNKNOWN is never promoted to PASS |
 | 51–53 | Deep company views/charts/translation | Gate/evidence details, five-range chart, financial summary, sector/industry, Nasdaq one-year target, Yahoo Finance RSS news and SEC Form 4 purchase detail are implemented on-demand; translation caching remains pending |
 | 54–59 | Statistical lab/PIT/holdouts/multiple tests/bootstrap | Research weight lab implemented with PIT validation, 60/20/20 chronological split, fixed firm holdout, L2 logistic fit, exact 100-point normalization, AUC and sign-stability checks; real promotion remains BLOCKED because the available cache is not a PIT outcome dataset |
 | 60–66 | Survivorship/costs/stress/metrics/disasters | Costs and basic exits implemented. Delisted dataset, full backtest, liquidity stress, Core/Bounce dashboards and disaster analysis pending |
