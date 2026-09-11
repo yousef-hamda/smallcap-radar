@@ -16,6 +16,7 @@
     "test:engine": "node scripts/test-engine.mjs",
     "test:runtime": "npm run test:engine && node scripts/test-runtime.mjs",
     "test:research": "node --test tests/research-weight-lab.test.mjs",
+    "research:price-backtest": "node research/free-price-backtest.mjs",
     "research:audit": "node research/data-audit.mjs",
     "typecheck": "tsc --noEmit"
   },

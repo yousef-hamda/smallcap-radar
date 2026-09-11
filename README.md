@@ -4,6 +4,8 @@
 
 **حملة التحسين الحالية:** راجع [التغييرات والأدلة والفجوات](docs/IMPROVEMENT_CAMPAIGN_2026_09_08.md). ملاحظات الإصدارات الأقدم أدناه تاريخية؛ لا تثبت أداء النسخة الحالية أو اكتمال القبول.
 
+**دراسة التقييم الجديدة (2026-09-11):** أضيف مختبر Backtest مجاني قابل لإعادة التشغيل في [free-price-backtest.mjs](research/free-price-backtest.mjs) وتقرير نتائجه في [ALGORITHM_IMPROVEMENT_REPORT_2026_09_11_AR.md](docs/ALGORITHM_IMPROVEMENT_REPORT_2026_09_11_AR.md). النتيجة النهائية الاستكشافية لـBounce هي `44.85%` مقابل خط أساس `41.87%` وعشوائي مطابق `42.01%` على 388 نتيجة/174 شركة؛ فاصل فرق الشركات يشمل الصفر، لذلك لم تُفعّل الأوزان الجديدة في الإنتاج. Core محجوب إلى أن تتوفر عينة Point-in-Time تشمل الأساسيات والنتائج والشركات المشطوبة.
+
 للدليل العربي الكامل الذي يغطي المنتج، المحرك، البيانات، الفحص الخلفي، الواجهة، الإشعارات، الاختبارات، النشر، والفجوات المتبقية، راجع [README_FULL_AR.md](docs/README_FULL_AR.md).
 
 Arabic RTL mobile-first PWA, published through Sites. It is a working research platform with a deliberately disabled final ranking until the remaining research requirements are validated. Do not interpret synthetic fixtures or referenced historical benchmark rates as market results.
