@@ -417,7 +417,7 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
   const seenQuarters = new Set<string>();
   snapshot.revenueTrend = quarterly.reverse().filter(row => { if (seenQuarters.has(row.end)) return false; seenQuarters.add(row.end); return true; }).slice(0, 6).reverse().map(row => ({ quarter: row.end.slice(0, 7), value: row.val, periodEnd: row.end }));
   if (snapshot.revenueTrend.length > 0) snapshot.provenance.revenueTrend = { source: 'SEC EDGAR XBRL quarterly revenue', url: factsUrl, periodEnd: snapshot.revenueTrend.at(-1)!.periodEnd || now.slice(0, 10), availableAt: now, retrievedAt: now, currency: 'USD', tag: 'quarterly revenue', confidence: 'high' };
-  for (const [key, tags] of Object.entries({ revenue: REVENUE_TAGS, netIncome: ['NetIncomeLoss', 'ProfitLoss'], ocf: ['NetCashProvidedByUsedInOperatingActivities'], capex: ['PaymentsToAcquirePropertyPlantAndEquipment'] })) {
+  for (const [key, tags] of Object.entries({ revenue: [...REVENUE_TAGS, 'Revenue'], netIncome: ['NetIncomeLoss', 'ProfitLoss'], ocf: ['NetCashProvidedByUsedInOperatingActivities', 'NetCashProvidedByUsedInOperatingActivitiesContinuingOperations', 'NetCashFlowsFromUsedInOperatingActivities'], capex: ['PaymentsToAcquirePropertyPlantAndEquipment', 'PaymentsToAcquirePropertyPlantAndEquipmentContinuingOperations', 'PurchaseOfPropertyPlantAndEquipment'] })) {
     const annual = trailingAnnual(observations(facts, tags), now);
     if (annual) { (snapshot as unknown as Record<string, unknown>)[key] = annual.val; snapshot.provenance[key] = provenance(annual, factsUrl, now); if (['20-F', '40-F'].includes(annual.form)) snapshot.foreignFiler = true }
   }

@@ -4,6 +4,8 @@ Status is implementation evidence, not an assertion of historical strategy profi
 
 Weighted-ranking correction (2026-09-11): Core economic conditions and all six Bounce conditions are weighted factors. Only security, data integrity, freshness and source-conflict checks are hard safety gates. A factor failure lowers the 100-point score but does not remove the company from the category ranking.
 
+Coverage correction (2026-09-15): SEC Frames are no longer the last financial step in a full scan. A durable, resumable Company Facts recovery stage runs for missing standard fields before preliminary snapshots are evaluated. Field-level coverage is returned separately from company-level coverage; missing/custom facts remain UNKNOWN.
+
 Provider/MCP selection and the safe integration gates are recorded in [TOOLING_RESEARCH.md](./TOOLING_RESEARCH.md).
 
 | Plan sections | Scope | Actual status |
@@ -11,7 +13,7 @@ Provider/MCP selection and the safe integration gates are recorded in [TOOLING_R
 | 1–3 | Funnel, shared engine, 3 models | Shared gates/specs implemented; Legacy benchmark now has a deterministic 100-point reference score; it remains research-only |
 | 4–20 | Core | Documented gates/weights implemented; inflection, death-spiral automation and all factor sub-scores BLOCKED on specification/validation |
 | 21–31 | Bounce | Gate evaluator/exits implemented and tested; explicit operational 20-day median dollar-volume threshold ($150k); historical metrics now derived from dated Nasdaq bars; transparent gate-completeness diagnostic is shown, not a predictive ranking score; historic rates remain unverified |
-| 32–35 | Raw/normalized/metrics/provenance | Bulk quote and SEC Frames adapters (including IFRS cash/borrowings), historical Bounce metrics, provenance and on-demand Company Facts/history implemented; quote-only records survive fundamental gaps; missing values remain UNKNOWN. Full custom-taxonomy coverage remains pending; material share-count jumps are conservatively held UNKNOWN |
+| 32–35 | Raw/normalized/metrics/provenance | Bulk quote and SEC Frames adapters plus resumable SEC Company Facts recovery (including IFRS cash/borrowings), historical Bounce metrics, provenance and on-demand Company Facts/history implemented; quote-only records survive fundamental gaps; missing values remain UNKNOWN. Full custom-taxonomy coverage remains pending; material share-count jumps are conservatively held UNKNOWN |
 | 36–38 | Two-source, confidence, four angles | Missing/conflict surfaced; final ranking disabled; no actual secondary-source enrichment |
 | 39 | Universe cleaning | Bundled 7,675-symbol SEC/Nasdaq directory, exchange filter and conservative name classification; quick cache excludes funds, trusts, units, warrants, preferred instruments and limited partnerships. Not yet a fully verified security master |
 | 40–45 | Database, snapshots, stages, hashes | Self-initializing schema, immutable runs/snapshots/checks/hash and cursor/lease implemented. Full scan uses bulk quotes, 16 Frames datasets (including IFRS alternatives), then a historical enrichment pass for small-cap Bounce candidates (12-company bounded batches) to compute 12-month return, 52-week low and 30 completed weekly closes; quick mode retains bounded deep batches and a retry queue. Server tasks continue after the page closes. Research-only stages beyond the production screener remain incomplete |
@@ -23,7 +25,7 @@ Provider/MCP selection and the safe integration gates are recorded in [TOOLING_R
 | 71 | Real-source integration | Yahoo/Nasdaq bulk quotes, Nasdaq history, SEC Frames and on-demand SEC Company Facts implemented. Official dated fallbacks prevent provider 403s from erasing a run. Latest production QA completed 2,894/2,894 candidates with 2,366 receiving Frames fundamentals; expected-value financial audit remains incomplete |
 | 72–75 | Freshness/failure/migrations/performance | Conservative freshness gates; generated migrations; background execution and encrypted Web Push completion alert implemented. Production full-market benchmark: 7,675 listed securities to 2,910 evaluated candidates in 27.1 seconds. iOS still requires Home Screen installation and one-time notification permission |
 | 76 | Secrets | No supplied secrets persisted; replacement needed before using user's separate Cloudflare credentials |
-| 77–79 | Diagnostics/coverage/audit | Run counts/errors, persisted evaluations and a live coverage panel for quotes, Frames datasets and fundamental coverage implemented; immutable historical comparison UI pending |
+| 77–79 | Diagnostics/coverage/audit | Run counts/errors, persisted evaluations and a live coverage panel for quotes, SEC stages, company-level fundamentals and field-level coverage implemented; immutable historical comparison UI pending |
 | 80–82 | Research/rejected idea registry | Research protocol, data audit and promotion gate documented; no invented experiment or production weight claimed |
 | 83–84 | Milestones/acceptance | Foundation only; full acceptance has NOT passed |
 | 85–87 | Unresolved details and final architecture | Remain openly documented; no claims of complete production delivery |

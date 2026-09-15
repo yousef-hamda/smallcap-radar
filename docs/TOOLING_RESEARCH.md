@@ -1,12 +1,12 @@
 # خارطة الأدوات ومصادر البيانات — Small Cap Radar
 
-آخر مراجعة: 2026-09-07
+آخر مراجعة: 2026-09-15
 
 هذه الوثيقة تحوّل قائمة الـMCP والمهارات والمستودعات المفتوحة إلى قرارات دمج عملية داخل التطبيق. الهدف هو رفع جودة الفحص من دون إدخال تبعيات بطيئة أو مصادر غير قابلة للتحقق.
 
 ## القرار التنفيذي
 
-1. **مسار الإنتاج الأساسي:** طلبات HTTP مباشرة إلى SEC EDGAR وNasdaq مع التخزين المؤقت وبيانات snapshot الموقعة داخل المشروع. واجهات SEC الرسمية لا تحتاج مفتاح API، وتعرض submissions وXBRL وتُحدّث أثناء اليوم؛ لذلك فهي مناسبة لمسار Worker الحالي. [SEC EDGAR APIs](https://www.sec.gov/search-filings/edgar-application-programming-interfaces)
+1. **مسار الإنتاج الأساسي:** طلبات HTTP مباشرة إلى SEC EDGAR وNasdaq مع التخزين المؤقت وبيانات snapshot المؤرخة داخل المشروع. واجهات SEC الرسمية لا تحتاج مفتاح API، وتعرض submissions وXBRL وتُحدّث أثناء اليوم؛ لذلك فهي مناسبة لمسار Worker الحالي. يبدأ الفحص بـFrames الجماعية، ثم يستعيد Company Facts الرسمي لكل CIK ينقصه حقل قبل التقييم. [SEC EDGAR APIs](https://www.sec.gov/search-filings/edgar-application-programming-interfaces)
 2. **MCP:** طبقة تنسيق وفحص للمطور/المشغّل (تشغيل فحص، قراءة provenance، مقارنة مزودين، smoke tests)، وليست مصدراً مالياً بحد ذاتها. MCP يعرّف تبادل السياق والأدوات عبر JSON-RPC بين host/client/server. [MCP specification](https://modelcontextprotocol.io/specification/2025-11-25) · [MCP architecture](https://modelcontextprotocol.io/docs/2026-07-28/learn/architecture)
 3. **مكتبات Python:** لا تُشحن إلى Cloudflare Worker. يمكن استخدامها لاحقاً في ETL أو backtest منفصل فقط؛ أما Worker فيستعمل adapters TypeScript الموجودة لتقليل زمن البدء وحجم الحزمة.
 
@@ -14,7 +14,7 @@
 
 | المجال | الأداة/المصدر | الاستخدام داخل المشروع | الحالة والحدود |
 |---|---|---|---|
-| fundamentals وfilings | SEC `data.sec.gov` (submissions/companyfacts/frames) | `lib/bulk.ts` و`lib/providers.ts`، مع US-GAAP وIFRS وsnapshot احتياطي | مدمج؛ يجب احترام User-Agent وسياسة fair access، ولا يغطي custom taxonomies بالكامل |
+| fundamentals وfilings | SEC `data.sec.gov` (submissions/companyfacts/frames) | `lib/bulk.ts` و`lib/providers.ts`، مع US-GAAP وIFRS وCompany Facts recovery وsnapshot احتياطي | مدمج؛ يجب احترام User-Agent وسياسة fair access، ولا يغطي custom taxonomies بالكامل |
 | الأسعار التاريخية | Nasdaq history + Yahoo chart fallback | `lib/providers.ts` و`app/price-chart.tsx` | مدمج؛ التغطية/التأخير يختلفان حسب الرمز والمصدر |
 | الأخبار | Yahoo RSS | بطاقة الأخبار في ملف الشركة | مدمج؛ مصدر ثانوي، لا يُستخدم وحده لاتخاذ قرار PASS |
 | Form 4 | SEC submissions/filings | استخراج معاملات insider ذات code P | مدمج؛ لا يعني غياب الإيداع غياب insider activity |
@@ -30,6 +30,9 @@
 - تم تحسين bulk SEC وإضافة بدائل IFRS وfallback snapshot، مع تفضيل نتيجة **full** على quick في `lib/storage.ts`.
 - تم إبقاء المصدر والتوقيت ودرجة الثقة ظاهرين في ملف الشركة بدلاً من إخفاء مصدر الرقم.
 - تم فصل PASS/FAIL عن حالة «بيانات ناقصة» حتى لا تُعرض الشركات غير القابلة للحكم كأنها مرفوضة أو مؤهلة.
+- أضيفت مرحلة قابلة للاستئناف تستعيد SEC Company Facts للحقول الناقصة بعد Frames، وتدمج الحقول الناقصة فقط مع كشف تعارض الفترة نفسها.
+- أضيف قياس field-level coverage إلى `/api/radar` ومركز البيانات بدل الاكتفاء بعداد «لدى الشركة أساسيات» المضلل.
+- أضيفت مفاهيم IFRS الشائعة للتدفق النقدي وشراء الممتلكات والاقتراضات في المسار التفصيلي، مع بقاء المفاهيم غير القياسية UNKNOWN.
 
 ## بوابات الدمج قبل أي مصدر جديد
 
@@ -44,4 +47,3 @@
 ## الفجوات التي تبقى صريحة
 
 تحتاج الخطة الكاملة، قبل ادعاء التكافؤ مع النظام القديم، إلى بيانات delisted تاريخية، مزود مستقل ثانٍ مرخّص، backtests وholdouts قابلة لإعادة التشغيل، custom taxonomy/split adjustment، cache للترجمة العربية، وإتاحة مستودع GitHub فعلي إذا أصبح connector إنشاء المستودعات متاحاً. هذه ليست فجوات يمكن حلها بأمان بإضافة SDK عشوائي أو MCP داخل Worker.
-

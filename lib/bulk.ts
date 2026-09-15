@@ -2,12 +2,12 @@ import type { Company } from './providers';
 import { fetchJson } from './providers';
 import type { Provenance, Snapshot } from './engine';
 import bundledFrames from './sec-frames.generated.json';
-import {REVENUE_TAGS} from './sec';
+import {REVENUE_TAGS, observations, latestInstant, trailingAnnual} from './sec';
 import {derivedEvidence,usableEvidence} from './evidence';
 import {NON_TRADABLE_NAME, SEC_FRAME_DATASET_COUNT} from './strategy-spec';
 
 type FrameFact = { cik: number; entityName?: string; start?: string; end: string; val: number; filed?: string; form?: string; accn?: string; frame?: string };
-type StoredFact = FrameFact & { tag: string; priority: number; url: string; fallback?: boolean; observedAt?:string };
+type StoredFact = FrameFact & { tag: string; priority: number; url: string; fallback?: boolean; observedAt?:string; kind?: 'frames'|'companyfacts' };
 export type BulkFundamentals = {
   revenue?: StoredFact;
   netIncome?: StoredFact;
@@ -18,8 +18,10 @@ export type BulkFundamentals = {
   cash?: StoredFact;
   debtCurrent?: StoredFact;
   debtNoncurrent?: StoredFact;
+  conflicts?: string[];
 };
-type FrameConfig = { key: keyof BulkFundamentals; tag: string; taxonomy?: 'us-gaap' | 'ifrs-full' | 'dei'; unit: string; period: string; priority: number };
+type FundamentalKey = Exclude<keyof BulkFundamentals, 'conflicts'>;
+type FrameConfig = { key: FundamentalKey; tag: string; taxonomy?: 'us-gaap' | 'ifrs-full' | 'dei'; unit: string; period: string; priority: number };
 
 const FRAME_BASE = 'https://data.sec.gov/api/xbrl/frames/us-gaap';
 const revenueTags = REVENUE_TAGS;
@@ -34,6 +36,120 @@ function newer(candidate: StoredFact, existing?: StoredFact) {
   const candidateFiled = candidate.filed ?? '';
   const existingFiled = existing.filed ?? '';
   return candidate.end > existing.end || (candidate.end === existing.end && (candidateFiled > existingFiled || (candidateFiled === existingFiled && candidate.priority < existing.priority)));
+}
+
+const COMPANY_FACTS_TAGS = {
+  revenue: REVENUE_TAGS,
+  netIncome: ['NetIncomeLoss', 'ProfitLoss'],
+  ocf: ['NetCashProvidedByUsedInOperatingActivities', 'NetCashProvidedByUsedInOperatingActivitiesContinuingOperations', 'NetCashFlowsFromUsedInOperatingActivities'],
+  capex: ['PaymentsToAcquirePropertyPlantAndEquipment', 'PaymentsToAcquirePropertyPlantAndEquipmentContinuingOperations', 'PurchaseOfPropertyPlantAndEquipment'],
+  shares: ['EntityCommonStockSharesOutstanding', 'CommonStockSharesOutstanding'],
+  cash: ['CashAndCashEquivalentsAtCarryingValue', 'CashAndCashEquivalents'],
+  debtCurrent: ['LongTermDebtCurrent', 'ShortTermBorrowings', 'BorrowingsCurrent'],
+  debtNoncurrent: ['LongTermDebtNoncurrent', 'LongTermDebt', 'BorrowingsNoncurrent', 'Borrowings'],
+} as const;
+
+function companyFactsUrl(cik: number) {
+  return `https://data.sec.gov/api/xbrl/companyfacts/CIK${String(cik).padStart(10, '0')}.json`;
+}
+
+function usableCompanyFact(fact: any, asOf: Date): fact is { start?: string; end: string; val: number; filed: string; form: string; accn?: string; tag?: string } {
+  return !!fact && Number.isFinite(fact.val) && typeof fact.end === 'string' && Number.isFinite(Date.parse(fact.end)) && Date.parse(fact.end) <= asOf.getTime() && typeof fact.filed === 'string' && Number.isFinite(Date.parse(`${fact.filed}T23:59:59Z`)) && Date.parse(`${fact.filed}T23:59:59Z`) <= asOf.getTime();
+}
+
+function toStoredFact(fact: any, cik: number, key: FundamentalKey, url: string, priority: number): StoredFact | undefined {
+  if (!fact || !Number.isFinite(fact.val) || !fact.end) return undefined;
+  return { cik, start: fact.start, end: fact.end, val: fact.val, filed: fact.filed, form: fact.form, accn: fact.accn, tag: fact.tag || key, priority, url, observedAt: new Date().toISOString(), kind: 'companyfacts' };
+}
+
+function latestInstantPair(rows: any[], asOf: Date) {
+  const eligible = rows.filter((row) => usableCompanyFact(row, asOf) && !row.start).sort((a, b) => b.end.localeCompare(a.end) || b.filed.localeCompare(a.filed));
+  return { current: eligible[0], prior: eligible.find((row) => row.end < eligible[0]?.end) };
+}
+
+/**
+ * Parse one official SEC Company Facts response into the same fact contract as
+ * Frames. This is deliberately conservative: only standard US-GAAP/IFRS/DEI
+ * facts with a filed date not later than asOf are eligible. Custom tags are
+ * left visible as a gap instead of being guessed into a standard metric.
+ */
+export function parseCompanyFacts(cik: number, payload: any, asOf = new Date()): BulkFundamentals | undefined {
+  const facts = payload?.facts;
+  if (!facts || typeof facts !== 'object') return undefined;
+  const result: BulkFundamentals = {};
+  const url = companyFactsUrl(cik);
+  const pickAnnual = (key: FundamentalKey, tags: readonly string[], priority = 0) => {
+    const rows = observationsFromPayload(facts, tags);
+    const annual = trailingAnnual(rows, asOf.toISOString());
+    if (annual && usableCompanyFact(annual, asOf)) result[key] = toStoredFact(annual, cik, key, url, priority);
+  };
+  pickAnnual('revenue', COMPANY_FACTS_TAGS.revenue);
+  pickAnnual('netIncome', COMPANY_FACTS_TAGS.netIncome);
+  pickAnnual('ocf', COMPANY_FACTS_TAGS.ocf);
+  pickAnnual('capex', COMPANY_FACTS_TAGS.capex);
+  for (const [key, tags] of Object.entries({ cash: COMPANY_FACTS_TAGS.cash, debtCurrent: COMPANY_FACTS_TAGS.debtCurrent, debtNoncurrent: COMPANY_FACTS_TAGS.debtNoncurrent }) as [FundamentalKey, readonly string[]][]) {
+    const instant = latestInstant(observationsFromPayload(facts, tags), asOf.toISOString());
+    if (instant && usableCompanyFact(instant, asOf)) result[key] = toStoredFact(instant, cik, key, url, 0);
+  }
+  const sharePair = latestInstantPair(observationsFromPayload(facts, COMPANY_FACTS_TAGS.shares, 'shares'), asOf);
+  if (sharePair.current && usableCompanyFact(sharePair.current, asOf)) result.shares = toStoredFact(sharePair.current, cik, 'shares', url, 0);
+  if (sharePair.prior && usableCompanyFact(sharePair.prior, asOf)) result.priorShares = toStoredFact(sharePair.prior, cik, 'priorShares', url, 0);
+  const usable = Object.keys(result).filter((key) => key !== 'conflicts').length;
+  return usable ? result : undefined;
+}
+
+function observationsFromPayload(facts: any, tags: readonly string[], unit = 'USD') {
+  return observations(facts, [...tags], unit);
+}
+
+export function needsCompanyFacts(facts: BulkFundamentals | undefined) {
+  if (!facts) return true;
+  return (['revenue', 'netIncome', 'ocf', 'capex', 'shares', 'priorShares', 'cash', 'debtCurrent', 'debtNoncurrent'] as const).some((key) => !facts[key]);
+}
+
+function mergeCompanyFacts(existing: BulkFundamentals | undefined, fallback: BulkFundamentals) {
+  const merged: BulkFundamentals = { ...(existing || {}) };
+  const conflicts = [...(merged.conflicts || [])];
+  for (const key of ['revenue', 'netIncome', 'ocf', 'capex', 'shares', 'priorShares', 'cash', 'debtCurrent', 'debtNoncurrent'] as const) {
+    const candidate = fallback[key], current = merged[key];
+    if (!candidate) continue;
+    if (current && current.end === candidate.end && current.val !== candidate.val) conflicts.push(`${key}: ${current.val} (${current.kind || 'frames'}) مقابل ${candidate.val} (Company Facts) في ${candidate.end}`);
+    if (!current) merged[key] = candidate;
+  }
+  if (conflicts.length) merged.conflicts = [...new Set(conflicts)].slice(0, 12);
+  return merged;
+}
+
+/** Fetch only the missing official fundamentals for a bounded resumable batch. */
+export async function fetchCompanyFactsFallback(candidateCiks: number[], asOf = new Date(), initial = new Map<number, BulkFundamentals>()) {
+  const fundamentals = new Map(initial);
+  const changed = new Set<number>();
+  const errors: string[] = [];
+  const failedCiks: number[] = [];
+  let success = 0, empty = 0, failed = 0;
+  const outcomes = await Promise.all(candidateCiks.map(async (cik) => {
+    const url = companyFactsUrl(cik);
+    try {
+      const payload = await fetchJson(url, 8_000, 6 * 60 * 60_000, 3);
+      return { cik, parsed: parseCompanyFacts(cik, payload, asOf), error: null };
+    } catch (error) {
+      return { cik, parsed: undefined, error: error instanceof Error ? error : Error('SEC Company Facts error') };
+    }
+  }));
+  for (const outcome of outcomes) {
+    if (outcome.error) {
+      failed++;
+      failedCiks.push(outcome.cik);
+      errors.push(outcome.error.message);
+      continue;
+    }
+    success++;
+    if (!outcome.parsed) { empty++; continue; }
+    const current = fundamentals.get(outcome.cik);
+    const merged = mergeCompanyFacts(current, outcome.parsed);
+    if (JSON.stringify(merged) !== JSON.stringify(current || {})) { fundamentals.set(outcome.cik, merged); changed.add(outcome.cik); }
+  }
+  return { fundamentals, changed: [...changed], requests: candidateCiks.length, success, empty, failed, failedCiks, errors: [...new Set(errors)].slice(0, 8) };
 }
 
 export async function fetchBulkFundamentals(candidateCiks: number[], asOf = new Date(), page?:{offset:number;limit:number;initial?:Map<number,BulkFundamentals>}) {
@@ -91,7 +207,7 @@ export async function fetchBulkFundamentals(candidateCiks: number[], asOf = new 
         const cik = Number(row.cik);
         if (!allowed.has(cik) || !Number.isFinite(row.val) || !row.end || !Number.isFinite(Date.parse(row.end)) || Date.parse(row.end)>asOf.getTime() || (row.filed&&Date.parse(row.filed+'T23:59:59Z')>asOf.getTime())) continue;
         const stored: StoredFact = { ...row, tag: config.tag, priority: config.priority, url,observedAt:asOf.toISOString() };
-        const record = {...fundamentals.get(cik)};
+        const record: BulkFundamentals = {...fundamentals.get(cik)};
         const current = record[config.key];
         if (newer(stored, current)) {record[config.key] = stored;changed.add(cik);}
         fundamentals.set(cik, record);
@@ -111,7 +227,7 @@ export async function fetchBulkFundamentals(candidateCiks: number[], asOf = new 
         const cik = Number(cikText);
         if (!allowed.has(cik)) continue;
         const current = {...fundamentals.get(cik)};
-        for (const key of Object.keys(bundled) as (keyof BulkFundamentals)[]) {
+        for (const key of Object.keys(bundled) as FundamentalKey[]) {
           const candidate = (bundled as BulkFundamentals)[key];
           if (!candidate||Date.parse(candidate.end)>asOf.getTime()) continue;
           const existing = current[key];
@@ -126,7 +242,7 @@ export async function fetchBulkFundamentals(candidateCiks: number[], asOf = new 
 
 function frameProvenance(fact: StoredFact, retrievedAt: string): Provenance {
   return {
-    source: fact.fallback ? 'SEC EDGAR XBRL Frames — official dated fallback snapshot' : 'SEC EDGAR XBRL Frames (official)',
+    source: fact.fallback ? 'SEC EDGAR XBRL Frames — official dated fallback snapshot' : fact.kind === 'companyfacts' ? 'SEC EDGAR Company Facts (official)' : 'SEC EDGAR XBRL Frames (official)',
     url: fact.url,
     periodStart: fact.start,
     periodEnd: fact.end,
@@ -136,7 +252,7 @@ function frameProvenance(fact: StoredFact, retrievedAt: string): Provenance {
     retrievedAt:fact.observedAt??(fact.fallback?bundledFrames.generatedAt:retrievedAt),
     currency: 'USD',
     tag: fact.tag,
-    confidence: fact.fallback ? 'low' : 'medium',
+    confidence: fact.fallback ? 'low' : fact.kind === 'companyfacts' ? 'high' : 'medium',
   };
 }
 
@@ -171,10 +287,16 @@ export function preliminarySnapshot(company: Company, facts: BulkFundamentals | 
   if (company.return52w != null) snapshot.provenance.return12m = quote
   if (company.low52w != null) snapshot.provenance.low52w = quote
   if (company.high52w != null) snapshot.provenance.high52w = quote
-  if (!facts) { snapshot.dataIssues?.push('لا توجد تغطية SEC Frames لهذه الشركة في الفترة الجماعية.'); snapshot.dataIssues?.push('وسيط السيولة لـ20 يومًا لا يُستنتج من متوسط 10 أيام؛ يحتاج تاريخًا فعليًا قبل PASS.'); return snapshot }
+  if (!facts) { snapshot.dataIssues?.push('لا توجد تغطية SEC Frames أو Company Facts لهذه الشركة في الفترة الجماعية.'); snapshot.dataIssues?.push('وسيط السيولة لـ20 يومًا لا يُستنتج من متوسط 10 أيام؛ يحتاج تاريخًا فعليًا قبل PASS.'); return snapshot }
+  if (facts.conflicts?.length) { snapshot.sourceConflicts = [...facts.conflicts]; snapshot.dataIssues?.push('يوجد تعارض موثق بين مصدرين أو قيمتين لنفس الفترة؛ لم يُخفَ التعارض.'); }
   snapshot.dataIssues?.push('وسيط السيولة لـ20 يومًا لا يُستنتج من متوسط 10 أيام؛ يحتاج تاريخًا فعليًا قبل PASS.');
 
-  facts=Object.fromEntries(Object.entries(facts).filter(([,fact])=>fact&&Number.isFinite(fact.val)&&usableEvidence(frameProvenance(fact,retrievedAt),retrievedAt))) as BulkFundamentals;
+  const cleanFacts: BulkFundamentals = { conflicts: facts.conflicts };
+  for (const key of ['revenue', 'netIncome', 'ocf', 'capex', 'shares', 'priorShares', 'cash', 'debtCurrent', 'debtNoncurrent'] as FundamentalKey[]) {
+    const fact = facts[key];
+    if (fact && Number.isFinite(fact.val) && usableEvidence(frameProvenance(fact, retrievedAt), retrievedAt)) cleanFacts[key] = fact;
+  }
+  facts = cleanFacts;
   for (const key of ['revenue', 'netIncome','cash'] as const) if (facts[key]) {
     snapshot[key] = facts[key]!.val;
     snapshot.provenance[key] = frameProvenance(facts[key]!, retrievedAt);

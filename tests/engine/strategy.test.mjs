@@ -3,7 +3,7 @@ import {SPECS,evaluateStrategy,specHash} from '../../.test-build/engine.mjs';
 import {fixtures} from '../../.test-build/fixtures.mjs';
 import {simulateExit,expiryDate,pointInTime,firmHoldout,firmBootstrap,bonferroni,splitAdjustedDilution,ma30Weeks,bounceHistoryMetrics} from '../../.test-build/research.mjs';
 import {trailingAnnual,insiderPurchases,latestInstant} from '../../.test-build/sec.mjs';
-import {preliminarySnapshot} from '../../.test-build/bulk.mjs';
+import {preliminarySnapshot,parseCompanyFacts,needsCompanyFacts,fetchCompanyFactsFallback} from '../../.test-build/bulk.mjs';
 import {yahooPercentAsRatio,parseYahooDaily} from '../../.test-build/providers.mjs';
 import {reviewShareSplits} from '../../.test-build/research.mjs';
 import {enrichFinancials} from '../../.test-build/financials.mjs';
@@ -96,6 +96,35 @@ test('bulk financials reject future balance sheets and mismatched cash-flow peri
  const c={ticker:'BAD',name:'Synthetic Corp',exchange:'NYSE',cik:1,marketCap:100,price:1};
  const s=preliminarySnapshot(c,{revenue:f(100,'2025-01-01','2025-12-31'),ocf:f(20,'2025-01-01','2025-12-31'),capex:f(3,'2025-10-01','2025-12-31'),cash:f(10,undefined,'2027-01-01'),debtCurrent:f(1,undefined,'2025-12-31'),debtNoncurrent:f(2,undefined,'2025-12-31')},'2026-09-01T00:00:00Z');
  assert.equal(s.fcf,undefined);assert.equal(s.cash,undefined);assert.equal(s.evSales,undefined);assert.equal(s.debt,3);
+});
+test('SEC Company Facts fallback recovers standard annual, balance-sheet and share facts without future leakage',()=>{
+ const asOf=new Date('2026-09-01T00:00:00Z'),annual=(tag,val)=>({start:'2025-01-01',end:'2025-12-31',val,filed:'2026-02-15',form:'10-K',tag}),instant=(tag,val,end='2026-06-30',filed='2026-08-01')=>({end,val,filed,form:'10-Q',tag}),
+ facts={
+  'us-gaap':{
+   Revenues:{units:{USD:[annual('Revenues',120)]}},NetIncomeLoss:{units:{USD:[annual('NetIncomeLoss',12)]}},
+   NetCashProvidedByUsedInOperatingActivities:{units:{USD:[annual('NetCashProvidedByUsedInOperatingActivities',20)]}},
+   PaymentsToAcquirePropertyPlantAndEquipment:{units:{USD:[annual('PaymentsToAcquirePropertyPlantAndEquipment',4)]}},
+   CashAndCashEquivalentsAtCarryingValue:{units:{USD:[instant('CashAndCashEquivalentsAtCarryingValue',30)]}},
+   LongTermDebtCurrent:{units:{USD:[instant('LongTermDebtCurrent',2)]}},LongTermDebtNoncurrent:{units:{USD:[instant('LongTermDebtNoncurrent',8)]}},
+  },
+  dei:{EntityCommonStockSharesOutstanding:{units:{shares:[instant('EntityCommonStockSharesOutstanding',110),instant('EntityCommonStockSharesOutstanding',100,'2025-06-30','2025-08-01')]}}}
+ }, parsed=parseCompanyFacts(123,{facts},asOf);
+ assert(parsed);assert.equal(parsed.revenue.val,120);assert.equal(parsed.netIncome.val,12);assert.equal(parsed.cash.val,30);assert.equal(parsed.debtCurrent.val,2);assert.equal(parsed.debtNoncurrent.val,8);assert.equal(parsed.shares.val,110);assert.equal(parsed.priorShares.val,100);assert.equal(parsed.revenue.kind,'companyfacts');assert.equal(needsCompanyFacts(parsed),false);
+ const future={facts:{'us-gaap':{Revenues:{units:{USD:[annual('Revenues',999),{...annual('Revenues',1000),end:'2027-12-31',filed:'2026-08-01'}]}}}}};assert.equal(parseCompanyFacts(123,future,asOf).revenue.val,999);
+});
+test('Company Facts custom-only payload remains unavailable instead of being guessed',()=>{
+ const parsed=parseCompanyFacts(124,{facts:{'custom-taxonomy':{MyRevenue:{units:{USD:[{start:'2025-01-01',end:'2025-12-31',val:100,filed:'2026-02-01',form:'10-K'}]}}}}},new Date('2026-09-01T00:00:00Z'));
+ assert.equal(parsed,undefined);assert.equal(needsCompanyFacts(undefined),true);
+});
+test('Company Facts provenance is visible in the preliminary snapshot',()=>{
+ const fact=(key,val,tag,start='2025-01-01',end='2025-12-31')=>({cik:77,key,val,tag,start,end,filed:'2026-02-01',form:'10-K',priority:0,url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0000000077.json',kind:'companyfacts'});
+ const s=preliminarySnapshot({cik:77,ticker:'FACT',name:'Facts Corp',exchange:'Nasdaq',price:10,marketCap:100e6},{revenue:fact('revenue',50e6,'Revenues'),netIncome:fact('netIncome',2e6,'NetIncomeLoss'),ocf:fact('ocf',6e6,'NetCashProvidedByUsedInOperatingActivities'),capex:fact('capex',1e6,'PaymentsToAcquirePropertyPlantAndEquipment')},'2026-03-01T00:00:00Z');
+ assert.match(s.provenance.revenue.source,/Company Facts/);assert.equal(s.fcf,5e6);
+});
+test('Company Facts fallback retries a transient provider error and returns a dated fact',async()=>{
+ const original=globalThis.fetch;let calls=0;const asOf=new Date('2026-09-01T00:00:00Z');
+ globalThis.fetch=async()=>{calls++;if(calls===1)return new Response('',{status:503});return Response.json({facts:{'us-gaap':{Revenues:{units:{USD:[{start:'2025-01-01',end:'2025-12-31',val:120,filed:'2026-02-15',form:'10-K'}]}}}}});};
+ try{const result=await fetchCompanyFactsFallback([9876543],asOf);assert.equal(result.requests,1);assert.equal(result.success,1);assert.equal(result.failed,0);assert(calls>=2);assert.equal(result.fundamentals.get(9876543).revenue.val,120);assert.equal(result.fundamentals.get(9876543).revenue.kind,'companyfacts');}finally{globalThis.fetch=original;}
 });
 test('deep financial enrichment derives cash debt EV/S without treating missing debt as zero',()=>{
  const row=val=>({val,end:'2026-06-30',filed:'2026-08-01',form:'10-Q'});

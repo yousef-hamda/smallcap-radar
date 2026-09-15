@@ -20,12 +20,13 @@ export function scanProgress(run: ScanRun | null | undefined) {
  if (run.source.includes('quick')) { percent = run.stage===0?0:run.stage===1?5+fraction*15:20+fraction*79; phase = 'فحص العينة — ليس السوق الكامل'; }
  else if (run.stage >= 10) { percent = 60 + fraction * 39.99; phase = 'التحقق من التاريخ والسيولة للمرشحين'; }
  else if (run.stage >= 9) { percent = 35 + fraction * 25; phase = 'تقييم الشركات وحفظ النتائج الأولية'; }
+ else if (run.stage === 5) { percent = 30 + fraction * 5; phase = 'استعادة SEC Company Facts للبيانات الناقصة'; }
  else if (run.stage >= 4) {
   // Stage 4 advances through 16 frame datasets in four-request batches. The
-  // database `total` still represents candidate companies, so using it here
-  // made the bar appear frozen around 35% while the frame cursor advanced.
+  // database `total` still represents candidate companies, so use the frame
+  // cursor rather than pretending the company cursor is moving here.
   const frameCursor = Math.min(SEC_FRAME_DATASET_COUNT, Math.max(0, run.offset));
-  percent = 20 + 15 * (frameCursor / SEC_FRAME_DATASET_COUNT);
+  percent = 20 + 10 * (frameCursor / SEC_FRAME_DATASET_COUNT);
   phase = 'جلب الأساسيات الجماعية SEC Frames';
  }
  else if(run.stage>=1){percent=5+fraction*15;phase='تحديث أسعار السوق على دفعات محفوظة';}

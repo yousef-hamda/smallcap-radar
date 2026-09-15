@@ -27,9 +27,10 @@ sqlite.exec(await fs.readFile('drizzle/0004_nervous_gressill.sql','utf8'));
 sqlite.exec(await fs.readFile('drizzle/0005_freezing_warlock.sql','utf8'));
 const base=fixtures[0];
 const run=(patch={})=>({id:'test',status:'running',source:'Bulk Quotes/SEC Frames v7 · full',stage:0,offset:0,total:100,processed:0,failed:0,retryPending:0,...patch});
-test('progress is monotonic at all full-scan phase transitions',()=>{
- const sequence=[run(),run({stage:4}),run({stage:9}),run({stage:9,offset:100}),run({stage:10}),run({stage:10,offset:99}),run({stage:10,offset:100}),run({stage:13,offset:100,status:'complete'})].map(s=>scanProgress(s).percent);
+test('progress is monotonic and moves during Company Facts recovery',()=>{
+ const sequence=[run(),run({stage:4}),run({stage:4,offset:16}),run({stage:5}),run({stage:5,offset:50}),run({stage:9}),run({stage:9,offset:100}),run({stage:10}),run({stage:10,offset:99}),run({stage:10,offset:100}),run({stage:13,offset:100,status:'complete'})].map(s=>scanProgress(s).percent);
  assert(sequence.every((n,i)=>i===0||n>=sequence[i-1]));assert.equal(sequence.at(-1),100);assert(sequence.slice(0,-1).every(n=>n<100));
+ assert(scanProgress(run({stage:5,offset:1,total:100})).percent>scanProgress(run({stage:5,total:100})).percent);
 });
 test('failed, empty and active retry runs never claim 100%',()=>{
  for(const r of [null,run({stage:10,offset:100,status:'failed'}),run({stage:13,offset:100,retryPending:1}),run({stage:4,total:0})])assert(scanProgress(r).percent<100);
@@ -53,6 +54,15 @@ test('stage9 persists rows and hands every in-range category row to history scor
  const now=new Date().toISOString();setHistoryResult({history:[{date:now.slice(0,10),open:10,high:10,low:10,close:10,volume:1000}],splits:[],source:'TEST_ONLY',url:'https://example.test',availableAt:now,retrievedAt:now});
  try { const final=await processScanBatch('scan-test');assert.equal(final.done,true);assert.equal(final.run.stage,13);assert.equal(final.run.processed,1);assert.equal(final.run.status,'complete'); }
  finally { setHistoryResult(null); }
+});
+test('Company Facts recovery stage advances when the durable Frames row is already complete',async()=>{
+ const company={ticker:'FACTS-STAGE',name:'Synthetic facts stage',cik:654321,exchange:'Nasdaq',marketCap:100e6,price:10};
+ await db().prepare('INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,strategy_hash) VALUES(?,?,?,?,?,?,?,?,?)').bind('facts-stage','2026-09-11T00:00:00Z','2026-09-11T00:00:00Z','running','Bulk Quotes/SEC Frames + Company Facts v10 · full',1,'paged-v1',5,currentHash()).run();
+ await db().prepare('INSERT INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind('universe:facts-stage:candidates:0','test','2026-09-11T00:00:00Z',JSON.stringify([company])).run();
+ const fact=(key)=>({cik:company.cik,start:key==='revenue'?'2025-01-01':undefined,end:'2025-12-31',val:key==='revenue'?100:1,filed:'2026-02-01',form:'10-K',tag:key,priority:0,url:'https://data.sec.gov/test'});
+ const instant=(key)=>({...fact(key),start:undefined,end:'2026-06-30'});
+ await db().prepare('INSERT INTO bulk_fundamentals(run_id,cik,payload) VALUES(?,?,?)').bind('facts-stage',company.cik,JSON.stringify({revenue:fact('revenue'),netIncome:fact('netIncome'),ocf:fact('ocf'),capex:fact('capex'),shares:instant('shares'),priorShares:{...instant('priorShares'),end:'2025-06-30'},cash:instant('cash'),debtCurrent:instant('debtCurrent'),debtNoncurrent:instant('debtNoncurrent')})).run();
+ const result=await processScanBatch('facts-stage');assert.equal(result.run.stage,9);assert.equal(result.run.offset,0);assert.equal(result.run.sec_requests,0);
 });
 test('completed result with legacy processed=0 remains selectable; partial never replaces it',async()=>{
  await db().prepare("UPDATE strategy_runs SET processed=0 WHERE id='scan-test'").run();assert.equal((await readState()).dataRunId,'scan-test');
