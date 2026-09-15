@@ -18,7 +18,11 @@ const OTHER_LISTED='https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt'
 const SEC_TICKERS='https://www.sec.gov/files/company_tickers.json';
 export const quickSymbols = Object.keys(quickCache.symbols);
 const browserAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124 Safari/537.36';
-const secAgent = 'SmallCapRadar/2.1 research-contact:yousef-hamda@users.noreply.github.com';
+// SEC asks clients to identify themselves with a descriptive product name and
+// a reachable contact.  The parenthesized form is accepted by SEC's edge from
+// both local and Cloudflare Worker egress; the old colon-only form was answered
+// with HTTP 403 by data.sec.gov in production.
+const secAgent = 'SmallCapRadar/2.1 (contact: yousef-hamda@users.noreply.github.com)';
 const submissionsUrlFor = (cik: number|string) => `https://data.sec.gov/submissions/CIK${String(cik).padStart(10, '0')}.json`;
 export const numeric = (value: unknown) => { if(typeof value!=='number'&&typeof value!=='string')return null;const text=String(value).replace(/[$,%+,]/g,'').trim();if(!text)return null;const parsed=Number(text);return Number.isFinite(parsed)?parsed:null; };
 export const yahooPercentAsRatio = (value: unknown) => Number.isFinite(value) ? Number(value) / 100 : undefined;

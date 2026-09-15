@@ -31,6 +31,7 @@ interface ExecutionContext {
 
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
 const delay = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+const BATON_START_DELAY = 750;
 
 async function sendCompletionPush(env: Env, run: any) {
   await ensureSchema();
@@ -212,7 +213,14 @@ const worker = {
       if (!batonSecret || request.headers.get("X-Radar-Background") !== batonSecret) return json({ error: "غير مصرح" }, 401);
       const input = await request.json() as any;
       if (typeof input.runId !== "string") return json({ error: "معرّف غير صالح" }, 400);
-      ctx.waitUntil(runBackgroundBatch(request, input.runId, env));
+      // Let the accepted response leave the parent self-request before the
+      // next D1 operation starts. Without this small hand-off delay, Sites'
+      // Worker dispatcher can keep the baton requests nested and D1 rejects
+      // the chain with "Subrequest depth limit exceeded".
+      ctx.waitUntil((async () => {
+        await delay(BATON_START_DELAY);
+        await runBackgroundBatch(request, input.runId, env);
+      })());
       return json({ accepted: true }, 202);
     }
 
