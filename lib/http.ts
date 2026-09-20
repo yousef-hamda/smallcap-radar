@@ -7,6 +7,11 @@ const SECURITY_HEADERS:Record<string,string>={
 
 export function httpError(status:number,message:string){return Object.assign(new Error(message),{status});}
 export function statusOf(error:unknown,fallback=500){const status=Number((error as {status?:unknown}|null)?.status);return Number.isInteger(status)&&status>=400&&status<=599?status:fallback;}
+export function sameSecret(actual:string|null,expected:string){
+ if(actual==null||actual.length!==expected.length)return false;
+ let difference=0;for(let index=0;index<expected.length;index++)difference|=actual.charCodeAt(index)^expected.charCodeAt(index);
+ return difference===0;
+}
 export function sameOrigin(request:Request){
  const origin=request.headers.get('origin');
  if(!origin||origin!==new URL(request.url).origin)throw httpError(403,'طلب غير موثوق');

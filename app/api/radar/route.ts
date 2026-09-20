@@ -1,7 +1,11 @@
 import {readState,db,createRun,insertSnapshot,ensureSchema,currentHash} from '@/lib/storage';
-import {sameOrigin,json,body,statusOf} from '@/lib/http';
+import {sameOrigin,sameSecret,json,body,statusOf} from '@/lib/http';
 import {importSchema} from '@/lib/validation';
 import {visitor} from '@/lib/visitor';
+import {env} from 'cloudflare:workers';
+
+const tokenPattern=/^[a-f0-9]{48}$/;
+async function tokenHash(token:string){const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(token));return [...new Uint8Array(bytes)].map(value=>value.toString(16).padStart(2,'0')).join('');}
 
 export async function GET(req:Request){
  try {
@@ -45,6 +49,23 @@ export async function POST(req:Request){
     for(const snapshot of parsed.data)await insertSnapshot(id,snapshot as any).run();
     await db().prepare("UPDATE strategy_runs SET status='complete',processed=total,offset=total,stage=13,updated_at=? WHERE id=?").bind(new Date().toISOString(),id).run();return json({runId:id});
    }catch(e){await db().prepare("UPDATE strategy_runs SET status='failed',error=?,updated_at=? WHERE id=?").bind(String(e).slice(0,500),new Date().toISOString(),id).run();throw Error('تعذّر حفظ الاستيراد؛ لم تتغير النتائج السابقة')}
+  }
+  if(b.action==='restore'){
+   const secret=String((env as any).RECOVERY_SECRET||'');
+   if(!secret||!sameSecret(req.headers.get('x-radar-recovery'),secret))return json({error:'غير مصرح'},401);
+   const parsed=importSchema.safeParse(b.records);
+   if(!parsed.success)return json({error:'دفعة الاستعادة غير صالحة: '+parsed.error.issues.slice(0,3).map(i=>i.path.join('.')+': '+i.message).join('؛ ')},400);
+   let id=typeof b.runId==='string'&&/^[0-9a-f-]{36}$/i.test(b.runId)?b.runId:'';
+   if(id){const run=await db().prepare("SELECT id FROM strategy_runs WHERE id=? AND source='recovered backup' AND status='running'").bind(id).first();if(!run)return json({error:'جلسة الاستعادة غير صالحة'},409);}
+   else id=await createRun('recovered backup',0,[],'running');
+   for(const snapshot of parsed.data)await insertSnapshot(id,snapshot as any).run();
+   const count=Number((await db().prepare('SELECT COUNT(*) AS count FROM fundamental_snapshots WHERE run_id=?').bind(id).first() as any)?.count||0),final=b.final===true;
+   if(final){
+    const symbols=Array.isArray(b.favoriteSymbols)?[...new Set(b.favoriteSymbols.filter((value:unknown)=>typeof value==='string'&&/^[A-Z0-9.^-]{1,16}$/.test(value)))].slice(0,100):[];
+    if(typeof b.claimToken==='string'&&tokenPattern.test(b.claimToken)&&symbols.length)await db().prepare('INSERT OR REPLACE INTO recovery_bundles(id,token_hash,payload,created_at) VALUES(?,?,?,?)').bind(crypto.randomUUID(),await tokenHash(b.claimToken),JSON.stringify({favorites:symbols}),new Date().toISOString()).run();
+   }
+   await db().prepare('UPDATE strategy_runs SET total=?,processed=?,offset=?,stage=?,status=?,updated_at=? WHERE id=?').bind(count,count,count,final?13:0,final?'complete':'running',new Date().toISOString(),id).run();
+   return json({runId:id,recovered:count,complete:final});
   }
   return json({error:'عملية غير معروفة'},400);
  }catch(e:any){return json({error:e.message||'تعذّر تنفيذ الطلب'},statusOf(e,500))}

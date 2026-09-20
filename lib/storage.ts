@@ -19,6 +19,7 @@ export async function ensureSchema(){
   d.prepare("CREATE TABLE IF NOT EXISTS push_subscriptions (endpoint TEXT PRIMARY KEY NOT NULL, owner TEXT NOT NULL DEFAULT '', subscription TEXT NOT NULL, created_at TEXT NOT NULL, last_success_at TEXT, failure_count INTEGER NOT NULL DEFAULT 0)"),
   d.prepare("CREATE TABLE IF NOT EXISTS portfolio_transactions (id TEXT PRIMARY KEY NOT NULL, owner TEXT NOT NULL, symbol TEXT NOT NULL, company_name TEXT NOT NULL, side TEXT NOT NULL, quantity REAL NOT NULL, price REAL NOT NULL, fees REAL NOT NULL DEFAULT 0, trade_date TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', metadata TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"),
   d.prepare("CREATE TABLE IF NOT EXISTS portfolio_revisions (owner TEXT PRIMARY KEY NOT NULL, revision INTEGER NOT NULL DEFAULT 0)"),
+  d.prepare("CREATE TABLE IF NOT EXISTS recovery_bundles (id TEXT PRIMARY KEY NOT NULL, token_hash TEXT UNIQUE NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL, claimed_at TEXT, claimed_by TEXT)"),
   d.prepare("CREATE INDEX IF NOT EXISTS idx_portfolio_owner_date ON portfolio_transactions(owner,trade_date,id)"),
   d.prepare("CREATE INDEX IF NOT EXISTS idx_portfolio_owner_symbol_date ON portfolio_transactions(owner,symbol,trade_date,id)")
   ,d.prepare("CREATE TABLE IF NOT EXISTS bulk_fundamentals (run_id TEXT NOT NULL, cik INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(run_id,cik))")

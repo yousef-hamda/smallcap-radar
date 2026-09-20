@@ -12,6 +12,7 @@ import {fixtures} from '../../.test-build/fixtures.mjs';
 import {ensureSchema,db,currentHash,readState,insertSnapshot} from '../../.test-build/storage.mjs';
 import {processScanBatch,startScan,bounceHistoryCandidate,historyCandidate} from '../../.test-build/scanner.mjs';
 import {GET,POST} from '../../.test-build/radar-api.mjs';
+import {GET as recoverGET} from '../../.test-build/recover-api.mjs';
 import {GET as reportGET} from '../../.test-build/scan-report-api.mjs';
 import {GET as chartGET} from '../../.test-build/chart-api.mjs';
 import worker from '../../.test-build/worker.mjs';
@@ -28,6 +29,14 @@ import webpush from 'web-push';
 await ensureSchema();
 const base=fixtures[0];
 const run=(patch={})=>({id:'test',status:'running',source:'Bulk Quotes/SEC Frames v7 · full',stage:0,offset:0,total:100,processed:0,failed:0,retryPending:0,...patch});
+test('protected recovery restores one durable run and a one-time favorite claim',async()=>{
+ const claimToken='a'.repeat(48),origin='https://example.test';
+ const unauthorized=await POST(new Request(`${origin}/api/radar`,{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({action:'restore',records:[base],final:true})}));assert.equal(unauthorized.status,401);
+ const restored=await POST(new Request(`${origin}/api/radar`,{method:'POST',headers:{origin,'content-type':'application/json','x-radar-recovery':'TEST-ONLY-RECOVERY-SECRET'},body:JSON.stringify({action:'restore',records:[base],final:true,claimToken,favoriteSymbols:[base.symbol]})}));assert.equal(restored.status,200);assert.equal((await restored.json()).recovered,1);
+ const claimed=await recoverGET(new Request(`${origin}/api/recover?token=${claimToken}`));assert.equal(claimed.status,302);assert.match(claimed.headers.get('set-cookie')||'',/radar-visitor=/);
+ assert.equal(sqlite.prepare('SELECT COUNT(*) AS count FROM personal_watchlist').get().count,1);
+ assert.equal((await recoverGET(new Request(`${origin}/api/recover?token=${claimToken}`))).status,410);
+});
 test('JSON body parsing enforces the byte limit even without Content-Length',async()=>{
  const stream=new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode('{"value":"'));controller.enqueue(new Uint8Array(32).fill(97));controller.enqueue(new TextEncoder().encode('"}'));controller.close();}});
  const request=new Request('https://example.test/api',{method:'POST',body:stream,duplex:'half'});

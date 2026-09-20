@@ -32,3 +32,11 @@ export const portfolioRevisions=sqliteTable('portfolio_revisions',{
  owner:text('owner').primaryKey(),
  revision:integer('revision').notNull().default(0),
 });
+export const recoveryBundles=sqliteTable('recovery_bundles',{
+ id:text('id').primaryKey(),
+ tokenHash:text('token_hash').notNull().unique(),
+ payload:text('payload').notNull(),
+ createdAt:text('created_at').notNull(),
+ claimedAt:text('claimed_at'),
+ claimedBy:text('claimed_by'),
+});

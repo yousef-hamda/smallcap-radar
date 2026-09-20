@@ -68,6 +68,12 @@ export default defineConfig(async () => {
       cloudflare({
         viteEnvironment: { name: "rsc", childEnvironments: ["ssr"] },
         inspectorPort: false,
+        // Railway mounts durable storage only at runtime. Keep Miniflare's D1
+        // state inside that volume so scans, favorites and portfolios survive
+        // every deploy; local development keeps the normal project path.
+        persistState: { path: process.env.RAILWAY_VOLUME_MOUNT_PATH
+          ? `${process.env.RAILWAY_VOLUME_MOUNT_PATH}/state`
+          : ".wrangler/state" },
         config: localBindingConfig,
       }),
     ],

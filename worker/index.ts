@@ -5,7 +5,7 @@ import handler from "vinext/server/app-router-entry";
 import webpush from "web-push";
 import { processScanBatch, startScan } from "../lib/scanner";
 import { db, ensureSchema, log } from "../lib/storage";
-import { body, sameOrigin, secureResponse, statusOf } from "../lib/http";
+import { body, sameOrigin, sameSecret, secureResponse, statusOf } from "../lib/http";
 import { visitor } from "../lib/visitor";
 import { validPushSubscription } from "../lib/push-validation";
 
@@ -34,12 +34,6 @@ const delay = (milliseconds: number) => new Promise((resolve) => setTimeout(reso
 const BATON_START_DELAY = 750;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const pushConfigured=(env:Env)=>Boolean(env.VAPID_PUBLIC_KEY&&env.VAPID_PRIVATE_KEY);
-function sameSecret(actual:string|null,expected:string){
- if(actual==null||actual.length!==expected.length)return false;
- let difference=0;for(let index=0;index<expected.length;index++)difference|=actual.charCodeAt(index)^expected.charCodeAt(index);
- return difference===0;
-}
-
 async function sendCompletionPush(env: Env, run: any) {
   await ensureSchema();
   if (run.notification_sent_at) return true;

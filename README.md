@@ -22,7 +22,7 @@ Arabic RTL mobile-first PWA, published through Sites. It is a working research p
 - Conservative SEC annual + current YTD − prior YTD normalization, provenance, foreign-filer flag, unavailable-data handling. Some issuers require custom taxonomy support and remain incomplete.
 - PIT availability filter, deterministic firm holdout assignment, firm bootstrap, Bonferroni correction, conservative Bounce exit simulation and costs.
 - Web manifest and icons; device cache stores the last viewed snapshot; offline fallback reading is not implemented in the rebuilt UI. Installation and notification receipt still require final verification on the owner's physical phone; server-side VAPID request generation is covered by automated tests.
-- 63 engine/normalization tests, 44 runtime/API/provider tests and 19 build/UI/research tests currently pass. The release workflow also reruns TypeScript checking, ESLint, dependency audit and a verified production build before publication.
+- 63 engine/normalization tests, 45 runtime/API/provider tests and 19 build/UI/research tests currently pass. The release workflow also reruns TypeScript checking, ESLint, dependency audit and a verified production build before publication.
 
 ## Not complete / not validated
 
@@ -41,6 +41,8 @@ npm run build
 ```
 
 The bundled verified build and install scripts target Linux. Use the supplied Sites development tooling for its supported runtime. Standard npm dev uses Vite/Vinext, with a logical D1 binding declared in `.openai/hosting.json`.
+
+On Railway this app still runs the Cloudflare-compatible local D1 binding. Attach a Railway volume to the web service at `/app/.wrangler`; the Vite configuration explicitly stores Miniflare state inside that runtime volume. `DATABASE_URL` alone does not replace D1 and must not be treated as persistence for this build.
 
 Current implementation uses **Vinext/React instead of the plan's TanStack Start**, matching the available supported hosting starter. Strategy/data modules are framework-independent. This is a documented architectural deviation, not a claim of exact plan compliance.
 
