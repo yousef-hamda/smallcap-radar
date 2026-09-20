@@ -18,7 +18,10 @@ function coreFactors(s:Snapshot):Factor[]{
  const qualityBase=finite(s.netIncome)||finite(s.fcf)?((finite(s.netIncome)&&s.netIncome>0?0.5:0)+(finite(s.fcf)&&s.fcf>0?0.5:0)):null;
  const riskMultiplier=s.deathSpiral==='clean'?1:s.deathSpiral==='mild'?0.75:s.deathSpiral==='elevated'?0.4:s.deathSpiral==='severe'?0:null;
  const quality=qualityBase!=null&&riskMultiplier!=null?qualityBase*riskMultiplier:null;
- const dilution=finite(s.dilution)?clamp(1-(s.dilution/SPECS.bounce.dilutionMax)):null;
+ // A raw share-count change can be a split rather than issuance. Do not award
+ // discipline points until corporate actions covering the interval were
+ // actually reviewed.
+ const dilution=s.splitAdjusted===true&&finite(s.dilution)?clamp(1-(Math.max(0,s.dilution)/SPECS.bounce.dilutionMax)):null;
  const size=finite(s.marketCap)?clamp(1-(Math.log10(Math.max(s.marketCap,SPECS.core.marketCap.min))-Math.log10(SPECS.core.marketCap.min))/(Math.log10(SPECS.core.marketCap.max)-Math.log10(SPECS.core.marketCap.min))):null;
  const liquidity=finite(s.medianDollarVolume20d)&&s.medianDollarVolume20d>0?clamp(Math.log(s.medianDollarVolume20d/SPECS.core.liquidity)/Math.log(SPECS.core.score.liquidityCeiling/SPECS.core.liquidity)):null;
  const sizeCoverage=size!=null&&liquidity!=null?size*0.7+liquidity*0.3:null;
@@ -31,8 +34,8 @@ function coreFactors(s:Snapshot):Factor[]{
  return [
   make('valuation','التقييم',SPECS.core.weights['Valuation'],valuation,s.evSales??s.ps??null,revenueValid?(finite(s.evSales)?`EV/S ${s.evSales.toFixed(2)} ضمن حد 10`:'تقييم المبيعات مستخدم لعدم توفر EV/S'):'الإيرادات الفعلية غير متاحة؛ لا تُمنح نقاط التقييم'),
   make('quality','الجودة والربحية',SPECS.core.weights['Quality'],quality,s.netIncome??s.fcf??null,'Net Income أو FCF موجب بعد خصم مخاطر دوامة التمويل الموثقة'),
-  make('shareDiscipline','انضباط الأسهم',SPECS.core.weights['Share Discipline'],dilution,s.dilution,finite(s.dilution)?`التخفيف ${(s.dilution*100).toFixed(1)}%`:'التخفيف غير متاح'),
-  make('sizeCoverage','الحجم والسيولة والتغطية',SPECS.core.weights['Small Size + Low Coverage'],sizeCoverage,s.marketCap,`الحجم والسيولة يساهمان معًا؛ الوسيط الأعلى من ${SPECS.core.score.liquidityCeiling} لا يمنح نقاطًا إضافية`),
+  make('shareDiscipline','انضباط الأسهم',SPECS.core.weights['Share Discipline'],dilution,s.dilution,s.splitAdjusted===true&&finite(s.dilution)?`التخفيف المعدل للتجزئة ${(s.dilution*100).toFixed(1)}%`:'مراجعة التجزئة أو التخفيف غير متاحة'),
+  make('sizeCoverage','الحجم وقابلية التنفيذ',SPECS.core.weights['Small Size + Execution Liquidity'],sizeCoverage,s.marketCap,`الحجم ووسيط قيمة التداول يساهمان معًا؛ لا تُستخدم تغطية المحللين غير الموثقة، والوسيط الأعلى من ${SPECS.core.score.liquidityCeiling} لا يمنح نقاطًا إضافية`),
   make('growth','النمو',SPECS.core.weights['Growth'],growth,s.revenueGrowth,'نمو الإيرادات ضمن نطاق محافظ'),
   make('insider','الشراء الداخلي',SPECS.core.weights['Insider Buying'],insider,s.insiderBuyValue,'يحسب Form 4 P فقط عند توفره'),
   make('marginTrend','اتجاه الهوامش',SPECS.core.weights['Margin Trend'],margin,s.operatingMarginTrend,'تحسن هامش التشغيل'),
@@ -62,7 +65,7 @@ function bounceFactors(s:Snapshot):Factor[]{
  const collapse=finite(s.return12m)?clamp((SPECS.bounce.returnMax-s.return12m)/(SPECS.bounce.returnMax-r.collapseFloor)):null;
  const reversal=finite(s.price)&&s.price>0&&finite(s.ma30w)&&s.ma30w>0?clamp((s.price/s.ma30w-SPECS.bounce.maMultiplier)/(r.reversalCeiling-(SPECS.bounce.maMultiplier-1))):null;
  const liquidity=finite(s.medianDollarVolume20d)&&s.medianDollarVolume20d>0?clamp(Math.log(s.medianDollarVolume20d/SPECS.bounce.liquidity)/Math.log(r.liquidityCeiling/SPECS.bounce.liquidity)):null;
- const dilution=finite(s.dilution)?clamp(1-Math.max(0,s.dilution)/SPECS.bounce.dilutionMax):null;
+ const dilution=s.splitAdjusted===true&&finite(s.dilution)?clamp(1-Math.max(0,s.dilution)/SPECS.bounce.dilutionMax):null;
  const offLow=finite(s.price)&&s.price>0&&finite(s.low52w)&&s.low52w>0?clamp(1-Math.abs((s.price/s.low52w-1)-r.offLowAnchor)/r.offLowRange):null;
  const size=finite(s.marketCap)?clamp(1-(s.marketCap-SPECS.bounce.marketCap.min)/(SPECS.bounce.marketCap.max-SPECS.bounce.marketCap.min)):null;
  const make=(id:string,label:string,maxPoints:number,n:number|null,raw:number|null,explanation:string):Factor=>({id,label,maxPoints,points:n==null?0:n*maxPoints,available:n!=null,rawValue:raw,explanation});
@@ -86,14 +89,14 @@ export function evaluateStrategy(strategy:keyof typeof SPECS,s:Snapshot){
  numeric('cap','القيمة السوقية',s.marketCap,n=>n>=spec.marketCap.min&&n<=spec.marketCap.max,`${spec.marketCap.min} ≤ cap ≤ ${spec.marketCap.max}`);
  if(strategy==='core'||strategy==='legacy'){
  const sp=SPECS[strategy];numeric('liquidity','سيولة التداول',s.medianDollarVolume20d,n=>n>=sp.liquidity,`20d median ≥ ${sp.liquidity}`);
- numeric('revenue','وجود إيرادات فعلية',s.revenue,n=>n>0,'Revenue > 0 · عامل ترتيب وليس بوابة أهلية');
+ numeric('revenue','وجود إيرادات فعلية',s.revenue,n=>n>0,'Revenue > 0 · بوابة أهلية');
  if(strategy==='core')numeric('valuation','قيمة المنشأة / الإيرادات',s.evSales,n=>n<=SPECS.core.evSalesMax,'EV/S ≤ 10');else numeric('valuation','السعر / الإيرادات',s.ps,n=>n>=0&&n<=SPECS.legacy.psMax,'P/S ≤ 10');
  const positive=(finite(s.netIncome)&&s.netIncome>0)||(finite(s.fcf)&&s.fcf>0);
- add('profitability','ربحية أو تدفق نقدي موجب',positive?true:finite(s.netIncome)&&finite(s.fcf)?false:null,'NI > 0 OR FCF > 0 · عامل ترتيب وليس بوابة أهلية.');
+ add('profitability','ربحية أو تدفق نقدي موجب',positive?true:finite(s.netIncome)&&finite(s.fcf)?false:null,'NI > 0 OR FCF > 0 · بوابة أهلية.');
  if(strategy==='core')add('deathSpiral','مخاطر دوامة التمويل',s.deathSpiral==='severe'?false:s.deathSpiral&&s.deathSpiral!=='unknown'&&s.riskEvidence?true:null,'يتطلب مراجعة موثقة؛ حدود آلية غير معتمدة.');
  } else {
  numeric('liquidity','سيولة تداول قابلة للتنفيذ',s.medianDollarVolume20d,n=>n>=SPECS.bounce.liquidity,`20d median ≥ ${SPECS.bounce.liquidity} · حد تشغيلي قيد التحقق`);
- numeric('collapse','هبوط 12 شهرًا',s.return12m,n=>n<SPECS.bounce.returnMax,'Return < −35% · عامل موزون');
+ numeric('collapse','هبوط 12 شهرًا',s.return12m,n=>n<SPECS.bounce.returnMax,'Return < −35% · بوابة أهلية');
  add('low','ابتعاد 10% عن قاع السنة',finite(s.price)&&s.price>0&&finite(s.low52w)&&s.low52w>0?s.price>=s.low52w*(1+SPECS.bounce.lowDistanceMin):null,'Price ≥ 1.10 × low52w · عامل موزون');
  const sharesReviewed=s.splitAdjusted===true&&finite(s.shareCountRatio)&&s.shareCountRatio>SPECS.bounce.shareCountRatio.minExclusive&&s.shareCountRatio<SPECS.bounce.shareCountRatio.maxExclusive;
  add('dilution','تخفيف أقل من 25% بعد مراجعة التجزئة',sharesReviewed&&finite(s.dilution)?s.dilution<SPECS.bounce.dilutionMax:null,`Dilution < ${SPECS.bounce.dilutionMax*100}%; share ratio ${SPECS.bounce.shareCountRatio.minExclusive}–${SPECS.bounce.shareCountRatio.maxExclusive} · عامل موزون`);
@@ -107,10 +110,13 @@ export function evaluateStrategy(strategy:keyof typeof SPECS,s:Snapshot){
  add('criticalData','أدلة الأهلية الحرجة',criticalReady?true:null,'السعر والقيمة السوقية والسيولة تحتاج قيمًا موجبة ومصادر مؤرخة صالحة قبل إدخال السهم في الكون القابل للتصنيف.');
  const quote=s.provenance.price;add('freshness','حداثة بيانات السعر',usableEvidence(quote,s.asOf)&&Date.parse(s.asOf)-Date.parse(quote.availableAt)<=SPECS.core.freshnessDays*864e5?true:null,`السعر الأقدم من ${SPECS.core.freshnessDays} أيام يحتاج تحديثًا؛ حد تشغيلي محافظ غير مختبر.`);
  const financial=s.provenance.revenue;if(strategy!=='bounce')add('filingFreshness','حداثة الفترة المالية',usableEvidence(financial,s.asOf)&&Date.parse(s.asOf)-Date.parse(financial.periodEnd)<=SPECS.core.filingFreshnessDays*864e5?true:null,`الفترة الأقدم من ${SPECS.core.filingFreshnessDays} يومًا تحتاج مراجعة، بما فيها الإفصاحات الأجنبية.`);
- const conflictStatus=strategy==='bounce'
-   ? (s.sourceConflicts?.length?null:(required.every(k=>s.provenance[k])?true:null))
-   : (s.sourceConflicts?.length?null:s.confidence==='A'||s.confidence==='B'?true:s.confidence==='D'||s.confidence==='F'?null:null);
- add('conflict','تعارض المصادر',conflictStatus,s.sourceConflicts?.join('؛ ')||((strategy==='bounce'&&conflictStatus===true)?'لا يوجد تعارض في المقاييس التشغيلية الرسمية.':(s.confidence==='A'||s.confidence==='B')?'لا يوجد اختلاف جوهري بين مساري البيانات.':'التحقق من مصدرين لم يكتمل.'));
+ // Conflict means an observed disagreement, not the absence of two unrelated
+ // vendors. Each required metric is already guarded by dated provenance; a
+ // blanket confidence grade must not make every otherwise evidenced Core row
+ // UNKNOWN (bulk snapshots intentionally start at grade C).
+ const requiredEvidenceComplete=required.every(k=>usableEvidence(s.provenance[k],s.asOf));
+ const conflictStatus=s.sourceConflicts?.length?null:requiredEvidenceComplete?true:null;
+ add('conflict','تعارض المصادر',conflictStatus,s.sourceConflicts?.join('؛ ')||(conflictStatus===true?'لا يوجد تعارض موثق بين المقاييس المطلوبة.':'أدلة المقاييس المطلوبة غير مكتملة؛ لا يمكن نفي التعارض.'));
  const evidenceRequirements:Record<string,string[]>={cap:['marketCap'],liquidity:['medianDollarVolume20d'],revenue:['revenue'],valuation:[strategy==='legacy'?'ps':'evSales'],collapse:['return12m'],low:['price','low52w'],dilution:['dilution','shareCountRatio'],reversal:['price','ma30w']};
  const profitKeys=finite(s.netIncome)&&s.netIncome>0?['netIncome']:finite(s.fcf)&&s.fcf>0?['fcf']:['netIncome','fcf'];
  evidenceRequirements.profitability=profitKeys;
@@ -118,14 +124,16 @@ export function evaluateStrategy(strategy:keyof typeof SPECS,s:Snapshot){
   const keys=evidenceRequirements[check.id];
   if(keys&&check.status!=='UNKNOWN'&&!keys.every(key=>usableEvidence(s.provenance[key],s.asOf))){check.status='UNKNOWN';check.explanation+=` · الدليل الزمني غير مكتمل: ${keys.filter(key=>!usableEvidence(s.provenance[key],s.asOf)).join(', ')}`;}
  }
- // Only data-integrity and marketability safety are hard gates. Strategy
- // conditions are weighted factors and may lower a row without deleting it.
- // UNKNOWN never becomes PASS; it lowers factor coverage and confidence.
+ // Every documented strategy condition is a hard category gate. The score is
+ // still useful for ordering qualified rows, but can never rescue FAIL/UNKNOWN.
  const hardGateIds='eligibilityGateIds' in spec?[...spec.eligibilityGateIds]:['security','cap','liquidity'];
  const hardGates=checks.filter(c=>hardGateIds.includes(c.id));
  const gateStatus:Status=hardGates.some(c=>c.status==='FAIL')?'FAIL':hardGates.some(c=>c.status==='UNKNOWN')?'UNKNOWN':'PASS';
  const status:Status=hardGates.some(c=>c.status==='FAIL')?'FAIL':hardGates.some(c=>c.status==='UNKNOWN')?'UNKNOWN':'PASS';
- const factorChecks=checks.filter(c=>c.role==='factor');
+ // Thesis checks are both eligibility gates and diagnostic factor checks. The
+ // role shown to users is eligibility, while factorStatus summarizes the same
+ // economic/price thesis independently from market/data safety checks.
+ const factorChecks=checks.filter(c=>factorIds.has(c.id));
  const factorStatus:Status=factorChecks.some(c=>c.status==='FAIL')?'FAIL':factorChecks.some(c=>c.status==='UNKNOWN')?'UNKNOWN':'PASS';
  const measurableStatus:Status=factorStatus;
  const researchComplete=['financials','valuation','analysts','sector'].every(k=>s.research?.[k as keyof NonNullable<Snapshot['research']>]===true);
@@ -133,12 +141,15 @@ export function evaluateStrategy(strategy:keyof typeof SPECS,s:Snapshot){
  for(const key of ['evSales','ps','netIncome','fcf','dilution','marketCap','medianDollarVolume20d','revenueGrowth','insiderBuyValue','operatingMarginTrend','return12m','low52w','ma30w','cash','debt'] as const)if(!usableEvidence(s.provenance[key],s.asOf))scoreInput[key]=null;
  const factors=strategy==='core'?coreFactors(scoreInput):strategy==='legacy'?legacyFactors(scoreInput):bounceFactors(scoreInput);
  const qualityFactor=factors.find(f=>f.id==='quality'||f.id==='profitability');
- if(qualityFactor)qualityFactor.availableWeight=qualityFactor.maxPoints*([scoreInput.netIncome,scoreInput.fcf].filter(finite).length/2);
+ // Do not report quality coverage when the financing-risk review that gates
+ // the quality multiplier is missing. The old behavior counted the full
+ // weight as covered while silently assigning zero points.
+ if(qualityFactor)qualityFactor.availableWeight=qualityFactor.available?qualityFactor.maxPoints*([scoreInput.netIncome,scoreInput.fcf].filter(finite).length/2):0;
  // Bounce has no validated predictive probability in the supplied spec.
  // Keep the legacy field name for API compatibility, but make its meaning
  // explicit: it is the percentage of evidenced Bounce factors that pass,
  // never an eligibility gate and never a probability.
- const bounceGateChecks=strategy==='bounce'?checks.filter(c=>c.role==='factor'):[];
+ const bounceGateChecks=strategy==='bounce'?checks.filter(c=>['cap','liquidity','collapse','low','dilution','reversal'].includes(c.id)):[];
  const gateScore=strategy==='bounce'?Math.round(100*bounceGateChecks.filter(c=>c.status==='PASS').length/Math.max(1,bounceGateChecks.length)*10)/10:null;
  const rawScore=Math.round(factors.reduce((total,f)=>total+f.points,0)*10)/10;
  const scoreCoverage=Math.round(factors.filter(f=>f.available).reduce((t,f)=>t+(f.availableWeight??f.maxPoints),0)*10)/10;
@@ -147,12 +158,10 @@ export function evaluateStrategy(strategy:keyof typeof SPECS,s:Snapshot){
  // evidence completeness. Missing inputs are not asserted to be bad values;
  // they simply cannot contribute points, so an UNKNOWN row cannot reach 100
  // from one unusually strong metric. scoreCoverage remains visible separately;
- // qualification is governed only by the hard safety gates while factorStatus
- // remains visible to the user.
+ // qualification is governed by the full documented category gate set.
  const evidenceScore=scoreCoverage>0?Math.round(rawScore/scoreCoverage*1000)/10:null;
  const score=scoreCoverage>0&&totalFactorPoints>0?Math.round(rawScore/totalFactorPoints*1000)/10:null;
- // A row enters the category ranking when safety gates are valid. A failed or
- // unknown strategy factor changes the score/coverage but never becomes PASS.
+ // A row enters the category ranking only when every category gate passes.
  const screeningQualified=status==='PASS';
  const ratingConfidence=scoreCoverage>=85&&status==='PASS'?'high':scoreCoverage>=60&&status!=='FAIL'?'medium':'low';
  const model='model' in spec?spec.model:null;

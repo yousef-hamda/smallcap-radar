@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { db, ensureSchema } from '@/lib/storage';
-import { json, sameOrigin } from '@/lib/http';
+import { body as readBody, json, sameOrigin, statusOf } from '@/lib/http';
 import { visitor } from '@/lib/visitor';
 import { searchCompanies } from '@/lib/providers';
 import { canonicalPortfolioAsset, readPortfolio, readPortfolioTransactions } from '@/lib/portfolio-storage';
@@ -17,11 +17,24 @@ const inputSchema = z.object({
   note: z.string().trim().max(500).default(''),
 }).strict();
 
-const parseBody = async (request: Request) => {
-  const length = Number(request.headers.get('content-length') || 0);
-  if (length > 20_000) throw Object.assign(Error('الطلب أكبر من الحد المسموح.'), { status: 413 });
-  try { return await request.json(); } catch { throw Object.assign(Error('بيانات العملية ليست JSON صالحًا.'), { status: 400 }); }
-};
+const MAX_TRANSACTIONS = 5_000;
+
+async function portfolioRevision(owner: string) {
+  await db().prepare('INSERT OR IGNORE INTO portfolio_revisions(owner,revision) VALUES(?,0)').bind(owner).run();
+  return Number((await db().prepare('SELECT revision FROM portfolio_revisions WHERE owner=?').bind(owner).first() as any)?.revision ?? 0);
+}
+
+const changes=(result:any)=>Number(result?.meta?.changes||0);
+async function commitAtRevision(owner:string,revision:number,mutation:any){
+  // D1 batches are transactional. The mutation is guarded by the revision it
+  // was validated against, preventing two concurrent sells from both passing
+  // the balance check and creating a negative position.
+  const [changed,bumped]=await db().batch([
+    mutation,
+    db().prepare('UPDATE portfolio_revisions SET revision=revision+1 WHERE owner=? AND revision=?').bind(owner,revision),
+  ]);
+  return changes(changed)===1&&changes(bumped)===1;
+}
 
 function assertDate(date: string) {
   const parsed = Date.parse(`${date}T12:00:00Z`);
@@ -51,28 +64,31 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     sameOrigin(request); await ensureSchema();
-    const parsed = inputSchema.safeParse(await parseBody(request));
+    const parsed = inputSchema.safeParse(await readBody(request,20_000));
     if (!parsed.success) return json({ error: 'تحقق من الرمز، نوع العملية، العدد، السعر والتاريخ.' }, 400);
     assertDate(parsed.data.tradeDate);
-    const identity = visitor(request), asset = await canonicalPortfolioAsset(parsed.data.symbol);
+    const identity = visitor(request), revision=await portfolioRevision(identity.owner), current=await readPortfolioTransactions(identity.owner);
+    if(current.length>=MAX_TRANSACTIONS)return json({error:`بلغت المحفظة حد ${MAX_TRANSACTIONS.toLocaleString('en-US')} عملية.`},422);
+    const asset = await canonicalPortfolioAsset(parsed.data.symbol);
     if (!asset) return json({ error: 'الشركة غير موجودة في دليل الأسهم الأمريكية.' }, 404);
     const now = new Date().toISOString(), id = crypto.randomUUID();
     const candidate: PortfolioTransaction = { id, symbol: asset.symbol, companyName: asset.name, side: parsed.data.side as PortfolioSide, quantity: parsed.data.quantity, price: parsed.data.price, fees: parsed.data.fees, tradeDate: parsed.data.tradeDate, note: parsed.data.note, metadata: asset.metadata, createdAt: now, updatedAt: now };
-    try { validateLedger([...(await readPortfolioTransactions(identity.owner)), candidate]); }
+    try { validateLedger([...current, candidate]); }
     catch (error) { return json({ error: error instanceof Error ? error.message : 'عملية البيع تتجاوز الرصيد.' }, 409); }
-    await db().prepare('INSERT INTO portfolio_transactions(id,owner,symbol,company_name,side,quantity,price,fees,trade_date,note,metadata,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)')
-      .bind(id, identity.owner, asset.symbol, asset.name, parsed.data.side, parsed.data.quantity, parsed.data.price, parsed.data.fees, parsed.data.tradeDate, parsed.data.note, JSON.stringify(asset.metadata), now, now).run();
+    const saved=await commitAtRevision(identity.owner,revision,db().prepare('INSERT INTO portfolio_transactions(id,owner,symbol,company_name,side,quantity,price,fees,trade_date,note,metadata,created_at,updated_at) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM portfolio_revisions WHERE owner=? AND revision=?)')
+      .bind(id, identity.owner, asset.symbol, asset.name, parsed.data.side, parsed.data.quantity, parsed.data.price, parsed.data.fees, parsed.data.tradeDate, parsed.data.note, JSON.stringify(asset.metadata), now, now,identity.owner,revision));
+    if(!saved)return json({error:'تغيّرت المحفظة أثناء الحفظ؛ أعد المحاولة.'},409);
     return await respond(request, identity);
-  } catch (error: any) { return json({ error: error.message || 'تعذّر حفظ العملية.' }, error.status || 503); }
+  } catch (error: any) { return json({ error: error.message || 'تعذّر حفظ العملية.' }, statusOf(error,503)); }
 }
 
 export async function PUT(request: Request) {
   try {
     sameOrigin(request); await ensureSchema();
-    const parsed = inputSchema.required({ id: true }).safeParse(await parseBody(request));
+    const parsed = inputSchema.required({ id: true }).safeParse(await readBody(request,20_000));
     if (!parsed.success) return json({ error: 'بيانات تعديل العملية غير صالحة.' }, 400);
     assertDate(parsed.data.tradeDate);
-    const identity = visitor(request);
+    const identity = visitor(request),revision=await portfolioRevision(identity.owner);
     const existing = await db().prepare('SELECT created_at FROM portfolio_transactions WHERE id=? AND owner=?').bind(parsed.data.id, identity.owner).first() as any;
     if (!existing) return json({ error: 'العملية غير موجودة.' }, 404);
     const asset = await canonicalPortfolioAsset(parsed.data.symbol);
@@ -82,23 +98,26 @@ export async function PUT(request: Request) {
     const remaining = (await readPortfolioTransactions(identity.owner)).filter(transaction => transaction.id !== parsed.data.id);
     try { validateLedger([...remaining, candidate]); }
     catch (error) { return json({ error: error instanceof Error ? error.message : 'التعديل يجعل رصيد الأسهم سالبًا.' }, 409); }
-    await db().prepare('UPDATE portfolio_transactions SET symbol=?,company_name=?,side=?,quantity=?,price=?,fees=?,trade_date=?,note=?,metadata=?,updated_at=? WHERE id=? AND owner=?')
-      .bind(asset.symbol, asset.name, parsed.data.side, parsed.data.quantity, parsed.data.price, parsed.data.fees, parsed.data.tradeDate, parsed.data.note, JSON.stringify(asset.metadata), now, parsed.data.id, identity.owner).run();
+    const saved=await commitAtRevision(identity.owner,revision,db().prepare('UPDATE portfolio_transactions SET symbol=?,company_name=?,side=?,quantity=?,price=?,fees=?,trade_date=?,note=?,metadata=?,updated_at=? WHERE id=? AND owner=? AND EXISTS(SELECT 1 FROM portfolio_revisions WHERE owner=? AND revision=?)')
+      .bind(asset.symbol, asset.name, parsed.data.side, parsed.data.quantity, parsed.data.price, parsed.data.fees, parsed.data.tradeDate, parsed.data.note, JSON.stringify(asset.metadata), now, parsed.data.id, identity.owner,identity.owner,revision));
+    if(!saved)return json({error:'تغيّرت المحفظة أثناء التعديل؛ أعد المحاولة.'},409);
     return await respond(request, identity);
-  } catch (error: any) { return json({ error: error.message || 'تعذّر تعديل العملية.' }, error.status || 503); }
+  } catch (error: any) { return json({ error: error.message || 'تعذّر تعديل العملية.' }, statusOf(error,503)); }
 }
 
 export async function DELETE(request: Request) {
   try {
     sameOrigin(request); await ensureSchema();
-    const body = await parseBody(request), id = typeof body?.id === 'string' ? body.id : '';
+    const payload = await readBody(request,20_000), id = typeof payload?.id === 'string' ? payload.id : '';
     if (!z.string().uuid().safeParse(id).success) return json({ error: 'معرّف العملية غير صالح.' }, 400);
-    const identity = visitor(request);
-    const remaining = (await readPortfolioTransactions(identity.owner)).filter(transaction => transaction.id !== id);
+    const identity = visitor(request),revision=await portfolioRevision(identity.owner);
+    const current=await readPortfolioTransactions(identity.owner);
+    if(!current.some(transaction=>transaction.id===id))return json({ error: 'العملية غير موجودة.' }, 404);
+    const remaining = current.filter(transaction => transaction.id !== id);
     try { validateLedger(remaining); }
     catch { return json({ error: 'لا يمكن حذف هذه العملية لأنها ستجعل عملية بيع لاحقة بلا رصيد كافٍ.' }, 409); }
-    const result = await db().prepare('DELETE FROM portfolio_transactions WHERE id=? AND owner=?').bind(id, identity.owner).run() as any;
-    if (!Number(result?.meta?.changes)) return json({ error: 'العملية غير موجودة.' }, 404);
+    const saved=await commitAtRevision(identity.owner,revision,db().prepare('DELETE FROM portfolio_transactions WHERE id=? AND owner=? AND EXISTS(SELECT 1 FROM portfolio_revisions WHERE owner=? AND revision=?)').bind(id, identity.owner,identity.owner,revision));
+    if(!saved)return json({error:'تغيّرت المحفظة أثناء الحذف؛ حدّث الصفحة وأعد المحاولة.'},409);
     return await respond(request, identity);
-  } catch (error: any) { return json({ error: error.message || 'تعذّر حذف العملية.' }, error.status || 503); }
+  } catch (error: any) { return json({ error: error.message || 'تعذّر حذف العملية.' }, statusOf(error,503)); }
 }

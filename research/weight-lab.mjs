@@ -75,10 +75,20 @@ function validate(rows, strategy) {
       const value = row.features?.[id];
       if (value != null && (!finite(value) || value < 0 || value > 1)) errors.push(`${key}: ${id} must be between 0 and 1`);
       const availableAt = row.availableAt?.[id];
+      const periodEnd = row.periodEnd?.[id];
+      const source = row.sources?.[id];
+      if (value != null && availableAt == null) errors.push(`${key}: ${id} availableAt missing`);
+      if (value != null && periodEnd == null) errors.push(`${key}: ${id} periodEnd missing`);
+      if (value != null && (typeof source !== 'string' || !source.trim())) errors.push(`${key}: ${id} source missing`);
       if (availableAt != null) {
         const available = Date.parse(availableAt);
         if (!Number.isFinite(available)) errors.push(`${key}: ${id} has invalid availableAt`);
         else if (available > asOf) errors.push(`${key}: ${id} is future evidence`);
+      }
+      if (periodEnd != null) {
+        const period = Date.parse(periodEnd);
+        if (!Number.isFinite(period)) errors.push(`${key}: ${id} has invalid periodEnd`);
+        else if (period > asOf) errors.push(`${key}: ${id} period ends after asOf`);
       }
     }
 
@@ -129,13 +139,19 @@ function modelScore(model, row) {
 function chooseThreshold(model, rows) {
   if (!rows.length) return 0.5;
   const candidates = [...new Set(rows.map(row => sigmoid(modelScore(model, row))))].sort((a, b) => a - b);
+  const minimumSelected = Math.max(10, Math.ceil(rows.length * 0.05));
   return candidates.reduce((best, threshold) => {
     const predicted = rows.filter(row => sigmoid(modelScore(model, row)) >= threshold);
+    if (predicted.length < minimumSelected) return best;
     const positives = rows.filter(row => row.outcome.label === 1).length;
     const truePositives = predicted.filter(row => row.outcome.label === 1).length;
     const precision = predicted.length ? truePositives / predicted.length : 0;
     const recall = positives ? truePositives / positives : 0;
-    const utility = precision * 0.7 + recall * 0.3;
+    const utilities = predicted.map(row => row.outcome?.netUtility).filter(finite);
+    // Selection is for net utility when the validation data carries execution
+    // costs. Classification quality is only a fallback for incomplete research
+    // fixtures and can never approve a model because cost coverage is gated.
+    const utility = utilities.length === predicted.length ? mean(utilities) : precision * 0.7 + recall * 0.3;
     return utility > best.utility ? {threshold, utility} : best;
   }, {threshold: 0.5, utility: -1}).threshold;
 }
@@ -167,6 +183,12 @@ function metrics(model, rows, threshold = 0.5) {
       const baseRate = mean(rows.map(row => row.outcome.label));
       return baseRate > 0 ? mean(top.map(item => item.row.outcome.label)) / baseRate : null;
     })(),
+    topDecileNetUtility: (() => {
+      if (scored.length < 10) return null;
+      const top = [...scored].sort((a, b) => b.score - a.score).slice(0, Math.max(1, Math.floor(scored.length / 10)));
+      const values = top.map(item => item.row.outcome?.netUtility).filter(finite);
+      return values.length === top.length ? mean(values) : null;
+    })(),
   };
 }
 
@@ -190,6 +212,50 @@ function rankCorrelation(model, rows) {
   const numerator = x.reduce((sum, value, index) => sum + (value - mx) * (y[index] - my), 0);
   const denominator = Math.sqrt(x.reduce((sum, value) => sum + (value - mx) ** 2, 0) * y.reduce((sum, value) => sum + (value - my) ** 2, 0));
   return denominator ? numerator / denominator : null;
+}
+
+function rankingMetrics(rows, score) {
+  const usable = rows.filter(row => finite(score(row)));
+  const scored = usable.map(row => ({row, score: score(row)})).sort((a, b) => b.score - a.score);
+  const top = scored.slice(0, Math.max(1, Math.floor(scored.length / 10)));
+  const baseRate = mean(usable.map(row => row.outcome.label));
+  const utility = top.map(item => item.row.outcome?.netUtility).filter(finite);
+  return {
+    rows: usable.length,
+    coverage: rows.length ? usable.length / rows.length : 0,
+    auc: auc(usable, score),
+    topDecileLift: usable.length >= 10 && baseRate > 0 ? mean(top.map(item => item.row.outcome.label)) / baseRate : null,
+    topDecileNetUtility: usable.length >= 10 && utility.length === top.length ? mean(utility) : null,
+  };
+}
+
+function seededRandom(seedText) {
+  let state = 2166136261;
+  for (const character of seedText) { state ^= character.charCodeAt(0); state = Math.imul(state, 16777619); }
+  return () => { state ^= state << 13; state ^= state >>> 17; state ^= state << 5; return (state >>> 0) / 4294967296; };
+}
+
+function firmClusteredAucDelta(rows, candidateScore, benchmarkScore, seed, repetitions = 250) {
+  const groups = new Map();
+  for (const row of rows) {
+    if (!finite(benchmarkScore(row))) continue;
+    const firm = firmIdentity(row);
+    if (!groups.has(firm)) groups.set(firm, []);
+    groups.get(firm).push(row);
+  }
+  const firms = [...groups.keys()];
+  if (firms.length < 20) return null;
+  const random = seededRandom(seed), deltas = [];
+  for (let iteration = 0; iteration < repetitions; iteration += 1) {
+    const sample = [];
+    for (let index = 0; index < firms.length; index += 1) sample.push(...groups.get(firms[Math.floor(random() * firms.length)]));
+    const candidate = auc(sample, candidateScore), benchmark = auc(sample, benchmarkScore);
+    if (candidate != null && benchmark != null) deltas.push(candidate - benchmark);
+  }
+  if (deltas.length < repetitions * 0.9) return null;
+  deltas.sort((a, b) => a - b);
+  const percentile = value => deltas[Math.max(0, Math.min(deltas.length - 1, Math.floor((deltas.length - 1) * value)))];
+  return {repetitions: deltas.length, lower95: percentile(0.025), median: percentile(0.5), upper95: percentile(0.975)};
 }
 
 function exactWeights(model) {
@@ -221,7 +287,9 @@ function rollingSignStability(rows, strategy) {
   const signs = Object.fromEntries(FEATURE_IDS[strategy].map(id => [id, []]));
   for (const fraction of [0.5, 0.65, 0.8]) {
     const cutoff = dates[Math.floor(dates.length * fraction)];
-    const model = fit(rows.filter(row => Date.parse(row.asOf) <= cutoff), FEATURE_IDS[strategy]);
+    // A historical fold may only use labels already observed at its cutoff.
+    // Filtering by signal date alone leaked future outcomes into stability.
+    const model = fit(rows.filter(row => Date.parse(row.asOf) <= cutoff && Date.parse(row.outcome?.observedAt) <= cutoff), FEATURE_IDS[strategy]);
     model.ids.forEach((id, index) => signs[id].push(Math.sign(model.coefficients[index])));
   }
   return Object.fromEntries(Object.entries(signs).map(([id, values]) => {
@@ -257,47 +325,69 @@ export async function runLab({strategy, input, output} = {}) {
   const firms = new Set(validRows.map(firmIdentity));
   const holdoutFirms = new Set([...firms].filter(firm => firmBucket(firm) >= 80));
   const firmTrain = train.filter(row => !holdoutFirms.has(firmIdentity(row)));
+  const firmValidation = validation.filter(row => !holdoutFirms.has(firmIdentity(row)));
   const firmTest = test.filter(row => holdoutFirms.has(firmIdentity(row)));
   const holdoutModel = fit(firmTrain, FEATURE_IDS[strategy]);
-  const holdout = metrics(holdoutModel, firmTest, threshold);
+  const holdoutThreshold = chooseThreshold(holdoutModel, firmValidation);
+  const holdout = metrics(holdoutModel, firmTest, holdoutThreshold);
   const weightResult = exactWeights(model);
   const stability = rollingSignStability(validRows, strategy);
   const minimum = MINIMUM[strategy];
   const blockers = [...errors];
+  const datasetHash = hash(raw);
+  const activeMonths = new Set(dates.map(value => new Date(value).toISOString().slice(0, 7))).size;
+  const expectedMonths = dates.length ? Math.max(1, (new Date(dates.at(-1)).getUTCFullYear() - new Date(dates[0]).getUTCFullYear()) * 12 + new Date(dates.at(-1)).getUTCMonth() - new Date(dates[0]).getUTCMonth() + 1) : 0;
+  const monthCoverage = expectedMonths ? activeMonths / expectedMonths : 0;
+  const utilityCoverage = validRows.length ? validRows.filter(row => finite(row.outcome?.netUtility)).length / validRows.length : 0;
+  const executionCostCoverage = validRows.length ? validRows.filter(row => finite(row.outcome?.costBps) && row.outcome.costBps >= 0 && finite(row.outcome?.grossReturn)).length / validRows.length : 0;
+  const securityMasterCoverage = validRows.length ? validRows.filter(row => row.securityMaster?.listedAtAsOf === true && ['listed','delisted','acquired','bankrupt'].includes(row.securityMaster?.statusAtOutcome)).length / validRows.length : 0;
+  const delistedOutcomes = validRows.filter(row => row.securityMaster?.statusAtOutcome === 'delisted' || row.securityMaster?.statusAtOutcome === 'bankrupt').length;
+  const benchmark = rankingMetrics(test, row => row.benchmark?.score);
+  const aucDeltaBootstrap = firmClusteredAucDelta(test, row => modelScore(model, row), row => row.benchmark?.score, datasetHash);
   if (validRows.length < minimum.rows) blockers.push(`valid rows ${validRows.length} < ${minimum.rows}`);
   if (symbols.size < minimum.companies) blockers.push(`companies ${symbols.size} < ${minimum.companies}`);
   if (spanMonths < minimum.months) blockers.push(`coverage ${spanMonths.toFixed(1)} months < ${minimum.months}`);
+  if (monthCoverage < 0.8) blockers.push(`active-month coverage ${(monthCoverage * 100).toFixed(1)}% < 80%`);
   if (!train.length || !validation.length || !test.length) blockers.push('one or more chronological splits are empty');
   if (testMetrics.auc == null || testMetrics.auc < 0.55) blockers.push(`final test AUC ${testMetrics.auc ?? 'unknown'} < 0.55`);
   if (holdout.auc == null || holdout.auc < 0.53) blockers.push(`firm holdout AUC ${holdout.auc ?? 'unknown'} < 0.53`);
-  const utilityCoverage = validRows.length ? validRows.filter(row => finite(row.outcome?.netUtility)).length / validRows.length : 0;
   if (utilityCoverage < 0.95) blockers.push(`netUtility coverage ${(utilityCoverage * 100).toFixed(1)}% < 95%`);
+  if (executionCostCoverage < 0.95) blockers.push(`execution-cost coverage ${(executionCostCoverage * 100).toFixed(1)}% < 95%`);
+  if (securityMasterCoverage < 0.99) blockers.push(`historical security-master coverage ${(securityMasterCoverage * 100).toFixed(1)}% < 99%`);
+  if (!delistedOutcomes) blockers.push('no delisted/bankrupt outcomes; survivorship correction is unproven');
   if (testMetrics.topDecileLift == null || testMetrics.topDecileLift <= 1) blockers.push(`final test top-decile lift ${testMetrics.topDecileLift ?? 'unknown'} <= 1`);
+  if (testMetrics.topDecileNetUtility == null || testMetrics.topDecileNetUtility <= 0) blockers.push(`final test top-decile net utility ${testMetrics.topDecileNetUtility ?? 'unknown'} <= 0`);
+  if (benchmark.coverage < 0.95) blockers.push(`locked benchmark coverage ${(benchmark.coverage * 100).toFixed(1)}% < 95%`);
+  if (testMetrics.auc == null || benchmark.auc == null || testMetrics.auc <= benchmark.auc) blockers.push(`candidate AUC ${testMetrics.auc ?? 'unknown'} does not beat locked benchmark ${benchmark.auc ?? 'unknown'}`);
+  if (testMetrics.topDecileNetUtility == null || benchmark.topDecileNetUtility == null || testMetrics.topDecileNetUtility <= benchmark.topDecileNetUtility) blockers.push(`candidate top-decile utility ${testMetrics.topDecileNetUtility ?? 'unknown'} does not beat locked benchmark ${benchmark.topDecileNetUtility ?? 'unknown'}`);
+  if (aucDeltaBootstrap == null || aucDeltaBootstrap.lower95 <= 0) blockers.push(`firm-clustered AUC improvement lower bound ${aucDeltaBootstrap?.lower95 ?? 'unknown'} <= 0`);
   if (!weightResult.total) blockers.push('no learned signal; refusing to invent equal weights');
+  for (const row of weightResult.rows) if (row.coefficient < 0) blockers.push(`${row.id} learned direction is negative; refusing to publish its absolute magnitude as a positive factor weight`);
   for (const [id, value] of Object.entries(stability)) if (value != null && value < 2 / 3) blockers.push(`${id} sign stability ${value.toFixed(2)} < 0.67`);
 
   const result = {
     status: blockers.length ? 'BLOCKED' : 'CANDIDATE',
     strategy,
-    datasetHash: hash(raw),
+    datasetHash,
     createdAt: new Date().toISOString(),
     protocol: {
       features: FEATURE_IDS[strategy],
       minimum,
       split: '60/20/20 chronological by unique asOf date with outcome-overlap purging',
-      holdout: 'fixed 20% firm hash bucket >= 80; firm identity uses firmId/firm/CIK before symbol, and all aliases are excluded from holdout training',
+      holdout: 'fixed 20% firm hash bucket >= 80; firm identity uses firmId/firm/CIK before symbol, and all aliases are excluded from holdout training and threshold selection',
       regularization: 'logistic L2 lambda=0.2',
-      labels: 'provided point-in-time future outcomes; no synthetic labels',
+      labels: 'provided point-in-time future outcomes with gross return, execution cost and net utility; no synthetic labels',
       missingFeatureTreatment: 'training median only; missingness remains in source coverage and cannot become PASS',
       probability: 'not available until post-fit calibration passes the locked validation protocol; raw sigmoid is diagnostics only',
       safety: 'FAIL/UNKNOWN safety rows excluded from learning; they remain non-qualified in production',
     },
-    counts: {rawRows: rows.length, validRows: validRows.length, excludedRows: rows.length - validRows.length, companies: symbols.size, firms: firms.size, holdoutFirms: holdoutFirms.size, train: train.length, validation: validation.length, test: test.length, firmHoldout: firmTest.length},
-    metrics: {test: {...testMetrics, rankCorrelation: rankCorrelation(model, test)}, firmHoldout: {...holdout, rankCorrelation: rankCorrelation(holdoutModel, firmTest)}},
-    outcomeCoverage: {netUtility: utilityCoverage},
+    counts: {rawRows: rows.length, validRows: validRows.length, excludedRows: rows.length - validRows.length, companies: symbols.size, firms: firms.size, holdoutFirms: holdoutFirms.size, train: train.length, validation: validation.length, test: test.length, firmHoldout: firmTest.length, activeMonths, expectedMonths, delistedOutcomes},
+    metrics: {test: {...testMetrics, rankCorrelation: rankCorrelation(model, test)}, firmHoldout: {...holdout, rankCorrelation: rankCorrelation(holdoutModel, firmTest)}, lockedBenchmark: benchmark, aucDeltaBootstrap},
+    coverage: {months: monthCoverage, netUtility: utilityCoverage, executionCosts: executionCostCoverage, securityMaster: securityMasterCoverage, benchmark: benchmark.coverage},
     stability,
     model: {intercept: model.intercept, medians: model.medians},
-    weights: weightResult.rows,
+    weights: weightResult.rows.map(row => ({...row, magnitudeWeight: row.weight})),
+    weightInterpretation: 'Magnitude only. A negative coefficient blocks publication and must never be converted into a positive production factor.',
     weightBasisPointsTotal: weightResult.rows.reduce((sum, row) => sum + (row.weightBasisPoints ?? 0), 0),
     blockers,
   };

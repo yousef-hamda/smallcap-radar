@@ -46,7 +46,9 @@ const COMPANY_FACTS_TAGS = {
   shares: ['EntityCommonStockSharesOutstanding', 'CommonStockSharesOutstanding'],
   cash: ['CashAndCashEquivalentsAtCarryingValue', 'CashAndCashEquivalents'],
   debtCurrent: ['LongTermDebtCurrent', 'ShortTermBorrowings', 'BorrowingsCurrent'],
-  debtNoncurrent: ['LongTermDebtNoncurrent', 'LongTermDebt', 'BorrowingsNoncurrent', 'Borrowings'],
+  // LongTermDebt and Borrowings may be totals. Adding either to a current
+  // component can double count debt, so only noncurrent concepts are used.
+  debtNoncurrent: ['LongTermDebtNoncurrent', 'BorrowingsNoncurrent'],
 } as const;
 
 function companyFactsUrl(cik: number) {
@@ -183,6 +185,7 @@ export async function fetchBulkFundamentals(candidateCiks: number[], asOf = new 
   const changed=new Set<number>();
   const start=page?.offset??0,stop=Math.min(configs.length,start+(page?.limit??configs.length));
   let success = 0, failed = 0, optionalSuccess = 0, optionalFailed = 0;
+  let requests = 0, optionalRequests = 0;
   let fallbackUsed = false;
   const errors: string[] = [];
 
@@ -196,6 +199,7 @@ export async function fetchBulkFundamentals(candidateCiks: number[], asOf = new 
     }));
     for (const [localIndex,outcome] of outcomes.entries()) {
       const required=index+localIndex<requiredConfigs.length;
+      if (required) requests++; else optionalRequests++;
       if (outcome.status === 'rejected') {
         if (required) failed++; else optionalFailed++;
         errors.push(outcome.reason instanceof Error ? outcome.reason.message : 'SEC Frames error');
@@ -237,7 +241,7 @@ export async function fetchBulkFundamentals(candidateCiks: number[], asOf = new 
       }
     }
   }
-  return { fundamentals, changed:[...changed],nextOffset:stop,totalConfigs:SEC_FRAME_DATASET_COUNT,done:stop>=configs.length, requests: requiredConfigs.length, optionalRequests: optionalConfigs.length, success, failed, optionalSuccess, optionalFailed, fallbackUsed, errors: [...new Set(errors)].slice(0, 8), annual, instant };
+  return { fundamentals, changed:[...changed],nextOffset:stop,totalConfigs:SEC_FRAME_DATASET_COUNT,done:stop>=configs.length, requests, optionalRequests, success, failed, optionalSuccess, optionalFailed, fallbackUsed, errors: [...new Set(errors)].slice(0, 8), annual, instant };
 }
 
 function frameProvenance(fact: StoredFact, retrievedAt: string): Provenance {
@@ -259,8 +263,12 @@ function frameProvenance(fact: StoredFact, retrievedAt: string): Provenance {
 }
 
 export function preliminarySnapshot(company: Company, facts: BulkFundamentals | undefined, retrievedAt = new Date().toISOString()): Snapshot {
-  const quoteDate = retrievedAt.slice(0, 10);
-  const quote: Provenance = { source: company.quoteSource || 'Yahoo/Nasdaq bulk quote', periodEnd: quoteDate, availableAt: company.quoteAvailableAt || retrievedAt, retrievedAt, currency: 'USD', confidence: company.quoteSource?.includes('bundled') ? 'low' : 'medium' };
+  const quoteAvailableAt = company.priceAvailableAt || company.quoteAvailableAt || retrievedAt;
+  const quoteSource=company.priceSource||company.quoteSource||'Yahoo/Nasdaq bulk quote';
+  const quote: Provenance = { source: quoteSource, periodEnd: quoteAvailableAt.slice(0, 10), availableAt: quoteAvailableAt, retrievedAt, currency: 'USD', confidence: quoteSource.includes('bundled') ? 'low' : 'medium' };
+  const marketCapAvailableAt=company.marketCapAvailableAt||company.quoteAvailableAt||retrievedAt;
+  const marketCapSource=company.marketCapSource||company.quoteSource||'Yahoo/Nasdaq bulk quote';
+  const marketCapQuote:Provenance={source:marketCapSource,periodEnd:marketCapAvailableAt.slice(0,10),availableAt:marketCapAvailableAt,retrievedAt,currency:'USD',confidence:marketCapSource.includes('bundled')?'low':'medium'};
   const snapshot: Snapshot = {
     symbol: company.ticker,
     name: company.name,
@@ -285,7 +293,7 @@ export function preliminarySnapshot(company: Company, facts: BulkFundamentals | 
   };
   if (snapshot.price != null) snapshot.provenance.price = quote;
   if(snapshot.dailyChange!=null)snapshot.provenance.dailyChange=quote;
-  if (snapshot.marketCap != null) snapshot.provenance.marketCap = quote;
+  if (snapshot.marketCap != null) snapshot.provenance.marketCap = marketCapQuote;
   if (company.return52w != null) snapshot.provenance.return12m = quote
   if (company.low52w != null) snapshot.provenance.low52w = quote
   if (company.high52w != null) snapshot.provenance.high52w = quote
@@ -309,13 +317,13 @@ export function preliminarySnapshot(company: Company, facts: BulkFundamentals | 
   }
   const debt = facts.debtCurrent && facts.debtNoncurrent && facts.debtCurrent.end===facts.debtNoncurrent.end ? facts.debtCurrent.val + facts.debtNoncurrent.val : null;
   if(debt!=null){snapshot.debt=debt;snapshot.provenance.debt=derivedEvidence('Derived SEC debt',[frameProvenance(facts.debtCurrent!,retrievedAt),frameProvenance(facts.debtNoncurrent!,retrievedAt)],retrievedAt,'current + noncurrent debt')!;}
-  if (snapshot.marketCap && snapshot.revenue && snapshot.revenue > 0 && facts.cash && debt != null && facts.cash.end===facts.debtCurrent?.end && usableEvidence(quote,retrievedAt)) {
+  if (snapshot.marketCap && snapshot.revenue && snapshot.revenue > 0 && facts.cash && debt != null && facts.cash.end===facts.debtCurrent?.end && usableEvidence(marketCapQuote,retrievedAt)) {
     snapshot.evSales = (snapshot.marketCap + debt - facts.cash.val) / snapshot.revenue;
-    snapshot.provenance.evSales = derivedEvidence('Derived from bulk market cap + SEC debt − SEC cash / SEC revenue',[snapshot.provenance.revenue,quote,snapshot.provenance.cash,snapshot.provenance.debt],retrievedAt,'(marketCap + debt − cash) / revenue')!;
+    snapshot.provenance.evSales = derivedEvidence('Derived from bulk market cap + SEC debt − SEC cash / SEC revenue',[snapshot.provenance.revenue,marketCapQuote,snapshot.provenance.cash,snapshot.provenance.debt],retrievedAt,'(marketCap + debt − cash) / revenue')!;
   }
-  if (snapshot.marketCap && snapshot.revenue && snapshot.revenue > 0 && usableEvidence(quote,retrievedAt)) {
+  if (snapshot.marketCap && snapshot.revenue && snapshot.revenue > 0 && usableEvidence(marketCapQuote,retrievedAt)) {
     snapshot.ps = snapshot.marketCap / snapshot.revenue;
-    snapshot.provenance.ps = derivedEvidence('Derived from bulk market cap / SEC revenue',[snapshot.provenance.revenue,quote],retrievedAt,'marketCap / revenue')!;
+    snapshot.provenance.ps = derivedEvidence('Derived from bulk market cap / SEC revenue',[snapshot.provenance.revenue,marketCapQuote],retrievedAt,'marketCap / revenue')!;
   }
   if (facts.shares && facts.priorShares && facts.priorShares.val > 0) {
     snapshot.shareCountRatio = facts.shares.val / facts.priorShares.val;

@@ -50,6 +50,13 @@
       "when": 1789898937717,
       "tag": "0006_sparkling_war_machine",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1789942071655,
+      "tag": "0007_cute_metal_master",
+      "breakpoints": true
     }
   ]
 }

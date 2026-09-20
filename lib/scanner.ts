@@ -9,7 +9,7 @@ const HISTORY_BATCH_SIZE = 18;
 const PROVIDER_CONCURRENCY = 6;
 const SCORE_BATCH_SIZE = 200;
 const COMPANY_FACTS_BATCH_SIZE = 12;
-export const SCAN_SOURCE_VERSION = 'Bulk Quotes/SEC Frames + Company Facts v10';
+export const SCAN_SOURCE_VERSION = 'Bulk Quotes/SEC Frames + Company Facts v11';
 const UNIVERSE_PAGE=1000;
 async function saveUniverse(runId:string,companies:any[],kind='candidates'){
  const statements=[];
@@ -180,7 +180,7 @@ export async function processScanBatch(runId: string) {
     const retrying = run.offset >= run.total;
     const jobs = retrying ? queue.slice(0, COMPANY_FACTS_BATCH_SIZE) : companies.slice(run.offset, run.offset + COMPANY_FACTS_BATCH_SIZE).map((company: any) => ({ company, attempt: 0 }));
     const remaining = retrying ? queue.slice(COMPANY_FACTS_BATCH_SIZE) : queue;
-    const candidates: number[] = jobs.map((job: any) => Number(job.company?.cik)).filter((cik: number): cik is number => Number.isFinite(cik) && needsCompanyFacts(facts.get(cik))) as number[];
+    const candidates: number[] = jobs.map((job: any) => Number(job.company?.cik)).filter((cik: number): cik is number => Number.isInteger(cik) && cik > 0 && needsCompanyFacts(facts.get(cik))) as number[];
     const fallback = candidates.length ? await fetchCompanyFactsFallback([...new Set(candidates)], new Date(), facts) : { fundamentals: facts, changed: [], requests: 0, success: 0, empty: 0, failed: 0, failedCiks: [], errors: [] };
     const failedSet = new Set(fallback.failedCiks);
     for (const job of jobs) {
@@ -246,7 +246,7 @@ export async function processScanBatch(runId: string) {
       if (!historyCandidate(snapshot)) return { snapshot, company, skipped: true };
       snapshot.dataIssues=(snapshot.dataIssues??[]).filter((issue:string)=>!issue.startsWith('تعذّر تحميل تاريخ'));
       try {
-        const cacheKey=`scan-history:v2:${company.ticker}:${now.slice(0,10)}`;
+        const cacheKey=`scan-history:v3:${company.ticker}:${now.slice(0,10)}`;
         const cached=await database.prepare('SELECT retrieved_at,payload FROM raw_cache WHERE key=?').bind(cacheKey).first() as any;
         const historical:Awaited<ReturnType<typeof historicalMarketData>>=cached&&Date.parse(now)-Date.parse(cached.retrieved_at)<24*60*60_000?JSON.parse(cached.payload):await historicalMarketData(company.ticker, now, 550);
         if(!cached||cached.retrieved_at!==historical.retrievedAt)await database.prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(cacheKey,historical.source,historical.retrievedAt,JSON.stringify(historical)).run();

@@ -1,9 +1,11 @@
 import { SPECS } from '@/lib/engine';
 import { fixtures } from '@/lib/fixtures';
 import { readAudit, readState } from '@/lib/storage';
+import { json } from '@/lib/http';
 
 export async function GET(req: Request) {
   const kind = new URL(req.url).searchParams.get('kind');
+  if (kind != null && !['spec', 'schema', 'audit', 'data'].includes(kind)) return json({ error: 'نوع التصدير غير صالح' }, 400);
   const value = kind === 'spec'
     ? SPECS
     : kind === 'schema'
@@ -15,11 +17,13 @@ export async function GET(req: Request) {
           limits: { records: 500, bytes: 4_000_000 },
         }
       : kind === 'audit' ? await readAudit() : await readState();
+  const filename=kind==='spec'||kind==='schema'||kind==='audit'?kind:'data';
   return new Response(JSON.stringify(value, null, 2), {
     headers: {
       'Content-Type': 'application/json',
-      'Content-Disposition': `attachment; filename="radar-${kind || 'audit'}.json"`,
+      'Content-Disposition': `attachment; filename="radar-${filename}.json"`,
       'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
     },
   });
 }

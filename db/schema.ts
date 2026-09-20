@@ -28,3 +28,7 @@ export const portfolioTransactions=sqliteTable('portfolio_transactions',{
  index('idx_portfolio_owner_date').on(t.owner,t.tradeDate,t.id),
  index('idx_portfolio_owner_symbol_date').on(t.owner,t.symbol,t.tradeDate,t.id),
 ]);
+export const portfolioRevisions=sqliteTable('portfolio_revisions',{
+ owner:text('owner').primaryKey(),
+ revision:integer('revision').notNull().default(0),
+});

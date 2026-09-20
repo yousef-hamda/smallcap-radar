@@ -3,7 +3,13 @@ type SecTicker={cik_str?:number;ticker?:string;title?:string};
 const valid=/^[A-Z][A-Z0-9.^-]{0,15}$/;
 
 export function parseOfficialDirectory(nasdaqText:string,otherText:string,secPayload:Record<string,SecTicker>):DirectoryCompany[]{
- const sec=new Map(Object.values(secPayload||{}).filter(row=>row?.ticker).map(row=>[String(row.ticker).toUpperCase(),{cik:Number(row.cik_str)||0,title:String(row.title||'')}]))
+ const sec=new Map<string,{cik:number;title:string}>();
+ for(const row of Object.values(secPayload||{}))if(row?.ticker){
+  const value={cik:Number(row.cik_str)||0,title:String(row.title||'')},ticker=String(row.ticker).toUpperCase();
+  sec.set(ticker,value);
+  // Nasdaq and SEC use different punctuation for some share classes.
+  sec.set(ticker.replaceAll('-','.'),value);
+ }
  const result=new Map<string,DirectoryCompany>();
  const add=(ticker:string,name:string,exchange:string,test:string,etf:string)=>{
   ticker=ticker.trim().toUpperCase();name=name.trim();

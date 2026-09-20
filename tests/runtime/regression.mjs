@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {sqlite} from './env.mjs';
 import {scanProgress} from '../../.test-build/scan-progress.mjs';
 import {visitor} from '../../.test-build/visitor.mjs';
+import {body as parseBody} from '../../.test-build/http.mjs';
 import {numeric,parseNews,fetchJson} from '../../.test-build/providers.mjs';
 import {reconcile} from '../../.test-build/reconcile.mjs';
 import {setHistoryResult,setUniverse,universeCalls,setIntradayResult} from './providers.mjs';
@@ -27,6 +28,12 @@ import webpush from 'web-push';
 await ensureSchema();
 const base=fixtures[0];
 const run=(patch={})=>({id:'test',status:'running',source:'Bulk Quotes/SEC Frames v7 · full',stage:0,offset:0,total:100,processed:0,failed:0,retryPending:0,...patch});
+test('JSON body parsing enforces the byte limit even without Content-Length',async()=>{
+ const stream=new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode('{"value":"'));controller.enqueue(new Uint8Array(32).fill(97));controller.enqueue(new TextEncoder().encode('"}'));controller.close();}});
+ const request=new Request('https://example.test/api',{method:'POST',body:stream,duplex:'half'});
+ await assert.rejects(()=>parseBody(request,20),error=>error.status===413);
+ const valid=new Request('https://example.test/api',{method:'POST',body:'{"value":"موثق"}'});assert.deepEqual(await parseBody(valid,100),{value:'موثق'});
+});
 test('progress is monotonic and moves during Company Facts recovery',()=>{
  const sequence=[run(),run({stage:4}),run({stage:4,offset:16}),run({stage:5}),run({stage:5,offset:50}),run({stage:9}),run({stage:9,offset:100}),run({stage:10}),run({stage:10,offset:99}),run({stage:10,offset:100}),run({stage:13,offset:100,status:'complete'})].map(s=>scanProgress(s).percent);
  assert(sequence.every((n,i)=>i===0||n>=sequence[i-1]));assert.equal(sequence.at(-1),100);assert(sequence.slice(0,-1).every(n=>n<100));
@@ -177,7 +184,7 @@ test('local evaluation benchmarks at 2000, 10000 and 15000 synthetic companies',
   const elapsed=performance.now()-start;assert.equal(count,size);assert(elapsed<15000);t.diagnostic(`${size}: ${elapsed.toFixed(1)} ms (local engine only; excludes providers and browser)`);
  }
 });
-test('full history stage can qualify a completely evidenced Bounce candidate while Core review remains UNKNOWN',async()=>{
+test('full history stage can qualify marketable candidates while unverified factors remain UNKNOWN',async()=>{
  const now=new Date().toISOString(),date=days=>new Date(Date.parse(now)-days*864e5).toISOString().slice(0,10);
  const history=[];
  for(let days=550;days>=1;days--){const day=date(days);const weekday=new Date(day).getUTCDay();if(weekday===0||weekday===6)continue;const close=days>250?26:days<5?12:8;history.push({date:day,close,open:close,high:close,low:close,volume:100000});}
@@ -191,7 +198,7 @@ test('full history stage can qualify a completely evidenced Bounce candidate whi
  try{
   const result=await processScanBatch('rebound-evidence');assert.equal(result.done,true);
   const stored=sqlite.prepare("SELECT payload,evaluation FROM fundamental_snapshots WHERE run_id='rebound-evidence'").get();
-  const e=JSON.parse(stored.evaluation);assert.equal(e.bounce.screeningQualified,true,JSON.stringify(e.bounce.checks));assert.equal(e.core.screeningQualified,false);
+  const e=JSON.parse(stored.evaluation);assert.equal(e.bounce.screeningQualified,true,JSON.stringify(e.bounce.checks));assert.equal(e.core.screeningQualified,false);assert.equal(e.core.measurableStatus,'UNKNOWN');
   assert.equal(JSON.parse(stored.payload).splitAdjusted,true);assert.equal(JSON.parse(stored.payload).history,undefined);
  }finally{setHistoryResult(null);}
 });
@@ -314,16 +321,15 @@ test('15000 directory rows use bounded durable pages and resume quote progress',
  }finally{setUniverse([]);}
 });
 
-test('radar pages contain every row and rank current scores descending',async()=>{
- const now='2099-01-01T00:00:00Z';
+test('radar pages contain only qualified category members and rank scores descending',async()=>{
  await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES('ranked-order','2099-01-01','2099-01-01','complete','Bulk Quotes/SEC Frames v10 · full',3,3,13,?)").bind(currentHash()).run();
- await insertSnapshot('ranked-order',{...base,symbol:'RANK-HIGH',name:'High score fixture',asOf:now,marketCap:50e6,return12m:-.2,evSales:1,ps:1,revenueGrowth:.25,operatingMarginTrend:.12,insiderBuyValue:50000,cash:20e6,debt:1e6}).run();
- await insertSnapshot('ranked-order',{...base,symbol:'RANK-LOW',name:'Low score fixture',asOf:now,marketCap:1.8e9,return12m:-.6,evSales:9,ps:9,revenueGrowth:-.2,operatingMarginTrend:-.1,insiderBuyValue:0,cash:1e6,debt:50e6}).run();
- await insertSnapshot('ranked-order',{...base,symbol:'RANK-FAIL',name:'Failed gate fixture',asOf:now,marketCap:5e9,return12m:.4}).run();
- const first=await readState({strategy:'core',limit:2});
- assert.equal(first.summary.total,3);assert.equal(first.summary.coreRanked,3);assert.equal(first.snapshots.length,2);assert.equal(first.page.hasMore,true);
- const second=await readState({strategy:'core',limit:10,offset:2});assert.equal(second.snapshots.length,1);
- const all=await readState({strategy:'core',limit:10});assert.equal(all.snapshots.length,3);const failed=all.snapshots.find(s=>s.symbol==='RANK-FAIL');assert(failed);assert.equal(evaluateStrategy('core',failed).status,'UNKNOWN');assert.equal(evaluateStrategy('core',failed).checks.find(c=>c.id==='cap').role,'factor');
+ await insertSnapshot('ranked-order',{...base,symbol:'RANK-HIGH',name:'High score fixture',marketCap:50e6,return12m:-.2,evSales:1,ps:1,revenueGrowth:.25,operatingMarginTrend:.12,insiderBuyValue:50000,cash:20e6,debt:1e6}).run();
+ await insertSnapshot('ranked-order',{...base,symbol:'RANK-LOW',name:'Low score fixture',marketCap:1.8e9,return12m:-.6,evSales:9,ps:9,revenueGrowth:-.2,operatingMarginTrend:-.1,insiderBuyValue:0,cash:1e6,debt:50e6}).run();
+ await insertSnapshot('ranked-order',{...base,symbol:'RANK-FAIL',name:'Failed gate fixture',marketCap:5e9,return12m:.4}).run();
+ const first=await readState({strategy:'core',limit:1});
+ assert.equal(first.summary.total,3);assert.equal(first.summary.coreRanked,2);assert.equal(first.summary.coreFailed,1);assert.equal(first.snapshots.length,1);assert.equal(first.page.hasMore,true);
+ const second=await readState({strategy:'core',limit:10,offset:1});assert.equal(second.snapshots.length,1);
+ const all=await readState({strategy:'core',limit:10});assert.equal(all.snapshots.length,2);assert.equal(all.snapshots.some(s=>s.symbol==='RANK-FAIL'),false);
  const scores=all.snapshots.map(s=>evaluateStrategy('core',s).score);for(let i=1;i<scores.length;i++){const previous=scores[i-1]??-Infinity;const current=scores[i]??-Infinity;assert(previous>=current)}
  assert.deepEqual([...first.snapshots,...second.snapshots].map(s=>s.symbol),all.snapshots.map(s=>s.symbol));
 });

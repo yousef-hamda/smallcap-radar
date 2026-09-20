@@ -9,7 +9,10 @@ export async function GET(request:Request){
   await ensureSchema();
   if(!companyBySymbol(symbol)&&!await db().prepare('SELECT 1 AS found FROM fundamental_snapshots WHERE symbol=? LIMIT 1').bind(symbol).first())return json({error:'الشركة غير موجودة في الدليل'},404);
   const key=`chart:v1:${symbol}:1D`,cached=await db().prepare('SELECT retrieved_at,payload FROM raw_cache WHERE key=?').bind(key).first() as any;
-  if(cached&&Date.now()-Date.parse(cached.retrieved_at)<5*60_000)return json({...JSON.parse(cached.payload),cached:true});
+  if(cached&&Date.now()-Date.parse(cached.retrieved_at)<5*60_000){
+   try{return json({...JSON.parse(cached.payload),cached:true});}
+   catch{await db().prepare('DELETE FROM raw_cache WHERE key=?').bind(key).run();}
+  }
   const chart=await intradayMarketData(symbol);
   await db().prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(key,chart.source,new Date().toISOString(),JSON.stringify(chart)).run();
   return json({...chart,cached:false});

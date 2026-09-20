@@ -105,3 +105,23 @@ test('historical chart filters duplicate, future and nonfinite bars and displays
  assert.match(html,/10\.00/);assert.match(html,/12\.00/);assert.doesNotMatch(html,/99999|NaN|Infinity/);
  assert.match(html,/polyline/);
 });
+
+test('portfolio chart ignores unavailable points without emitting an invalid SVG path',async()=>{
+ const {PerformanceChart}=await vite.ssrLoadModule('/app/portfolio-view.tsx');
+ const history={points:[
+  {date:'2025-01-01',marketValue:0,realizedPnl:0,unrealizedPnl:0,totalPnl:0,returnPct:null,grossPurchases:0},
+  {date:'2025-01-02',marketValue:110,realizedPnl:0,unrealizedPnl:10,totalPnl:10,returnPct:.1,grossPurchases:100},
+  {date:'2025-01-03',marketValue:120,realizedPnl:0,unrealizedPnl:20,totalPnl:20,returnPct:.2,grossPurchases:100},
+ ],unavailable:[],incompleteSymbols:[],sources:[],asOf:'2025-01-03T00:00:00Z'};
+ const html=renderToStaticMarkup(React.createElement(PerformanceChart,{history}));
+ assert.match(html,/أداء المحفظة من 2025-01-02 إلى 2025-01-03/);
+ assert.match(html,/d="M18\.00,/);
+ assert.doesNotMatch(html,/d="L18\.00,/);
+});
+
+test('portfolio allocation shows an explicit empty state when no position has a price',async()=>{
+ const {AllocationTreemap}=await vite.ssrLoadModule('/app/portfolio-view.tsx');
+ const html=renderToStaticMarkup(React.createElement(AllocationTreemap,{positions:[],onOpen:()=>{}}));
+ assert.match(html,/لا يمكن رسم التوزيع/);
+ assert.doesNotMatch(html,/portfolio-treemap/);
+});

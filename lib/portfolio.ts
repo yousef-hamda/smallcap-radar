@@ -151,7 +151,7 @@ export function calculatePortfolio(transactions: PortfolioTransaction[], quotes:
     const currentPrice = quote?.price != null && Number.isFinite(quote.price) && quote.price > 0 ? quote.price : null;
     const value = currentPrice == null ? null : position.quantity * currentPrice;
     const unrealized = value == null ? null : value - position.costBasis;
-    const daily = value == null || quote?.dailyChange == null || !Number.isFinite(quote.dailyChange)
+    const daily = value == null || quote?.dailyChange == null || !Number.isFinite(quote.dailyChange) || quote.dailyChange <= -1
       ? null
       : value - value / (1 + quote.dailyChange);
     if (value == null) missingQuoteCount++;

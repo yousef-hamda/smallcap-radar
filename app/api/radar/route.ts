@@ -1,5 +1,5 @@
 import {readState,db,createRun,insertSnapshot,ensureSchema,currentHash} from '@/lib/storage';
-import {sameOrigin,json,body} from '@/lib/http';
+import {sameOrigin,json,body,statusOf} from '@/lib/http';
 import {importSchema} from '@/lib/validation';
 import {visitor} from '@/lib/visitor';
 
@@ -47,5 +47,5 @@ export async function POST(req:Request){
    }catch(e){await db().prepare("UPDATE strategy_runs SET status='failed',error=?,updated_at=? WHERE id=?").bind(String(e).slice(0,500),new Date().toISOString(),id).run();throw Error('تعذّر حفظ الاستيراد؛ لم تتغير النتائج السابقة')}
   }
   return json({error:'عملية غير معروفة'},400);
- }catch(e:any){return json({error:e.message||'تعذّر تنفيذ الطلب'},e.status||400)}
+ }catch(e:any){return json({error:e.message||'تعذّر تنفيذ الطلب'},statusOf(e,500))}
 }

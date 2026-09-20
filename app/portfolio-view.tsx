@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import Image from 'next/image';
 import { AlertTriangle, ArrowDownRight, ArrowUpRight, BriefcaseBusiness, Download, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
@@ -56,7 +56,7 @@ function CompanyLogo({ symbol, size = 44 }: { symbol: string; size?: number }) {
   return <Image unoptimized className="company-logo" src={`/api/portfolio-logo?symbol=${encodeURIComponent(symbol)}`} width={size} height={size} alt={`شعار ${symbol}`} />;
 }
 
-function PerformanceChart({ history }: { history: HistoryData | null }) {
+export function PerformanceChart({ history }: { history: HistoryData | null }) {
   const [range, setRange] = useState<'1M' | '3M' | '6M' | '1Y' | 'MAX'>('1Y');
   const [hovered, setHovered] = useState<number | null>(null);
   const rows = useMemo(() => {
@@ -65,27 +65,29 @@ function PerformanceChart({ history }: { history: HistoryData | null }) {
     const cutoff = Date.parse(`${all.at(-1)!.date}T00:00:00Z`) - performanceRanges[range] * 86_400_000;
     return all.filter(point => Date.parse(`${point.date}T00:00:00Z`) >= cutoff);
   }, [history, range]);
-  const values = rows.map(point => point.returnPct).filter((value): value is number => value != null && Number.isFinite(value));
+  const validRows = rows.filter((point): point is PortfolioPoint & { returnPct: number } => point.returnPct != null && Number.isFinite(point.returnPct));
+  const values = validRows.map(point => point.returnPct);
   const low = values.length ? Math.min(...values, 0) : 0, high = values.length ? Math.max(...values, 0) : 0;
   const padding = Math.max((high - low) * .12, .01);
-  const x = (index: number) => 18 + index / Math.max(1, rows.length - 1) * 684;
+  const x = (index: number) => 18 + index / Math.max(1, validRows.length - 1) * 684;
   const y = (value: number) => 210 - (value - low + padding) / Math.max(.0001, high - low + padding * 2) * 180;
-  const path = rows.map((point, index) => point.returnPct == null ? '' : `${index ? 'L' : 'M'}${x(index).toFixed(2)},${y(point.returnPct).toFixed(2)}`).filter(Boolean).join(' ');
-  const last = rows.at(-1), selected = hovered == null ? last : rows[hovered];
+  const path = validRows.map((point, index) => `${index ? 'L' : 'M'}${x(index).toFixed(2)},${y(point.returnPct).toFixed(2)}`).join(' ');
+  const last = validRows.at(-1), selected = hovered == null ? last : validRows[hovered];
   const color = (last?.returnPct ?? 0) < 0 ? '#fb7185' : '#14d9a4';
+  const gradientId = useId().replaceAll(':', '');
   return <section className="portfolio-panel performance-panel">
     <div className="section-line"><div><h3>أداء المحفظة عبر الزمن</h3><p>الربح المحقق وغير المحقق مقارنة بإجمالي تكلفة المشتريات.</p></div><strong className={(last?.returnPct ?? 0) >= 0 ? 'pass' : 'fail'} dir="ltr">{pct(last?.returnPct)}</strong></div>
     <Tabs value={range} onValueChange={value => { setRange(value as typeof range); setHovered(null); }} dir="rtl" className="portfolio-range"><TabsList aria-label="فترة أداء المحفظة">{(['1M', '3M', '6M', '1Y', 'MAX'] as const).map(value => <TabsTrigger key={value} value={value}>{value === 'MAX' ? 'الكل' : value}</TabsTrigger>)}</TabsList></Tabs>
     <div className="portfolio-chart-frame">
-      {rows.length < 2 ? <div className="portfolio-chart-empty">أضف عملية مع تاريخ وسعر صحيحين ليظهر الأداء الزمني. لا نرسم خطًا من بيانات ناقصة.</div> : <>
+      {validRows.length < 2 ? <div className="portfolio-chart-empty">أضف عملية مع تاريخ وسعر صحيحين ليظهر الأداء الزمني. لا نرسم خطًا من بيانات ناقصة.</div> : <>
         <div className="portfolio-chart-tooltip"><b dir="ltr">{pct(selected?.returnPct)}</b><span dir="ltr">{selected?.date} · {usd(selected?.marketValue)}</span></div>
-        <svg viewBox="0 0 720 230" role="img" aria-label="رسم أداء المحفظة بالنسبة المئوية" tabIndex={0} onPointerMove={event => { const box = event.currentTarget.getBoundingClientRect(); setHovered(Math.round(Math.max(0, Math.min(1, (event.clientX - box.left) / box.width)) * (rows.length - 1))); }} onPointerLeave={() => setHovered(null)} onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); setHovered(index => Math.max(0, Math.min(rows.length - 1, (index ?? rows.length - 1) + (event.key === 'ArrowRight' ? 1 : -1)))); } }}>
-          <defs><linearGradient id="portfolio-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity=".28"/><stop offset="100%" stopColor={color} stopOpacity="0"/></linearGradient></defs>
+        <svg viewBox="0 0 720 230" role="img" aria-label={`أداء المحفظة من ${validRows[0].date} إلى ${last!.date}؛ العائد ${pct(last?.returnPct)}`} tabIndex={0} onPointerMove={event => { const box = event.currentTarget.getBoundingClientRect(); setHovered(Math.round(Math.max(0, Math.min(1, (event.clientX - box.left) / box.width)) * (validRows.length - 1))); }} onPointerLeave={() => setHovered(null)} onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); setHovered(index => Math.max(0, Math.min(validRows.length - 1, (index ?? validRows.length - 1) + (event.key === 'ArrowRight' ? 1 : -1)))); } }}>
+          <defs><linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity=".28"/><stop offset="100%" stopColor={color} stopOpacity="0"/></linearGradient></defs>
           <line x1="18" x2="702" y1={y(0)} y2={y(0)} stroke="#6b7280" strokeDasharray="5 5"/>
-          <path d={`${path} L702,220 L18,220 Z`} fill="url(#portfolio-fill)"/><path d={path} fill="none" stroke={color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
-          {selected?.returnPct != null && <><line x1={x(hovered ?? rows.length - 1)} x2={x(hovered ?? rows.length - 1)} y1="15" y2="220" stroke="#818cf8" strokeDasharray="3 4"/><circle cx={x(hovered ?? rows.length - 1)} cy={y(selected.returnPct)} r="5" fill={color}/></>}
+          <path d={`${path} L702,220 L18,220 Z`} fill={`url(#${gradientId})`}/><path d={path} fill="none" stroke={color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
+          <line x1={x(hovered ?? validRows.length - 1)} x2={x(hovered ?? validRows.length - 1)} y1="15" y2="220" stroke="#818cf8" strokeDasharray="3 4"/><circle cx={x(hovered ?? validRows.length - 1)} cy={y(selected!.returnPct)} r="5" fill={color}/>
         </svg>
-        <div className="chart-dates" dir="ltr"><span>{rows[0].date}</span><span dir="rtl">أدنى {pct(low)} · أعلى {pct(high)}</span><span>{rows.at(-1)!.date}</span></div>
+        <div className="chart-dates" dir="ltr"><span>{validRows[0].date}</span><span dir="rtl">أدنى {pct(low)} · أعلى {pct(high)}</span><span>{last!.date}</span></div>
       </>}
     </div>
     {!!history?.unavailable.length && <p className="portfolio-warning"><AlertTriangle size={16}/> التاريخ غير متاح حاليًا لـ {history.unavailable.join('، ')}؛ لم تُحوّل البيانات الناقصة إلى صفر.</p>}
@@ -109,12 +111,12 @@ function treemap(positions: PortfolioPosition[]) {
   return layout(values, 0, 0, 100, 100, 0);
 }
 
-function AllocationTreemap({ positions, onOpen }: { positions: PortfolioPosition[]; onOpen: (position: PortfolioPosition) => void }) {
+export function AllocationTreemap({ positions, onOpen }: { positions: PortfolioPosition[]; onOpen: (position: PortfolioPosition) => void }) {
   const nodes = useMemo(() => treemap(positions), [positions]);
   return <section className="portfolio-panel allocation-panel"><div className="section-line"><div><h3>توزيع المحفظة</h3><p>مساحة كل مستطيل تساوي وزن الشركة من القيمة الحالية.</p></div><span>{positions.length} مراكز</span></div>
-    <div className="portfolio-treemap" role="group" aria-label="توزيع مراكز المحفظة">{nodes.map(node => <button key={node.symbol} style={{ insetInlineStart: `${node.x}%`, top: `${node.y}%`, width: `${node.width}%`, height: `${node.height}%`, '--node-color': node.color } as React.CSSProperties} onClick={() => onOpen(node)} aria-label={`${node.symbol}، وزن ${pct(node.weight)}`}>
+    {nodes.length ? <div className="portfolio-treemap" role="group" aria-label="توزيع مراكز المحفظة">{nodes.map(node => <button key={node.symbol} style={{ insetInlineStart: `${node.x}%`, top: `${node.y}%`, width: `${node.width}%`, height: `${node.height}%`, '--node-color': node.color } as React.CSSProperties} onClick={() => onOpen(node)} aria-label={`${node.symbol}، وزن ${pct(node.weight)}`}>
       <CompanyLogo symbol={node.symbol} size={Math.max(28, Math.min(54, node.width * 1.2))}/><b dir="ltr">{node.symbol}</b><span dir="ltr">{pct(node.weight)}</span><small>{usd(node.marketValue)}</small>
-    </button>)}</div>
+    </button>)}</div> : <div className="portfolio-chart-empty">لا يمكن رسم التوزيع حتى يتوفر سعر موثوق لمركز واحد على الأقل.</div>}
   </section>;
 }
 
@@ -125,6 +127,7 @@ export default function PortfolioView({ onOpenCompany, onCountChange }: { onOpen
   const [query, setQuery] = useState(''), [results, setResults] = useState<SearchResult[]>([]), [searching, setSearching] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false), [detailLoading, setDetailLoading] = useState(false), [selected, setSelected] = useState<SearchResult | null>(null), [form, setForm] = useState<FormState>(emptyForm);
   const [deleteTransaction, setDeleteTransaction] = useState<PortfolioTransaction | null>(null);
+  const companyRequest = useRef<AbortController | null>(null);
 
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true);
@@ -138,7 +141,7 @@ export default function PortfolioView({ onOpenCompany, onCountChange }: { onOpen
     catch (error) { setError(error instanceof Error ? error.message : 'تعذّر تحميل المحفظة.'); }
     finally { setLoading(false); }
   }, [loadHistory, onCountChange]);
-  useEffect(() => { queueMicrotask(() => void refresh()); }, [refresh]);
+  useEffect(() => { queueMicrotask(() => void refresh()); return () => companyRequest.current?.abort(); }, [refresh]);
   useEffect(() => {
     if (query.trim().length < 1) return;
     const controller = new AbortController(), timer = window.setTimeout(() => {
@@ -149,13 +152,17 @@ export default function PortfolioView({ onOpenCompany, onCountChange }: { onOpen
   }, [query]);
 
   async function chooseCompany(company: SearchResult) {
+    companyRequest.current?.abort();
+    const controller = new AbortController();
+    companyRequest.current = controller;
     setSelected(company); setForm({ ...emptyForm(), symbol: company.symbol, price: company.price ? String(company.price) : '' }); setDialogOpen(true); setDetailLoading(true); setQuery(''); setResults([]);
     try {
-      const value = await apiJson<{ snapshot: Snapshot }>(`/api/company?symbol=${encodeURIComponent(company.symbol)}`);
+      const value = await apiJson<{ snapshot: Snapshot }>(`/api/company?symbol=${encodeURIComponent(company.symbol)}`, { signal: controller.signal });
+      if (controller.signal.aborted) return;
       setSelected({ ...company, name: value.snapshot.name, exchange: value.snapshot.exchange, sector: value.snapshot.sector, industry: value.snapshot.industry, price: value.snapshot.price });
       setForm(current => ({ ...current, price: current.price || (value.snapshot.price ? String(value.snapshot.price) : '') }));
-    } catch { setNotice('سيُحفظ السهم من دليل السوق؛ تعذّر تحديث ملفه العميق الآن.'); }
-    finally { setDetailLoading(false); }
+    } catch { if (!controller.signal.aborted) setNotice('سيُحفظ السهم من دليل السوق؛ تعذّر تحديث ملفه العميق الآن.'); }
+    finally { if (!controller.signal.aborted) setDetailLoading(false); }
   }
   function editTransaction(transaction: PortfolioTransaction) {
     setSelected({ symbol: transaction.symbol, name: transaction.companyName, exchange: transaction.metadata?.exchange, sector: transaction.metadata?.sector, industry: transaction.metadata?.industry });
@@ -220,8 +227,8 @@ export default function PortfolioView({ onOpenCompany, onCountChange }: { onOpen
       <section className="portfolio-panel transactions-panel"><div className="section-line"><div><h3>سجل العمليات</h3><p>كل تعديل يعيد بناء متوسط التكلفة والربح من أول عملية.</p></div><button className="text-button" onClick={openNewTransaction}><Plus size={16}/> عملية جديدة</button></div><div className="transactions-list">{data.transactions.map(transaction => <article key={transaction.id}><CompanyLogo symbol={transaction.symbol} size={38}/><div><b dir="ltr">{transaction.symbol}</b><small>{transaction.tradeDate}</small></div><span className={transaction.side === 'buy' ? 'buy-tag' : 'sell-tag'}>{transaction.side === 'buy' ? 'شراء' : 'بيع'}</span><div dir="ltr">{number(transaction.quantity)} × {usd(transaction.price)}</div><strong dir="ltr">{usd(transaction.quantity * transaction.price + (transaction.side === 'buy' ? transaction.fees : -transaction.fees))}</strong><div className="transaction-actions"><button onClick={() => editTransaction(transaction)} aria-label={`تعديل عملية ${transaction.symbol}`}><Pencil size={16}/></button><button onClick={() => setDeleteTransaction(transaction)} aria-label={`حذف عملية ${transaction.symbol}`}><Trash2 size={16}/></button></div></article>)}</div></section>
     </>}
 
-    <Dialog open={dialogOpen} onOpenChange={open => { setDialogOpen(open); if (!open) { setSelected(null); setForm(emptyForm()); setQuery(''); setResults([]); setSearching(false); } }}><DialogContent className="portfolio-dialog" dir="rtl" showCloseButton={false}><DialogClose className="absolute top-4 left-4" aria-label="إغلاق نافذة العملية"><X size={20}/></DialogClose><DialogTitle>{form.id ? 'تعديل العملية' : form.symbol ? `إضافة ${form.side === 'buy' ? 'شراء' : 'بيع'}` : 'اختر الشركة'}</DialogTitle><DialogDescription>{form.symbol ? 'أدخل بيانات العملية كما تظهر في كشف الوسيط. الأرقام بالدولار الأمريكي.' : 'ابحث برمز السهم أو اسم الشركة، ثم اخترها من النتائج.'}</DialogDescription>
-      {!form.symbol ? <div className="dialog-search"><Search size={18}/><input autoFocus value={query} onChange={event => { const value = event.target.value; setQuery(value); if (!value.trim()) { setResults([]); setSearching(false); } }} placeholder="مثال: SOFI أو Adobe"/>{!!results.length && <div className="portfolio-search-results in-dialog">{results.map(company => <button key={company.symbol} onClick={() => void chooseCompany(company)}><CompanyLogo symbol={company.symbol}/><span><b dir="ltr">{company.symbol}</b><small>{company.name}</small></span></button>)}</div>}</div> : <form className="transaction-form" onSubmit={saveTransaction}><div className="transaction-company"><CompanyLogo symbol={form.symbol} size={52}/><div><b dir="ltr">{form.symbol}</b><p dir="auto">{selected?.name || data?.quotes[form.symbol]?.name || form.symbol}</p><small>{detailLoading ? 'جارٍ تحديث بيانات الشركة…' : [selected?.exchange, selected?.sector].filter(Boolean).join(' · ')}</small></div></div><div className="side-toggle"><button type="button" className={form.side === 'buy' ? 'active buy' : ''} onClick={() => setForm(value => ({ ...value, side: 'buy' }))}>شراء</button><button type="button" className={form.side === 'sell' ? 'active sell' : ''} onClick={() => setForm(value => ({ ...value, side: 'sell' }))}>بيع</button></div>{form.side === 'sell' && <p className="available-shares">المتاح للبيع حاليًا: <b dir="ltr">{number(availableToSell)}</b> سهم</p>}<div className="form-grid"><label>عدد الأسهم<input required min="0.000001" step="any" inputMode="decimal" type="number" value={form.quantity} onChange={event => setForm(value => ({ ...value, quantity: event.target.value }))}/></label><label>السعر لكل سهم<input required min="0.000001" step="any" inputMode="decimal" type="number" value={form.price} onChange={event => setForm(value => ({ ...value, price: event.target.value }))}/></label><label>العمولة والرسوم<input min="0" step="any" inputMode="decimal" type="number" value={form.fees} onChange={event => setForm(value => ({ ...value, fees: event.target.value }))}/></label><label>تاريخ العملية<input required max={today()} type="date" value={form.tradeDate} onChange={event => setForm(value => ({ ...value, tradeDate: event.target.value }))}/></label></div><label>ملاحظة اختيارية<textarea maxLength={500} value={form.note} onChange={event => setForm(value => ({ ...value, note: event.target.value }))} placeholder="سبب الدخول، رقم الأمر، أو ملاحظة للمراجعة"/></label><div className="transaction-preview"><span>{form.side === 'buy' ? 'تكلفة العملية' : 'صافي البيع قبل حساب تكلفة المركز'}</span><b dir="ltr">{usd((Number(form.quantity) || 0) * (Number(form.price) || 0) + (form.side === 'buy' ? 1 : -1) * (Number(form.fees) || 0))}</b></div><button className="scan-button save-transaction" disabled={busy || !form.quantity || !form.price}>{busy ? 'جارٍ الحفظ…' : 'حفظ وإعادة الحساب'}</button></form>}
+    <Dialog open={dialogOpen} onOpenChange={open => { setDialogOpen(open); if (!open) { companyRequest.current?.abort(); setDetailLoading(false); setSelected(null); setForm(emptyForm()); setQuery(''); setResults([]); setSearching(false); } }}><DialogContent className="portfolio-dialog" dir="rtl" showCloseButton={false}><DialogClose className="absolute top-4 left-4" aria-label="إغلاق نافذة العملية"><X size={20}/></DialogClose><DialogTitle>{form.id ? 'تعديل العملية' : form.symbol ? `إضافة ${form.side === 'buy' ? 'شراء' : 'بيع'}` : 'اختر الشركة'}</DialogTitle><DialogDescription>{form.symbol ? 'أدخل بيانات العملية كما تظهر في كشف الوسيط. الأرقام بالدولار الأمريكي.' : 'ابحث برمز السهم أو اسم الشركة، ثم اخترها من النتائج.'}</DialogDescription>
+      {!form.symbol ? <div className="dialog-search"><Search size={18}/><input autoFocus aria-label="ابحث عن شركة للعملية" value={query} onChange={event => { const value = event.target.value; setQuery(value); if (!value.trim()) { setResults([]); setSearching(false); } }} placeholder="مثال: SOFI أو Adobe"/>{!!results.length && <div className="portfolio-search-results in-dialog">{results.map(company => <button key={company.symbol} onClick={() => void chooseCompany(company)}><CompanyLogo symbol={company.symbol}/><span><b dir="ltr">{company.symbol}</b><small>{company.name}</small></span></button>)}</div>}</div> : <form className="transaction-form" onSubmit={saveTransaction}><div className="transaction-company"><CompanyLogo symbol={form.symbol} size={52}/><div><b dir="ltr">{form.symbol}</b><p dir="auto">{selected?.name || data?.quotes[form.symbol]?.name || form.symbol}</p><small>{detailLoading ? 'جارٍ تحديث بيانات الشركة…' : [selected?.exchange, selected?.sector].filter(Boolean).join(' · ')}</small></div></div><div className="side-toggle" role="group" aria-label="نوع العملية"><button type="button" aria-pressed={form.side === 'buy'} className={form.side === 'buy' ? 'active buy' : ''} onClick={() => setForm(value => ({ ...value, side: 'buy' }))}>شراء</button><button type="button" aria-pressed={form.side === 'sell'} className={form.side === 'sell' ? 'active sell' : ''} onClick={() => setForm(value => ({ ...value, side: 'sell' }))}>بيع</button></div>{form.side === 'sell' && <p className="available-shares">المتاح للبيع حاليًا: <b dir="ltr">{number(availableToSell)}</b> سهم</p>}<div className="form-grid"><label>عدد الأسهم<input required min="0.000001" step="any" inputMode="decimal" type="number" value={form.quantity} onChange={event => setForm(value => ({ ...value, quantity: event.target.value }))}/></label><label>السعر لكل سهم<input required min="0.000001" step="any" inputMode="decimal" type="number" value={form.price} onChange={event => setForm(value => ({ ...value, price: event.target.value }))}/></label><label>العمولة والرسوم<input min="0" step="any" inputMode="decimal" type="number" value={form.fees} onChange={event => setForm(value => ({ ...value, fees: event.target.value }))}/></label><label>تاريخ العملية<input required max={today()} type="date" value={form.tradeDate} onChange={event => setForm(value => ({ ...value, tradeDate: event.target.value }))}/></label></div><label>ملاحظة اختيارية<textarea maxLength={500} value={form.note} onChange={event => setForm(value => ({ ...value, note: event.target.value }))} placeholder="سبب الدخول، رقم الأمر، أو ملاحظة للمراجعة"/></label><div className="transaction-preview"><span>{form.side === 'buy' ? 'تكلفة العملية' : 'صافي البيع قبل حساب تكلفة المركز'}</span><b dir="ltr">{usd((Number(form.quantity) || 0) * (Number(form.price) || 0) + (form.side === 'buy' ? 1 : -1) * (Number(form.fees) || 0))}</b></div><button className="scan-button save-transaction" disabled={busy || !form.quantity || !form.price}>{busy ? 'جارٍ الحفظ…' : 'حفظ وإعادة الحساب'}</button></form>}
     </DialogContent></Dialog>
 
     <AlertDialog open={!!deleteTransaction} onOpenChange={open => { if (!open) setDeleteTransaction(null); }}><AlertDialogContent dir="rtl"><AlertDialogHeader><AlertDialogTitle>حذف عملية {deleteTransaction?.symbol}؟</AlertDialogTitle><AlertDialogDescription>سيُعاد حساب كل المراكز والأرباح من السجل المتبقي. لن يتم الحذف إذا أدى إلى بيع أسهم أكثر من الرصيد.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>إلغاء</AlertDialogCancel><AlertDialogAction onClick={() => void removeTransaction()} disabled={busy}>حذف العملية</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>

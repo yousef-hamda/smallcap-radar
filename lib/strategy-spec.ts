@@ -8,7 +8,7 @@
 export const SPECS = {
   core: {
     id: 'CORE_VALUE_V2',
-    version: '2.3.0-draft.1-weighted-factors',
+    version: '2.5.0-draft.1-thesis-gates',
     marketCap: { min: 25e6, max: 2e9 },
     liquidity: 150e3,
     liquidityMetric: 'medianDollarVolume20d',
@@ -17,7 +17,7 @@ export const SPECS = {
       Valuation: 24,
       Quality: 19,
       'Share Discipline': 15,
-      'Small Size + Low Coverage': 14,
+      'Small Size + Execution Liquidity': 14,
       Growth: 7,
       'Insider Buying': 7,
       'Margin Trend': 6,
@@ -27,24 +27,24 @@ export const SPECS = {
     freshnessDays: 3,
     filingFreshnessDays: 200,
     score: { growthMin: -0.1, growthMax: 0.3, marginMin: -0.1, marginMax: 0.1, insiderScale: 0.01, entryAnchor: -0.1, entryRange: 0.6, liquidityCeiling: 3e6 },
-    // Only data integrity and marketability safety can block a ranking row.
-    // Economic thesis inputs are factors: they add or remove weighted points.
-    eligibilityGateIds: ['security', 'criticalData', 'freshness', 'filingFreshness', 'conflict'],
-    factorCheckIds: ['cap', 'liquidity', 'revenue', 'valuation', 'profitability', 'deathSpiral'],
+    // Category membership follows the documented Core screen. The weighted
+    // score only orders companies that pass every evidenced thesis gate.
+    eligibilityGateIds: ['security', 'cap', 'liquidity', 'revenue', 'valuation', 'profitability', 'deathSpiral', 'criticalData', 'freshness', 'filingFreshness', 'conflict'],
+    factorCheckIds: ['revenue', 'valuation', 'profitability', 'deathSpiral'],
     model: {
       id: 'CORE_DIAGNOSTIC_BASELINE',
-      version: 'diagnostic-2.3.0-weighted-factors',
+      version: 'diagnostic-2.5.0-thesis-gates',
       validation: 'blocked' as const,
       objective: '12–24 month benchmark-relative risk-adjusted return',
       probabilityAvailable: false,
       dataset: { rows: 0, companies: 0, months: 0, pointInTime: false, delisted: false },
     },
     scoreStatus: 'diagnostic-awaiting-historical-validation',
-    policy: 'بوابات السلامة منفصلة عن عوامل الترتيب. عوامل القيمة والربحية والسيولة والحجم موزونة؛ الصيغة قابلة لإعادة الحساب لكنها غير معتمدة تنبؤياً بعد.',
+    policy: 'الإيرادات والتقييم والربحية ومراجعة مخاطر التمويل بوابات أهلية. الدرجة التشخيصية ترتب فقط من يجتازها وليست احتمال ربح.',
   },
   bounce: {
     id: 'BOUNCE_V2',
-    version: '2.3.0-draft.1-weighted-factors',
+    version: '2.5.0-draft.1-thesis-gates',
     marketCap: { min: 25e6, max: 600e6 },
     liquidity: 150e3,
     liquidityMetric: 'medianDollarVolume20d',
@@ -63,13 +63,13 @@ export const SPECS = {
       offLowRange: 0.55,
     },
     exit: { target: 0.2, stop: -0.15, months: 3 },
-    // Bounce thesis conditions are weighted factors. Only data integrity and
-    // tradability safety can block the row from the ranked category list.
-    eligibilityGateIds: ['security', 'criticalData', 'freshness', 'conflict'],
-    factorCheckIds: ['cap', 'liquidity', 'collapse', 'low', 'dilution', 'reversal'],
+    // Bounce is a conjunctive screen: the decline, move off the low, reviewed
+    // dilution and reversal must all pass before the score ranks a candidate.
+    eligibilityGateIds: ['security', 'cap', 'liquidity', 'collapse', 'low', 'dilution', 'reversal', 'criticalData', 'freshness', 'conflict'],
+    factorCheckIds: ['collapse', 'low', 'dilution', 'reversal'],
     model: {
       id: 'BOUNCE_DIAGNOSTIC_BASELINE',
-      version: 'diagnostic-2.3.0-weighted-factors',
+      version: 'diagnostic-2.5.0-thesis-gates',
       validation: 'blocked' as const,
       objective: '3-month net risk-adjusted utility; +20% target before −15% stop reported separately',
       probabilityAvailable: false,
@@ -77,7 +77,7 @@ export const SPECS = {
     },
     weights: {},
     scoreStatus: 'diagnostic-awaiting-historical-validation',
-    policy: 'بوابات السلامة تتحقق من صلاحية البيانات والتداول فقط. عوامل الارتداد الستة تساهم بأوزان مجموعها 100 ولا تمثل احتمال الربح.',
+    policy: 'شروط الهبوط والابتعاد عن القاع والتخفيف المراجَع والانعكاس بوابات أهلية. الأوزان ترتب المؤهلين ولا تمثل احتمال الربح.',
   },
   legacy: {
     id: 'LEGACY_BENCHMARK',

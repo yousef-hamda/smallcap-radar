@@ -2,7 +2,7 @@ import { db, ensureSchema } from '@/lib/storage';
 import { visitor } from '@/lib/visitor';
 
 const symbolPattern = /^[A-Z][A-Z0-9.^-]{0,15}$/;
-const imageHeaders = (contentType: string) => ({ 'Content-Type': contentType, 'Cache-Control': 'public, max-age=86400, stale-while-revalidate=604800', 'X-Content-Type-Options': 'nosniff' });
+const imageHeaders = (contentType: string) => ({ 'Content-Type': contentType, 'Cache-Control': 'public, max-age=86400, stale-while-revalidate=604800', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; sandbox" });
 
 function fallback(symbol: string) {
   let hash = 0;
@@ -19,7 +19,8 @@ async function safeImage(url: string) {
     const response = await fetch(url, { headers: { Accept: 'image/png,image/svg+xml,image/webp,image/x-icon;q=0.8' }, redirect: 'error', signal: AbortSignal.timeout(4_000) });
     const contentType = response.headers.get('content-type') || '';
     const length = Number(response.headers.get('content-length') || 0);
-    if (!response.ok || !contentType.toLowerCase().startsWith('image/') || length > 500_000) return null;
+    const mediaType=contentType.toLowerCase().split(';',1)[0].trim();
+    if (!response.ok || !['image/png','image/jpeg','image/webp','image/x-icon','image/vnd.microsoft.icon'].includes(mediaType) || length > 500_000) return null;
     const bytes = await response.arrayBuffer();
     if (!bytes.byteLength || bytes.byteLength > 500_000) return null;
     return new Response(bytes, { headers: imageHeaders(contentType) });
