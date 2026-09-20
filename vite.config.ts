@@ -12,7 +12,7 @@ const { d1, r2 } = hostingConfig;
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
 const railwayHost = process.env.RAILWAY_PUBLIC_DOMAIN;
 const railwayPort = Number.parseInt(process.env.PORT || "", 10);
-const allowedHosts = ["terminal.local", railwayHost].filter(
+const allowedHosts = ["terminal.local", ".up.railway.app", railwayHost].filter(
   (host): host is string => Boolean(host),
 );
 
