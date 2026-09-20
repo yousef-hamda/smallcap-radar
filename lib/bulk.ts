@@ -242,7 +242,9 @@ export async function fetchBulkFundamentals(candidateCiks: number[], asOf = new 
 
 function frameProvenance(fact: StoredFact, retrievedAt: string): Provenance {
   return {
-    source: fact.fallback ? 'SEC EDGAR XBRL Frames — official dated fallback snapshot' : fact.kind === 'companyfacts' ? 'SEC EDGAR Company Facts (official)' : 'SEC EDGAR XBRL Frames (official)',
+    source: fact.fallback
+      ? fact.kind === 'companyfacts' ? 'SEC EDGAR Company Facts — official dated fallback snapshot' : 'SEC EDGAR XBRL Frames — official dated fallback snapshot'
+      : fact.kind === 'companyfacts' ? 'SEC EDGAR Company Facts (official)' : 'SEC EDGAR XBRL Frames (official)',
     url: fact.url,
     periodStart: fact.start,
     periodEnd: fact.end,

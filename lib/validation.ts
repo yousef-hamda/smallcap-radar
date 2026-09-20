@@ -6,7 +6,7 @@ export const snapshotSchema=z.object({symbol:z.string().regex(/^[A-Z0-9.^-]{1,16
 export const completeSnapshotSchema=snapshotSchema.extend({
  shareCountRatio:number,dailyChange:number,cash:number,debt:number,fcfYield:number,revenueGrowth:number,operatingMarginTrend:number,grossMargin:number,high52w:number,volume:number,averageVolume10d:number,
  analystTarget:number,targetMean:number,targetLow:number,targetHigh:number,analystCount:number,employees:number,insiderBuyValue:number,
- description:z.string().max(20000).optional(),descriptionAr:z.string().max(20000).optional(),sector:z.string().max(200).optional(),industry:z.string().max(200).optional(),
+ description:z.string().max(20000).optional(),descriptionAr:z.string().max(20000).optional(),website:z.string().url().max(500).optional(),sector:z.string().max(200).optional(),industry:z.string().max(200).optional(),
  nextEarnings:z.string().max(40).nullable().optional(),lastEarnings:z.string().max(40).nullable().optional(),lastEarningsStatus:z.enum(['إيجابي','سلبي','مختلط','غير معروف']).optional(),
  surprises:z.array(z.object({quarter:z.string().max(40),surprisePct:number,actual:number,estimate:number})).max(30).optional(),
  revenueTrend:z.array(z.object({quarter:z.string().max(40),value:z.number().finite(),periodEnd:z.string().optional()})).max(50).optional(),

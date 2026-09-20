@@ -1,6 +1,6 @@
 # Small-Cap Radar V2
 
-**Deployment update:** version 71 was published successfully on 2026-09-11 from commit `a1095b5b0a3345f5f02cd21b0778011312baadca`. [Release record](docs/DEPLOYMENT_71.md). Browser/device acceptance remains evidence-gated.
+**Production:** releases are built from the pushed source commit, saved as an immutable Sites version, then deployed after automated and browser acceptance. Historical release records remain under `docs/DEPLOYMENT_*.md`; physical-phone notification receipt remains evidence-gated.
 
 **حملة التحسين الحالية:** راجع [التغييرات والأدلة والفجوات](docs/IMPROVEMENT_CAMPAIGN_2026_09_08.md). ملاحظات الإصدارات الأقدم أدناه تاريخية؛ لا تثبت أداء النسخة الحالية أو اكتمال القبول.
 
@@ -12,7 +12,8 @@ Arabic RTL mobile-first PWA, published through Sites. It is a working research p
 
 ## Implemented
 
-- Professional Arabic RTL research terminal with desktop stock cards, responsive mobile layout, Core/Bounce/favorites tabs, company gate/evidence sheet, seven chart periods including an on-demand 1D intraday view, persistent favorites, JSON snapshot import and audit export.
+- Professional Arabic RTL research terminal with desktop stock cards, responsive mobile layout, Core/Bounce/favorites/portfolio tabs, company gate/evidence sheet, seven chart periods including an on-demand 1D intraday view, persistent favorites, JSON snapshot import and audit export.
+- Private durable portfolio ledger with stock search, buy/sell transactions, weighted-average cost, fees, realized/unrealized P&L, live batched quotes with dated fallback, sourced historical performance, allocation treemap, company logos with deterministic fallback, concentration/sector alerts, strategy-weighted diagnostics and CSV export. See [PORTFOLIO_AR.md](docs/PORTFOLIO_AR.md).
 - Cloudflare D1 self-initializing schema and migrations, immutable run identifiers and per-run snapshots/evaluations, explicit provider errors and a server-owned cursor with lease/offset concurrency protection. The background baton is implemented, but its production continuation must be re-verified after the authentication fix; see `docs/DIAGNOSTIC_REPORT_AR.md`.
 - Standards-based Web Push completion notifications with VAPID signing and an explicit subscribe-and-test panel. On iPhone, install the PWA on the Home Screen, open it from the icon, and use the separate **تفعيل الإشعارات** and **اختبار الإشعار** buttons.
 - The full scan follows a bulk-first architecture: the current Nasdaq/NYSE directory and SEC ticker-to-CIK map are loaded in bulk, quotes are requested in groups, 13 SEC XBRL Frames datasets plus optional IFRS overlays are merged, and a resumable Company Facts recovery stage fills missing standard facts per CIK before evaluation. Evaluation runs in bounded pages of 200 companies. Exact 20-session liquidity and historical Bounce metrics are verified from dated bars only for surviving candidates; a 10-day volume proxy never passes a gate. Bundled official SEC/Nasdaq data remain a dated, labeled fallback.
@@ -21,11 +22,11 @@ Arabic RTL mobile-first PWA, published through Sites. It is a working research p
 - Conservative SEC annual + current YTD − prior YTD normalization, provenance, foreign-filer flag, unavailable-data handling. Some issuers require custom taxonomy support and remain incomplete.
 - PIT availability filter, deterministic firm holdout assignment, firm bootstrap, Bonferroni correction, conservative Bounce exit simulation and costs.
 - Web manifest and icons; device cache stores the last viewed snapshot; offline fallback reading is not implemented in the rebuilt UI. Installation and notification receipt still require final verification on the owner's physical phone; server-side VAPID request generation is covered by automated tests.
-- 48 engine/normalization tests and 30 runtime/API/provider tests currently pass. The release workflow also reruns UI/Web-Push and SQLite tests, TypeScript checking, ESLint and a verified production build before publication.
+- 55 engine/normalization tests, 43 runtime/API/provider tests and 17 build/UI/research tests currently pass. The release workflow also reruns TypeScript checking, ESLint and a verified production build before publication.
 
 ## Not complete / not validated
 
-Read [the requirement ledger](docs/ACCEPTANCE.md). Major remaining gaps: complete Form 4 ingestion (P-only utility exists), a licensed secondary fundamentals source, company news/analyst enrichment, production factor normalization, paper portfolio, full historical backtesting/reporting UI, immutable consumed holdout workflow, failure-injection gates and shadow run. Current SEC Frames provide debt/cash/share fields where reported, but coverage is not universal and split-adjusted dilution remains review-only.
+Read [the requirement ledger](docs/ACCEPTANCE.md). Major remaining gaps: complete Form 4 ingestion (P-only utility exists), a licensed secondary fundamentals source, company news/analyst enrichment, production factor normalization, full historical backtesting/reporting UI, immutable consumed holdout workflow, failure-injection gates and shadow run. Current SEC Frames provide debt/cash/share fields where reported, but coverage is not universal and split-adjusted dilution remains review-only.
 
 The supplied README PDFs and ten screenshots were located. The old website and its public client code were inspected directly. Its server implementation and original point-in-time historical dataset remain unavailable here. Original historical success rates cannot be reproduced or asserted. Inflection, death spiral, factor normalization and several operating conventions were explicitly unresolved in the supplied plan. Final research ranking remains disabled.
 
@@ -54,6 +55,9 @@ Operational conventions: 20-day median dollar volume for Core and Bounce (Bounce
 - `GET /api/radar?strategy=core|bounce|favorites&limit=150&offset=0`: paged snapshots for the selected ranking (all rows, highest current 0–100 score first; unrated rows last) plus separate qualified/unknown counts; explicit `dataRunId` identifies displayed data. This bounded contract avoids returning the full historical snapshot table in one response.
 - `GET /api/company?symbol=...`: on-demand deep verification using detailed history and SEC Company Facts, cached for 30 minutes; this deliberately stays outside the market-wide hot path.
 - `GET /api/chart?symbol=...`: on-demand current-session 5-minute chart data for the 1D period, with bounded caching and explicit Arabic provider errors.
+- `GET|POST|PUT|DELETE /api/portfolio`: private owner-scoped ledger, bounded company-directory search and recalculated position/return summary. Mutations are same-origin and overselling is rejected against the full chronological ledger.
+- `GET /api/portfolio-history`: aggregate performance series from sourced historical bars, cached for six hours. Stale or absent prices are not converted to zero and cannot silently bridge a chart gap.
+- `GET /api/portfolio-logo?symbol=...`: bounded image proxy using a public symbol-logo source, then the verified company favicon when known, then an explicit ticker-mark fallback.
 - `POST /api/radar`: same-origin `{action:'favorite',symbol,saved:boolean}` or `{action:'import',records: Snapshot[]}`. Favorites are private by platform identity or opaque visitor cookie and stored in D1. A new visitor starts with zero; legacy global favorites are not migrated to an arbitrary owner. Import max 500 records / 4MB; rejects duplicate symbols and malformed provenance.
 - `POST /api/background-scan/start`: starts or revives a server-owned quick/full scan and returns immediately. The Worker passes a signed internal baton between bounded stages/pages, so browser suspension does not control progress.
 - `POST /api/background-scan/resume`: same-origin recovery kick for an expired scan lease. The client may call it after observing a stale run; the scan cursor, retry queue and results remain server-owned.

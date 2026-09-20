@@ -43,6 +43,13 @@
       "when": 1788893091256,
       "tag": "0005_freezing_warlock",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1789898937717,
+      "tag": "0006_sparkling_war_machine",
+      "breakpoints": true
     }
   ]
 }

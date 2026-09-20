@@ -10,3 +10,21 @@ export const holdouts=sqliteTable('holdout_sets',{firmId:text('firm_id').primary
 export const backtests=sqliteTable('backtest_runs',{id:text('id').primaryKey(),createdAt:text('created_at').notNull(),strategyHash:text('strategy_hash').notNull(),datasetVersion:text('dataset_version').notNull(),parameters:text('parameters').notNull(),metrics:text('metrics').notNull()});
 export const pushSubscriptions=sqliteTable('push_subscriptions',{endpoint:text('endpoint').primaryKey(),owner:text('owner').notNull().default(''),subscription:text('subscription').notNull(),createdAt:text('created_at').notNull(),lastSuccessAt:text('last_success_at'),failureCount:integer('failure_count').notNull().default(0)});
 export const bulkFundamentals=sqliteTable('bulk_fundamentals',{runId:text('run_id').notNull(),cik:integer('cik').notNull(),payload:text('payload').notNull()});
+export const portfolioTransactions=sqliteTable('portfolio_transactions',{
+ id:text('id').primaryKey(),
+ owner:text('owner').notNull(),
+ symbol:text('symbol').notNull(),
+ companyName:text('company_name').notNull(),
+ side:text('side').notNull(),
+ quantity:real('quantity').notNull(),
+ price:real('price').notNull(),
+ fees:real('fees').notNull().default(0),
+ tradeDate:text('trade_date').notNull(),
+ note:text('note').notNull().default(''),
+ metadata:text('metadata').notNull().default('{}'),
+ createdAt:text('created_at').notNull(),
+ updatedAt:text('updated_at').notNull(),
+},t=>[
+ index('idx_portfolio_owner_date').on(t.owner,t.tradeDate,t.id),
+ index('idx_portfolio_owner_symbol_date').on(t.owner,t.symbol,t.tradeDate,t.id),
+]);

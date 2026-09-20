@@ -84,11 +84,11 @@ test("renders sidebar skeletons deterministically", async () => {
   assert.match(first, /--skeleton-width:70%/);
 });
 
-test('radar initially has three primary lists, zero personal favorites and no bottom navigation', async()=>{
+test('radar has the two strategies, favorites and a dedicated portfolio without bottom navigation', async()=>{
  const {default:Radar}=await vite.ssrLoadModule('/app/page.tsx');
  const html=renderToStaticMarkup(React.createElement(Radar));
  assert.match(html,/رادار الشركات الصغيرة/);assert.match(html,/aria-label="المفضلة: 0"/);
- assert.equal((html.match(/role="tab"/g)||[]).length,3);
+ assert.equal((html.match(/role="tab"/g)||[]).length,4);assert.match(html,/محفظتي/);
  assert.doesNotMatch(html,/bottom-nav|terminal-shell|sidebar-head/);
 });
 

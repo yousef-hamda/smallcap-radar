@@ -1,7 +1,7 @@
 'use client';
 
 import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
-import {Star,RefreshCw,Download,Bell,Database,Search,X,ChevronDown} from 'lucide-react';
+import {Star,RefreshCw,Download,Bell,Database,Search,X,ChevronDown,BriefcaseBusiness} from 'lucide-react';
 import {Tabs,TabsList,TabsTrigger} from '@/components/ui/tabs';
 import {Progress} from '@/components/ui/progress';
 import {Dialog,DialogContent,DialogTitle,DialogDescription,DialogClose} from '@/components/ui/dialog';
@@ -13,10 +13,11 @@ import CompanySheet from './company-sheet';
 import ScanReport from './scan-report';
 import {apiJson} from '@/lib/client-json';
 import {VALIDATION_REPORT} from '@/lib/validation-report';
+import PortfolioView from './portfolio-view';
 
-type View='core'|'bounce'|'favorites';
-type RadarData={run:ScanRun|null;dataRun:ScanRun|null;dataRunId?:string;snapshots:Snapshot[];favorites:string[];coverage?:{runId:string;total:number;fields:Record<string,number>}|null;summary:{total:number;coreQualified:number;bounceQualified:number;coreRanked?:number;bounceRanked?:number;coreUnknown:number;bounceUnknown:number;coreFailed?:number;bounceFailed?:number;stale?:boolean};page:{hasMore:boolean;offset?:number}};
-const names:Record<View,string>={bounce:'فرص الارتداد',core:'القيمة الأساسية',favorites:'المفضلة'};
+type View='core'|'bounce'|'favorites'|'portfolio';
+type RadarData={run:ScanRun|null;dataRun:ScanRun|null;dataRunId?:string;snapshots:Snapshot[];favorites:string[];portfolioCount?:number;coverage?:{runId:string;total:number;fields:Record<string,number>}|null;summary:{total:number;coreQualified:number;bounceQualified:number;coreRanked?:number;bounceRanked?:number;coreUnknown:number;bounceUnknown:number;coreFailed?:number;bounceFailed?:number;stale?:boolean};page:{hasMore:boolean;offset?:number}};
+const names:Record<View,string>={bounce:'فرص الارتداد',core:'القيمة الأساسية',favorites:'المفضلة',portfolio:'محفظتي'};
 const request=apiJson;
 const post=(data:unknown)=>({method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
 
@@ -26,6 +27,7 @@ export default function RadarApp(){
  const [loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
  const [selected,setSelected]=useState<Snapshot|null>(null),[selectedEvaluation,setSelectedEvaluation]=useState<ReturnType<typeof evaluateStrategy>|null>(null),[detailLoading,setDetailLoading]=useState(false),[detailError,setDetailError]=useState('');
  const [reportOpen,setReportOpen]=useState(false);
+ const [portfolioCount,setPortfolioCount]=useState(0);
  const [settings,setSettings]=useState(false),[notificationBusy,setNotificationBusy]=useState(false),[saving,setSaving]=useState<string|null>(null);
  const [hasMore,setHasMore]=useState(false),[copied,setCopied]=useState('');
  const selection=useRef<AbortController|null>(null),lastView=useRef({view,search}),listRequest=useRef<AbortController|null>(null);
@@ -37,7 +39,7 @@ export default function RadarApp(){
   try{
    const payload=await request<RadarData>(`/api/radar?strategy=${view}&q=${encodeURIComponent(search)}&limit=40&offset=${offset}`,{signal:controller.signal});
    if(controller.signal.aborted)return;
-   setData(payload);if(version===favoriteVersion.current&&!favoritePending.current)setFavorites(payload.favorites);setHasMore(payload.page.hasMore);cursor.current=offset+payload.snapshots.length;setError('');
+   setData(payload);if(version===favoriteVersion.current&&!favoritePending.current)setFavorites(payload.favorites);setPortfolioCount(payload.portfolioCount??0);setHasMore(payload.page.hasMore);cursor.current=offset+payload.snapshots.length;setError('');
    setRows(old=>append?[...old,...payload.snapshots.filter(s=>!old.some(p=>p.symbol===s.symbol))]:payload.snapshots);
    void saveOffline({savedAt:new Date().toISOString(),run:payload.dataRun,snapshots:payload.snapshots}).catch(()=>{});
   }catch(e){if(!controller.signal.aborted)setError(e instanceof Error?e.message:'تعذّر تحميل البيانات');}
@@ -125,7 +127,8 @@ export default function RadarApp(){
    {data?.summary.stale&&<div className="message" role="status"><span>أُعيد تقييم آخر لقطة محفوظة بالمحرك الحالي حتى لا تختفي النتائج. ابدأ فحصًا جديدًا لتحديث البيانات وربطها بهذه النسخة.</span><button onClick={()=>scan()} disabled={busy||progress.active}>تحديث الآن</button></div>}
    {(data?.run||busy)&&<section className="scan-panel" aria-label="تقدم فحص السوق"><div className="scan-heading"><b>{busy&&!data?.run?'تجهيز الفحص':progress.phase}</b><strong dir="ltr">{progress.percent.toFixed(2)}<small> / 100.00%</small></strong></div><Progress value={progress.percent} aria-label="تقدم فحص السوق" aria-valuetext={`${progress.percent.toFixed(2)} بالمئة، ${progress.phase}`}/><div className="scan-meta"><span>{(([4,5,10].includes(data?.run?.stage??-1)?data?.run?.offset:data?.run?.processed)??0).toLocaleString('en-US')} / {(data?.run?.total??0).toLocaleString('en-US')} في المرحلة</span><span>{progress.active?'الفحص مستمر على الخادم':data?.run?.failed?`${data.run.failed} شركة تعذّر جلب تاريخها`:'النتائج محفوظة'}</span></div>{data?.run?.error&&<p className="muted">{data.run.error}</p>}<details><summary>تفاصيل التقدم</summary><p>النسبة تمثل مراحل العمل المنجزة، وليست نسبة الوقت المتبقي. تتحرك فقط مع تقدم محفوظ من الخادم؛ مرحلة الاستعادة تعرض عدد الشركات التي تمت معالجتها.</p><p dir="ltr">{data?.run?.id}</p><p>آخر تحديث: {data?.run?.updated_at||'بانتظار الخادم'}</p></details></section>}
    {(data?.run||data?.dataRun)&&<p><button className="text-button" onClick={()=>{setReportOpen(true);setSettings(true)}}>عرض نتائج الجولة وأسباب عدم التأهيل</button>{data?.run&&data?.dataRun&&data.run.id!==data.dataRun.id&&<span> · القوائم تعرض آخر نتيجة محفوظة؛ تقرير الجولة يعرض الفحص الأحدث.</span>}</p>}
-   <Tabs value={view} onValueChange={v=>{setView(v as View);setQuery('');setSearch('')}} dir="rtl" className="main-tabs"><TabsList aria-label="القوائم الرئيسية">{(['bounce','core','favorites'] as View[]).map(v=><TabsTrigger key={v} value={v} className={v}>{names[v]} <span>({v==='favorites'?favorites.length:v==='core'?data?.summary.coreRanked??0:data?.summary.bounceRanked??0})</span></TabsTrigger>)}</TabsList></Tabs>
+   <Tabs value={view} onValueChange={v=>{setView(v as View);setQuery('');setSearch('')}} dir="rtl" className="main-tabs"><TabsList aria-label="القوائم الرئيسية">{(['bounce','core','favorites','portfolio'] as View[]).map(v=><TabsTrigger key={v} value={v} className={v}>{v==='portfolio'&&<BriefcaseBusiness size={16}/>} {names[v]} <span>({v==='portfolio'?portfolioCount:v==='favorites'?favorites.length:v==='core'?data?.summary.coreRanked??0:data?.summary.bounceRanked??0})</span></TabsTrigger>)}</TabsList></Tabs>
+   {view==='portfolio'?<PortfolioView onOpenCompany={snapshot=>void openCompany(snapshot,null)} onCountChange={setPortfolioCount}/>:<>
    <section className={`strategy-brief ${view}`}>
     {view==='favorites'?<><div className="section-line"><h2>المفضلة ({favorites.length})</h2><button className="text-button" onClick={()=>setView('bounce')}>عودة للكل</button></div><p>قائمتك الخاصة. الحفظ لا يجعل السهم مؤهلًا للاستراتيجية.</p></>:<>
      <p>{view==='bounce'?<>فرص ارتداد قصيرة الأجل نحو <b>+20%</b>. الهبوط، القاع، التخفيف، والانعكاس أعلى MA30W عوامل موزونة؛ الدرجة ترتب كل شركة من 100 حسب قربها من الفئة.</>:<>ترتيب قيمة طويلة الأجل يجمع التقييم والربحية والنمو والميزانية. الإيرادات، التقييم، الربحية، السيولة والحجم عوامل موزونة؛ الدرجة ترتب الشركات حسب جودة العوامل المتاحة.</>}</p>
@@ -145,6 +148,7 @@ export default function RadarApp(){
    </li>)}</ul>:<section className="empty-state"><h2>{view==='favorites'?'لم تضف أي سهم إلى المفضلة':search?'لا توجد نتائج مطابقة':data?.dataRun?'لا توجد شركات في هذه اللقطة':'لم تُنشأ لقطة سوق بعد'}</h2><p>{view==='favorites'?'اضغط النجمة بجانب السهم لحفظه هنا.':search?'ابحث برمز سهم لفتح ملفه، أو امسح البحث لرؤية القائمة.':data?.dataRun?'الجولة محفوظة، لكن لا توجد صفوف مطابقة لهذا العرض. يتم فصل الترتيب عن حالة البوابات ولا تتحول البيانات الناقصة إلى نجاح.':'ابدأ فحص السوق. ستظهر الصفوف المحفوظة مرتبة حسب الدرجة، مع إبقاء غير المكتمل خارج المؤهلين.'}</p>{!data?.dataRun&&view!=='favorites'&&<button className="scan-button" onClick={()=>scan()} disabled={busy||progress.active}>فحص السوق</button>}</section>}
    {hasMore&&!loading&&<button className="load-more" onClick={()=>refresh(true)}>عرض المزيد <ChevronDown size={16}/></button>}
    <footer className="radar-footer"><h3>ما لا تفعله هذه الأداة</h3><p>لا تحول الدرجة إلى وعد بالعائد. الشراء الداخلي يُجلب من نماذج Form 4 عند فتح السهم، وكل قيمة ناقصة تبقى غير متاحة. النموذج الحالي ترتيب تشخيصي إلى أن ينجح الاختبار التاريخي المغلق.</p><button onClick={()=>setSettings(true)}>المنهجية والمصادر وسجل التدقيق</button></footer>
+   </>}
   </main>
   <CompanySheet snapshot={selected} strategy={strategy} baselineEvaluation={selectedEvaluation} loading={detailLoading} error={detailError} onClose={closeCompany} onRetry={()=>selected&&openCompany(selected,selectedEvaluation)} favorite={selected?favorites.includes(selected.symbol):false} onFavorite={()=>selected&&favorite(selected)} onCopy={()=>selected&&copy(selected.symbol)}/>
   <Dialog open={settings} onOpenChange={setSettings}><DialogContent className="settings-dialog" dir="rtl" showCloseButton={false}><DialogClose className="absolute top-4 left-4" aria-label="إغلاق مركز البيانات"><X size={20}/></DialogClose><DialogTitle>مركز البيانات والإشعارات</DialogTitle><DialogDescription>حالة المصادر والفحص، وأدوات حفظ النتائج ومراجعتها.</DialogDescription>

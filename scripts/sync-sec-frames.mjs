@@ -43,7 +43,7 @@ for (let index = 0; index < configs.length; index += 5) {
   const outcomes = await Promise.allSettled(group.map(async (config) => {
     const url = `https://data.sec.gov/api/xbrl/frames/${config.taxonomy}/${config.tag}/${config.unit}/${config.period}.json`;
     const response = await fetch(url, {
-      headers: { 'User-Agent': 'SmallCapRadar/2.1 research-contact:yousef-hamda@users.noreply.github.com', Accept: 'application/json' },
+      headers: { 'User-Agent': 'SmallCapRadar/2.1 (contact: yousef-hamda@users.noreply.github.com)', Accept: 'application/json' },
       signal: AbortSignal.timeout(45_000),
     });
     if (!response.ok) throw new Error(`${config.tag}: HTTP ${response.status}`);

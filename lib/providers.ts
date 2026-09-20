@@ -43,6 +43,18 @@ export function companyBySymbol(symbol: string): Company | null {
   return (bundledUniverse.companies as Company[]).find((company) => company.ticker === symbol.toUpperCase()) ?? null;
 }
 
+export function searchCompanies(query: string, limit = 12): Company[] {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return [];
+  return (bundledUniverse.companies as Company[])
+    .filter(company => company.ticker.toLowerCase().includes(normalized) || company.name.toLowerCase().includes(normalized))
+    .sort((a, b) => {
+      const rank = (company: Company) => company.ticker.toLowerCase() === normalized ? 0 : company.ticker.toLowerCase().startsWith(normalized) ? 1 : company.name.toLowerCase().startsWith(normalized) ? 2 : 3;
+      return rank(a) - rank(b) || a.ticker.localeCompare(b.ticker);
+    })
+    .slice(0, Math.max(1, Math.min(20, limit)));
+}
+
 function requestHeaders(url: string): Record<string, string> {
   return new URL(url).hostname.endsWith('sec.gov')
     ? { 'User-Agent': secAgent, Accept: 'application/json', 'Accept-Encoding': 'gzip, deflate' }
@@ -159,6 +171,7 @@ async function enrichWithYahooProfile(snapshot: Snapshot, symbol: string, now: s
   const profile = await (profilePromise??yahooCompanyProfile(symbol));
   const asset = profile?.assetProfile;
   if (asset?.longBusinessSummary) snapshot.description = asset.longBusinessSummary;
+  if (typeof asset?.website === 'string' && /^https:\/\//i.test(asset.website)) snapshot.website = asset.website;
   if (asset?.sector) snapshot.sector = asset.sector;
   if (asset?.industry) snapshot.industry = asset.industry;
   if (Number.isFinite(asset?.fullTimeEmployees)) snapshot.employees = asset.fullTimeEmployees;
@@ -177,7 +190,7 @@ async function enrichWithYahooProfile(snapshot: Snapshot, symbol: string, now: s
   if (latestEarnings) snapshot.lastEarnings = latestEarnings;
   if (snapshot.surprises?.length) { const latest = snapshot.surprises.at(-1)?.surprisePct; snapshot.lastEarningsStatus = latest == null ? 'غير معروف' : latest >= 0 ? 'إيجابي' : 'سلبي'; }
   const profileEvidence:Provenance={source:'Yahoo Finance quoteSummary',url:`https://finance.yahoo.com/quote/${encodeURIComponent(symbol)}/`,periodEnd:now.slice(0,10),availableAt:now,retrievedAt:now,confidence:'medium'};
-  for(const key of ['description','sector','industry','employees','targetMean','targetLow','targetHigh','analystCount','nextEarnings','lastEarnings','surprises'] as const)if(snapshot[key]!=null&&profile)snapshot.provenance[key]={...profileEvidence,tag:key};
+  for(const key of ['description','website','sector','industry','employees','targetMean','targetLow','targetHigh','analystCount','nextEarnings','lastEarnings','surprises'] as const)if(snapshot[key]!=null&&profile)snapshot.provenance[key]={...profileEvidence,tag:key};
   return snapshot;
 }
 
@@ -204,7 +217,10 @@ export async function yahooBulkQuotes(companies: Company[]): Promise<Company[]> 
     if (quoteMap.size < Math.min(100, companies.length / 2)) recordProviderIssue('Yahoo bulk coverage low; retained successful chunks and dated fallback rows');
     return companies.map((company) => {
       const quote = quoteMap.get(company.ticker);
-      if (!quote||!Number.isFinite(quote.regularMarketPrice)||!Number.isFinite(quote.marketCap)) return company;
+      // A quote is still useful when Yahoo omits market-cap metadata (common for
+      // thinly traded or newly listed symbols).  Requiring both fields made a
+      // valid live price fall back to the dated bundled snapshot.
+      if (!quote||!Number.isFinite(quote.regularMarketPrice)) return company;
       return {
         ...company,
         quoteSource: 'Yahoo bulk quote live',

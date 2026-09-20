@@ -20,11 +20,16 @@ import {createECDH,randomBytes} from 'node:crypto';
 import {fetchBulkFundamentals} from '../../.test-build/bulk.mjs';
 import {importSchema} from '../../.test-build/validation.mjs';
 import {apiJson} from '../../.test-build/client-json.mjs';
+import {calculatePortfolio,buildPerformanceSeries,validateLedger} from '../../.test-build/portfolio.mjs';
+import {GET as portfolioGET,POST as portfolioPOST,PUT as portfolioPUT,DELETE as portfolioDELETE} from '../../.test-build/portfolio-api.mjs';
+import {GET as portfolioHistoryGET} from '../../.test-build/portfolio-history-api.mjs';
+import {GET as portfolioLogoGET} from '../../.test-build/portfolio-logo-api.mjs';
 import webpush from 'web-push';
 await ensureSchema();
 sqlite.exec(await fs.readFile('drizzle/0003_solid_spot.sql','utf8'));
 sqlite.exec(await fs.readFile('drizzle/0004_nervous_gressill.sql','utf8'));
 sqlite.exec(await fs.readFile('drizzle/0005_freezing_warlock.sql','utf8'));
+sqlite.exec(await fs.readFile('drizzle/0006_sparkling_war_machine.sql','utf8'));
 const base=fixtures[0];
 const run=(patch={})=>({id:'test',status:'running',source:'Bulk Quotes/SEC Frames v7 · full',stage:0,offset:0,total:100,processed:0,failed:0,retryPending:0,...patch});
 test('progress is monotonic and moves during Company Facts recovery',()=>{
@@ -46,6 +51,29 @@ test('ten-day volume proxy cannot reject a historical candidate',()=>{
 test('source conflict prevents both screening and final qualification',()=>{for(const strategy of ['core','bounce']){const e=evaluateStrategy(strategy,{...base,sourceConflicts:['injected conflict']});assert.equal(e.screeningQualified,false);assert.equal(e.status,'UNKNOWN');assert.equal(e.finalRanked,false)}});
 test('visitor isolation and cookie flags',()=>{
  const a=visitor(new Request('https://radar.test')),b=visitor(new Request('https://radar.test'));assert.notEqual(a.owner,b.owner);assert.match(a.cookie,/HttpOnly; SameSite=Lax; Secure/);assert.equal(visitor(new Request('https://radar.test',{headers:{cookie:a.cookie.split(';')[0]}})).owner,a.owner);
+});
+test('portfolio average cost, partial sale, fees and realized profit are deterministic',()=>{
+ const tx=(id,side,quantity,price,fees,tradeDate)=>({id,symbol:'TEST',companyName:'Synthetic',side,quantity,price,fees,tradeDate,createdAt:`${tradeDate}T12:00:00Z`,updatedAt:`${tradeDate}T12:00:00Z`});
+ const transactions=[tx('1','buy',10,10,1,'2026-01-01'),tx('2','buy',10,20,1,'2026-01-02'),tx('3','sell',5,30,1,'2026-01-03')];
+ const value=calculatePortfolio(transactions,{TEST:{symbol:'TEST',name:'Synthetic',price:25,dailyChange:.02,asOf:'2026-01-04'}});
+ assert.equal(value.positions[0].quantity,15);assert.equal(value.positions[0].averageCost,15.1);assert.equal(value.summary.realizedPnl,73.5);assert.equal(value.summary.unrealizedPnl,148.5);assert.equal(value.summary.totalPnl,222);
+ assert.throws(()=>validateLedger([...transactions,tx('4','sell',16,25,0,'2026-01-04')]),/لا يمكن بيع/);
+});
+test('portfolio full close and reopen resets cost basis instead of leaking an old average',()=>{
+ const row=(id,side,quantity,price,tradeDate)=>({id,symbol:'TEST',companyName:'Synthetic',side,quantity,price,fees:0,tradeDate,createdAt:tradeDate,updatedAt:tradeDate});
+ const value=calculatePortfolio([row('1','buy',10,10,'2026-01-01'),row('2','sell',10,12,'2026-01-02'),row('3','buy',5,20,'2026-01-03')],{TEST:{symbol:'TEST',name:'Synthetic',price:22,dailyChange:null,asOf:'2026-01-04'}});
+ assert.equal(value.positions[0].averageCost,20);assert.equal(value.summary.realizedPnl,20);assert.equal(value.summary.unrealizedPnl,10);
+});
+test('portfolio history refuses to fabricate a continuous line from stale or missing prices',()=>{
+ const transaction={id:'1',symbol:'TEST',companyName:'Synthetic',side:'buy',quantity:2,price:10,fees:0,tradeDate:'2026-01-01',createdAt:'2026-01-01',updatedAt:'2026-01-01'};
+ const complete=buildPerformanceSeries([transaction],{TEST:[{date:'2026-01-01',close:10},{date:'2026-01-02',close:12}]},'2026-01-02');assert.equal(complete.points.at(-1).returnPct,.2);
+ const missing=buildPerformanceSeries([transaction],{},'2026-02-01');assert.deepEqual(missing.incompleteSymbols,['TEST']);assert.equal(missing.points.length,1);
+});
+test('portfolio calculations remain responsive for 10,000 ledger rows',t=>{
+ const transactions=Array.from({length:10000},(_,index)=>({id:String(index),symbol:`P${index%100}`,companyName:`Position ${index%100}`,side:'buy',quantity:1,price:10+(index%25),fees:.01,tradeDate:`2026-01-${String(index%28+1).padStart(2,'0')}`,createdAt:`2026-01-01T00:00:${String(index%60).padStart(2,'0')}Z`,updatedAt:'2026-01-01T00:00:00Z'}));
+ const quotes=Object.fromEntries(Array.from({length:100},(_,index)=>[`P${index}`,{symbol:`P${index}`,name:`Position ${index}`,price:25,dailyChange:.01,asOf:'2026-09-20T00:00:00Z'}]));
+ const start=performance.now(),value=calculatePortfolio(transactions,quotes),elapsed=performance.now()-start;
+ assert.equal(value.positions.length,100);assert.equal(value.positions.reduce((sum,row)=>sum+row.quantity,0),10000);assert(elapsed<2000);t.diagnostic(`10,000 ledger rows: ${elapsed.toFixed(1)} ms`);
 });
 test('stage9 persists rows and hands every in-range category row to history scoring',async()=>{
  await db().prepare('INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,strategy_hash) VALUES(?,?,?,?,?,?,?,?,?)').bind('scan-test','2026-09-08T00:00:00Z','2026-09-08T00:00:00Z','running','Bulk Quotes/SEC Frames v7 · full',1,JSON.stringify([{ticker:'TEST',name:'Synthetic test only',cik:99,exchange:'Nasdaq',marketCap:1e9,price:10}]),9,currentHash()).run();
@@ -81,6 +109,35 @@ test('API personal favorites start at zero, writes are idempotent and isolated',
 test('API rejects cross-origin and malformed favorite writes',async()=>{
  const cross=await POST(new Request('https://radar.test/api/radar',{method:'POST',headers:{origin:'https://other.test'},body:'{}'}));assert.equal(cross.status,403);
  const invalid=await POST(new Request('https://radar.test/api/radar',{method:'POST',headers:{origin:'https://radar.test'},body:JSON.stringify({action:'favorite',symbol:'BAD!',saved:true})}));assert.equal(invalid.status,400);
+});
+test('portfolio API persists isolated trades, validates balances and supports update/delete',async()=>{
+ const initial=await portfolioGET(new Request('https://radar.test/api/portfolio'));assert.equal(initial.status,200);const cookie=initial.headers.get('set-cookie').split(';')[0];assert.deepEqual((await initial.json()).transactions,[]);
+ const call=(handler,method,body,origin='https://radar.test')=>handler(new Request('https://radar.test/api/portfolio',{method,headers:{origin,cookie,'content-type':'application/json'},body:JSON.stringify(body)}));
+ const buy={symbol:'TEST',side:'buy',quantity:10,price:10,fees:1,tradeDate:'2026-01-01',note:'synthetic test'};
+ const saved=await call(portfolioPOST,'POST',buy);assert.equal(saved.status,200);const savedPayload=await saved.json();assert.equal(savedPayload.positions[0].quantity,10);assert.equal(savedPayload.positions[0].averageCost,10.1);
+ assert(!('snapshot' in savedPayload.quotes.TEST));assert(JSON.stringify(savedPayload).length<200000);
+ const stranger=await portfolioGET(new Request('https://radar.test/api/portfolio'));assert.deepEqual((await stranger.json()).transactions,[]);
+ const oversell=await call(portfolioPOST,'POST',{...buy,side:'sell',quantity:11,price:12,tradeDate:'2026-01-02'});assert.equal(oversell.status,409);
+ const id=savedPayload.transactions[0].id;
+ const updated=await call(portfolioPUT,'PUT',{...buy,id,quantity:8,price:11});assert.equal(updated.status,200);assert.equal((await updated.json()).positions[0].quantity,8);
+ assert.equal((await call(portfolioPOST,'POST',buy,'https://evil.test')).status,403);
+ const removed=await call(portfolioDELETE,'DELETE',{id});assert.equal(removed.status,200);assert.deepEqual((await removed.json()).transactions,[]);
+});
+test('portfolio search is bounded and uses the official bundled directory',async()=>{
+ const response=await portfolioGET(new Request('https://radar.test/api/portfolio?q=TEST'));assert.equal(response.status,200);assert.equal((await response.json()).results[0].symbol,'TEST');
+ assert.equal((await portfolioGET(new Request('https://radar.test/api/portfolio?q='+encodeURIComponent('X'.repeat(101))))).status,400);
+});
+test('portfolio history endpoint persists owner scope and returns sourced aggregate points',async()=>{
+ const initial=await portfolioGET(new Request('https://radar.test/api/portfolio'));const cookie=initial.headers.get('set-cookie').split(';')[0];
+ const saved=await portfolioPOST(new Request('https://radar.test/api/portfolio',{method:'POST',headers:{origin:'https://radar.test',cookie,'content-type':'application/json'},body:JSON.stringify({symbol:'TEST',side:'buy',quantity:2,price:10,fees:0,tradeDate:'2026-01-01',note:''})}));assert.equal(saved.status,200);
+ setHistoryResult({history:[{date:'2026-01-01',close:10},{date:'2026-01-02',close:12}],splits:[],source:'TEST_HISTORY',url:'https://example.test/history',availableAt:'2026-01-02T22:00:00Z',retrievedAt:'2026-01-03T00:00:00Z'});
+ try{
+  const response=await portfolioHistoryGET(new Request('https://radar.test/api/portfolio-history',{headers:{cookie}}));assert.equal(response.status,200);const payload=await response.json();assert(payload.points.length>=2);assert.equal(payload.points.find(point=>point.date==='2026-01-02').returnPct,.2);assert.equal(payload.sources[0].source,'TEST_HISTORY');
+  const stranger=await portfolioHistoryGET(new Request('https://radar.test/api/portfolio-history'));assert.deepEqual((await stranger.json()).points,[]);
+ }finally{setHistoryResult(null);}
+});
+test('portfolio logo endpoint rejects malformed symbols before any provider call',async()=>{
+ const response=await portfolioLogoGET(new Request('https://radar.test/api/portfolio-logo?symbol=BAD!'));assert.equal(response.status,400);assert.equal(await response.text(),'Invalid symbol');
 });
 test('scan report retains rejected and unknown rows, validates paging and never promotes them',async()=>{
  const url='https://radar.test/api/scan-report?runId=scan-test&strategy=core';
