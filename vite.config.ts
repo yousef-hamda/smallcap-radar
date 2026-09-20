@@ -10,6 +10,11 @@ const { d1, r2 } = hostingConfig;
 
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
+const railwayHost = process.env.RAILWAY_PUBLIC_DOMAIN;
+const railwayPort = Number.parseInt(process.env.PORT || "", 10);
+const allowedHosts = ["terminal.local", railwayHost].filter(
+  (host): host is string => Boolean(host),
+);
 
 const localBindingConfig = {
   main: "./worker/index.ts",
@@ -46,10 +51,16 @@ export default defineConfig(async () => {
   return {
     server: {
       host: "0.0.0.0",
-      allowedHosts: ["terminal.local"],
+      allowedHosts,
       ...(isCodexSeatbeltSandbox
         ? { watch: { useFsEvents: false, usePolling: true } }
         : {}),
+    },
+    preview: {
+      host: "0.0.0.0",
+      port: Number.isFinite(railwayPort) ? railwayPort : 4173,
+      strictPort: true,
+      allowedHosts,
     },
     plugins: [
       vinext(),

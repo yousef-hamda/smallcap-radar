@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs/promises';
 import {sqlite} from './env.mjs';
 import {scanProgress} from '../../.test-build/scan-progress.mjs';
 import {visitor} from '../../.test-build/visitor.mjs';
@@ -26,10 +25,6 @@ import {GET as portfolioHistoryGET} from '../../.test-build/portfolio-history-ap
 import {GET as portfolioLogoGET} from '../../.test-build/portfolio-logo-api.mjs';
 import webpush from 'web-push';
 await ensureSchema();
-sqlite.exec(await fs.readFile('drizzle/0003_solid_spot.sql','utf8'));
-sqlite.exec(await fs.readFile('drizzle/0004_nervous_gressill.sql','utf8'));
-sqlite.exec(await fs.readFile('drizzle/0005_freezing_warlock.sql','utf8'));
-sqlite.exec(await fs.readFile('drizzle/0006_sparkling_war_machine.sql','utf8'));
 const base=fixtures[0];
 const run=(patch={})=>({id:'test',status:'running',source:'Bulk Quotes/SEC Frames v7 · full',stage:0,offset:0,total:100,processed:0,failed:0,retryPending:0,...patch});
 test('progress is monotonic and moves during Company Facts recovery',()=>{
