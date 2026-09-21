@@ -134,6 +134,8 @@ test('portfolio allocation keeps every company logo and percentage in a readable
  assert.match(source,/className="treemap-node-copy"/);
  assert.match(css,/@container allocation-tile \(max-width:90px\)/);
  assert.match(css,/@media\(max-width:600px\)\{\.allocation-legend\{grid-template-columns:1fr\}/);
+ assert.match(css,/\.portfolio-visual-grid\{display:grid;grid-template-columns:1\.15fr \.85fr;align-items:start/);
+ assert.match(css,/\.portfolio-insights\{align-self:start;height:max-content\}/);
 });
 
 test('portfolio company picker keeps results in a large readable dialog row',async()=>{
