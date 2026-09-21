@@ -1,5 +1,6 @@
 import {env} from 'cloudflare:workers';
 import {evaluateStrategy,specHash,type Snapshot} from './engine';
+import {applyFinancingRisk} from './financing-risk';
 export const db=()=>{const d=(env as any).DB;if(!d)throw Error('قاعدة البيانات غير متاحة');return d;};
 let schemaPromise:Promise<void>|null=null;
 export async function ensureSchema(){
@@ -68,14 +69,14 @@ export async function readState(options:{strategy?:'core'|'bounce'|'favorites';l
  // otherwise leave old null scores and stale weights in front of the user.
  const query=latest&&strategy!=='favorites'?`SELECT payload FROM fundamental_snapshots WHERE run_id=? AND (?='' OR instr(lower(symbol),?)>0 OR instr(lower(json_extract(payload,'$.name')),?)>0)`:null;
  const params=latest?[latest.id,search,search,search]:[];
- let rows:any[]=query?(await d.prepare(query).bind(...params).all()).results.map((r:any)=>{const s=JSON.parse(r.payload);return {payload:r.payload,evaluation:JSON.stringify({core:evaluateStrategy('core',s),bounce:evaluateStrategy('bounce',s)})}}):[];
+ let rows:any[]=query?(await d.prepare(query).bind(...params).all()).results.map((r:any)=>{const s=applyFinancingRisk(JSON.parse(r.payload));return {payload:JSON.stringify(s),evaluation:JSON.stringify({core:evaluateStrategy('core',s),bounce:evaluateStrategy('bounce',s)})}}):[];
  // A strategy-version change must not make the product look empty. Re-evaluate
  // the last completed snapshot with the current engine and label it stale until
  // a new scan replaces it. The prior data timestamp and run remain visible.
  if(latest&&!currentData){
   const all=search?(await d.prepare('SELECT payload FROM fundamental_snapshots WHERE run_id=?').bind(latest.id).all()).results as any[]:rows;
   const totals={total:all.length,coreQualified:0,bounceQualified:0,coreRanked:0,bounceRanked:0,coreUnknown:0,bounceUnknown:0,coreFailed:0,bounceFailed:0};
-  for(const row of all){const s=JSON.parse(row.payload),core=evaluateStrategy('core',s),bounce=evaluateStrategy('bounce',s);if(core.status==='PASS')totals.coreQualified++;else if(core.status==='UNKNOWN')totals.coreUnknown++;else totals.coreFailed++;if(bounce.status==='PASS')totals.bounceQualified++;else if(bounce.status==='UNKNOWN')totals.bounceUnknown++;else totals.bounceFailed++;}
+  for(const row of all){const s=applyFinancingRisk(JSON.parse(row.payload)),core=evaluateStrategy('core',s),bounce=evaluateStrategy('bounce',s);if(core.status==='PASS')totals.coreQualified++;else if(core.status==='UNKNOWN')totals.coreUnknown++;else totals.coreFailed++;if(bounce.status==='PASS')totals.bounceQualified++;else if(bounce.status==='UNKNOWN')totals.bounceUnknown++;else totals.bounceFailed++;}
   totals.coreRanked=totals.coreQualified;totals.bounceRanked=totals.bounceQualified;summaryRow=totals;
  }
  const coverageRow=latest?await d.prepare(`SELECT COUNT(*) AS total,
@@ -100,7 +101,7 @@ export async function readState(options:{strategy?:'core'|'bounce'|'favorites';l
   rows.sort((a:any,b:any)=>{const ae=JSON.parse(a.evaluation)[strategy],be=JSON.parse(b.evaluation)[strategy];const score=(e:any)=>e.score==null?Number.NEGATIVE_INFINITY:e.score;return score(be)-score(ae)||(be.scoreCoverage??0)-(ae.scoreCoverage??0)||JSON.parse(a.payload).symbol.localeCompare(JSON.parse(b.payload).symbol)});
  }
  if(strategy==='favorites'){
-  rows=fav.filter(r=>!search||`${r.symbol} ${JSON.parse(r.payload).name}`.toLowerCase().includes(search)).map(r=>{const s=JSON.parse(r.payload);return {payload:r.payload,evaluation:JSON.stringify({core:evaluateStrategy('core',s),bounce:evaluateStrategy('bounce',s)})}});
+  rows=fav.filter(r=>!search||`${r.symbol} ${JSON.parse(r.payload).name}`.toLowerCase().includes(search)).map(r=>{const s=applyFinancingRisk(JSON.parse(r.payload));return {payload:JSON.stringify(s),evaluation:JSON.stringify({core:evaluateStrategy('core',s),bounce:evaluateStrategy('bounce',s)})}});
   rows.sort((a:any,b:any)=>{const ae=JSON.parse(a.evaluation).bounce,be=JSON.parse(b.evaluation).bounce;const score=(e:any)=>e.score==null?Number.NEGATIVE_INFINITY:e.score;return score(be)-score(ae)||(be.scoreCoverage??0)-(ae.scoreCoverage??0)||JSON.parse(a.payload).symbol.localeCompare(JSON.parse(b.payload).symbol)});
   rows=rows.slice(offset,offset+limit+1);
  }
@@ -109,6 +110,6 @@ export async function readState(options:{strategy?:'core'|'bounce'|'favorites';l
  const pageRows=rows.slice(0,limit);
  return {run:active?{...active,universe:undefined,retry_queue:undefined,retryPending:JSON.parse(active.retry_queue||'[]').length,stale:!currentData}:null,dataRunId:latest?.id,dataRun:latest?{...latest,universe:undefined,retry_queue:undefined,stale:!currentData}:null,snapshots:pageRows.map((r:any)=>compact(r.payload)),storedEvaluations:pageRows.map((r:any)=>JSON.parse(r.evaluation)),favorites:fav.map((r:any)=>r.symbol),portfolioCount,coverage,summary:{total:Number(summaryRow?.total||0),coreQualified:Number(summaryRow?.coreQualified||0),bounceQualified:Number(summaryRow?.bounceQualified||0),coreRanked:Number(summaryRow?.coreRanked||0),bounceRanked:Number(summaryRow?.bounceRanked||0),coreUnknown:Number(summaryRow?.coreUnknown||0),bounceUnknown:Number(summaryRow?.bounceUnknown||0),coreFailed:Number(summaryRow?.coreFailed||0),bounceFailed:Number(summaryRow?.bounceFailed||0),stale:!currentData},page:{strategy,limit,offset,hasMore:rows.length>limit}};}
 export async function readAudit(){await ensureSchema();const d=db();const latest=await d.prepare("SELECT * FROM strategy_runs WHERE status IN ('complete','partial') ORDER BY created_at DESC LIMIT 1").first() as any;const logs=latest?(await d.prepare('SELECT stage,created_at,message FROM diag WHERE run_id=? ORDER BY created_at DESC LIMIT 500').bind(latest.id).all()).results:[];const state=await readState({strategy:'bounce',limit:1});return {strategyHash:currentHash(),run:state.run,dataRun:state.dataRun,summary:state.summary,favorites:state.favorites,logs};}
-export function insertSnapshot(runId:string,s:Snapshot){return db().prepare('INSERT OR REPLACE INTO fundamental_snapshots(id,run_id,symbol,as_of,payload,evaluation) VALUES (?,?,?,?,?,?)').bind(`${runId}:${s.symbol}`,runId,s.symbol,s.asOf,JSON.stringify(s),JSON.stringify({core:evaluateStrategy('core',s),bounce:evaluateStrategy('bounce',s)}));}
+export function insertSnapshot(runId:string,s:Snapshot){const reviewed=applyFinancingRisk(s);return db().prepare('INSERT OR REPLACE INTO fundamental_snapshots(id,run_id,symbol,as_of,payload,evaluation) VALUES (?,?,?,?,?,?)').bind(`${runId}:${s.symbol}`,runId,s.symbol,reviewed.asOf,JSON.stringify(reviewed),JSON.stringify({core:evaluateStrategy('core',reviewed),bounce:evaluateStrategy('bounce',reviewed)}));}
 export async function createRun(source:string,total=0,universe:any[]=[],status='running'){await ensureSchema();const id=crypto.randomUUID(),now=new Date().toISOString();await db().prepare('INSERT INTO strategy_runs (id,created_at,updated_at,status,source,total,universe,strategy_hash) VALUES(?,?,?,?,?,?,?,?)').bind(id,now,now,status,source,total,JSON.stringify(universe),currentHash()).run();return id;}
 export async function log(runId:string,stage:string,message:string){await db().prepare('INSERT INTO diag(id,run_id,stage,created_at,message) VALUES(?,?,?,?,?)').bind(crypto.randomUUID(),runId,stage,new Date().toISOString(),message).run()}

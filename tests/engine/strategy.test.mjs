@@ -10,12 +10,26 @@ import {enrichFinancials} from '../../.test-build/financials.mjs';
 import {derivedEvidence} from '../../.test-build/evidence.mjs';
 import {parseYahooIntraday} from '../../.test-build/chart-data.mjs';
 import {parseOfficialDirectory} from '../../.test-build/directory.mjs';
+import {applyFinancingRisk} from '../../.test-build/financing-risk.mjs';
 const base=fixtures[0];const gate=(s,id,strategy='core')=>evaluateStrategy(strategy,s).checks.find(c=>c.id===id).status;
 test('all published score weight sets sum to 100',()=>{for(const weights of [SPECS.core.weights,SPECS.legacy.weights,SPECS.bounce.ranking.weights])assert.equal(Object.values(weights).reduce((a,b)=>a+b),100)});
 test('inclusive Core market cap boundaries',()=>{for(const [cap,status] of [[24999999,'FAIL'],[25e6,'PASS'],[2e9,'PASS'],[2000000001,'FAIL']])assert.equal(gate({...base,marketCap:cap},'cap'),status)});
 test('Core liquidity and EV/S boundaries',()=>{assert.equal(gate({...base,medianDollarVolume20d:150000},'liquidity'),'PASS');assert.equal(gate({...base,medianDollarVolume20d:149999},'liquidity'),'FAIL');assert.equal(gate({...base,evSales:10},'valuation'),'PASS');assert.equal(gate({...base,evSales:10.001},'valuation'),'FAIL')});
 test('profitability OR and missing data semantics',()=>{assert.equal(gate({...base,netIncome:-1,fcf:1},'profitability'),'PASS');assert.equal(gate({...base,netIncome:null,fcf:-1},'profitability'),'UNKNOWN');assert.equal(gate({...base,netIncome:0,fcf:0},'profitability'),'FAIL');const fcfOnly={...base,netIncome:5,fcf:1,provenance:{...base.provenance,netIncome:undefined}};assert.equal(gate(fcfOnly,'profitability'),'PASS')});
 test('unresolved death spiral never passes without evidence',()=>{assert.equal(gate({...base,deathSpiral:'unknown'},'deathSpiral'),'UNKNOWN');assert.equal(gate({...base,riskEvidence:undefined},'deathSpiral'),'UNKNOWN');assert.equal(gate({...base,deathSpiral:'severe'},'deathSpiral'),'FAIL')});
+test('financing risk review turns complete SEC solvency evidence into a usable Core gate',()=>{
+ const p={source:'SEC test',periodEnd:'2026-06-30',availableAt:'2026-08-01T00:00:00Z',retrievedAt:base.asOf,confidence:'high'};
+ const reviewed=applyFinancingRisk({...base,cash:20e6,debt:5e6,provenance:{...base.provenance,cash:p,debt:p}});
+ assert.equal(reviewed.deathSpiral,'clean');assert.match(reviewed.riskEvidence,/لا توجد إشارة/);assert.equal(gate(reviewed,'deathSpiral'),'PASS');
+ const distressed=applyFinancingRisk({...reviewed,cash:1e6,debt:10e6,fcf:-2e6,provenance:{...reviewed.provenance,fcf:p}});
+ assert.equal(distressed.deathSpiral,'severe');assert.equal(gate(distressed,'deathSpiral'),'FAIL');
+});
+test('financial freshness uses filing availability while bounding the reporting period',()=>{
+ const recentFiling={...base.provenance.revenue,periodEnd:'2025-12-31',availableAt:'2026-03-01T00:00:00Z'};
+ assert.equal(gate({...base,provenance:{...base.provenance,revenue:recentFiling}},'filingFreshness'),'PASS');
+ const ancientPeriod={...recentFiling,periodEnd:'2024-01-01'};
+ assert.equal(gate({...base,provenance:{...base.provenance,revenue:ancientPeriod}},'filingFreshness'),'UNKNOWN');
+});
 test('Core thesis conditions are gates and score cannot rescue a failure',()=>{const r=evaluateStrategy('core',{...base,confidence:'B',revenue:0});assert.equal(r.checks.find(c=>c.id==='revenue').role,'eligibility');assert.equal(r.checks.find(c=>c.id==='revenue').status,'FAIL');assert.equal(r.factorStatus,'FAIL');assert.equal(r.qualified,false);assert.equal(r.status,'FAIL');assert(r.score>=0&&r.score<=100);assert.equal(r.screeningQualified,false);assert.equal(r.finalRanked,false)});
 test('declared cap and liquidity universe limits are eligibility gates',()=>{
  const core=evaluateStrategy('core',{...base,marketCap:2e9+1});assert.equal(core.checks.find(c=>c.id==='cap').role,'eligibility');assert.equal(core.status,'FAIL');assert.equal(core.qualified,false);

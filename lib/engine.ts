@@ -109,7 +109,13 @@ export function evaluateStrategy(strategy:keyof typeof SPECS,s:Snapshot){
  const criticalReady=critical.every(k=>finite(criticalValues[k])&&Number(criticalValues[k])>0&&usableEvidence(s.provenance[k],s.asOf));
  add('criticalData','أدلة الأهلية الحرجة',criticalReady?true:null,'السعر والقيمة السوقية والسيولة تحتاج قيمًا موجبة ومصادر مؤرخة صالحة قبل إدخال السهم في الكون القابل للتصنيف.');
  const quote=s.provenance.price;add('freshness','حداثة بيانات السعر',usableEvidence(quote,s.asOf)&&Date.parse(s.asOf)-Date.parse(quote.availableAt)<=SPECS.core.freshnessDays*864e5?true:null,`السعر الأقدم من ${SPECS.core.freshnessDays} أيام يحتاج تحديثًا؛ حد تشغيلي محافظ غير مختبر.`);
- const financial=s.provenance.revenue;if(strategy!=='bounce')add('filingFreshness','حداثة الفترة المالية',usableEvidence(financial,s.asOf)&&Date.parse(s.asOf)-Date.parse(financial.periodEnd)<=SPECS.core.filingFreshnessDays*864e5?true:null,`الفترة الأقدم من ${SPECS.core.filingFreshnessDays} يومًا تحتاج مراجعة، بما فيها الإفصاحات الأجنبية.`);
+ const financial=s.provenance.revenue;
+ if(strategy!=='bounce'){
+  const availableAge=financial&&Number.isFinite(Date.parse(financial.availableAt))?Date.parse(s.asOf)-Date.parse(financial.availableAt):Number.POSITIVE_INFINITY;
+  const periodAge=financial&&Number.isFinite(Date.parse(financial.periodEnd))?Date.parse(s.asOf)-Date.parse(financial.periodEnd):Number.POSITIVE_INFINITY;
+  const fresh=usableEvidence(financial,s.asOf)&&availableAge>=0&&availableAge<=SPECS.core.filingFreshnessDays*864e5&&periodAge>=0&&periodAge<=SPECS.core.financialPeriodMaxAgeDays*864e5;
+  add('filingFreshness','حداثة الإفصاح المالي',fresh?true:null,`وقت توفر الإفصاح خلال ${SPECS.core.filingFreshnessDays} يومًا والفترة المالية خلال ${SPECS.core.financialPeriodMaxAgeDays} يومًا.`);
+ }
  // Conflict means an observed disagreement, not the absence of two unrelated
  // vendors. Each required metric is already guarded by dated provenance; a
  // blanket confidence grade must not make every otherwise evidenced Core row

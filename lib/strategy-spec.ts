@@ -8,7 +8,7 @@
 export const SPECS = {
   core: {
     id: 'CORE_VALUE_V2',
-    version: '2.6.0-draft.1-category-alignment',
+    version: '2.7.0-draft.1-financing-risk-review',
     marketCap: { min: 25e6, max: 2e9 },
     liquidity: 150e3,
     liquidityMetric: 'medianDollarVolume20d',
@@ -26,7 +26,10 @@ export const SPECS = {
       'Balance Sheet': 3,
     },
     freshnessDays: 3,
+    // Filing availability is measured from the source's availableAt timestamp;
+    // the reporting period itself may precede that date by a normal filing lag.
     filingFreshnessDays: 200,
+    financialPeriodMaxAgeDays: 400,
     score: { growthMin: -0.1, growthMax: 0.3, marginMin: -0.1, marginMax: 0.1, insiderScale: 0.01, entryAnchor: -0.1, entryRange: 0.6, liquidityCeiling: 3e6 },
     // Category membership follows the documented Core screen. The weighted
     // score only orders companies that pass every evidenced thesis gate.
@@ -34,7 +37,7 @@ export const SPECS = {
     factorCheckIds: ['revenue', 'valuation', 'profitability', 'deathSpiral'],
     model: {
       id: 'CORE_DIAGNOSTIC_BASELINE',
-      version: 'diagnostic-2.6.0-category-alignment',
+      version: 'diagnostic-2.7.0-financing-risk-review',
       validation: 'blocked' as const,
       objective: '12–24 month benchmark-relative risk-adjusted return',
       probabilityAvailable: false,

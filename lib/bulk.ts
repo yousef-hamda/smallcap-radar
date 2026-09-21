@@ -5,6 +5,7 @@ import bundledFrames from './sec-frames.generated.json';
 import {REVENUE_TAGS, observations, latestInstant, trailingAnnual} from './sec';
 import {derivedEvidence,usableEvidence} from './evidence';
 import {NON_TRADABLE_NAME, SEC_FRAME_DATASET_COUNT} from './strategy-spec';
+import {applyFinancingRisk} from './financing-risk';
 
 type FrameFact = { cik: number; entityName?: string; start?: string; end: string; val: number; filed?: string; form?: string; accn?: string; frame?: string };
 type StoredFact = FrameFact & { tag: string; priority: number; url: string; fallback?: boolean; observedAt?:string; kind?: 'frames'|'companyfacts' };
@@ -337,5 +338,5 @@ export function preliminarySnapshot(company: Company, facts: BulkFundamentals | 
     snapshot.dataIssues?.push('نسبة الأسهم المعلنة ليست دليلًا على مراجعة التجزئة؛ تعديل corporate actions غير متحقق.');
   }
   snapshot.research = { financials: !!snapshot.revenue, valuation: snapshot.evSales != null, analysts: false, sector: !!company.sector };
-  return snapshot;
+  return applyFinancingRisk(snapshot);
 }

@@ -3,6 +3,7 @@ import { companySnapshot, consumeProviderIssues, historicalMarketData, quickSymb
 import { fetchBulkFundamentals, fetchCompanyFactsFallback, needsCompanyFacts, preliminarySnapshot, type BulkFundamentals } from './bulk';
 import { bounceHistoryMetrics, reviewShareSplits } from './research';
 import { NON_TRADABLE_NAME, SPECS } from './strategy-spec';
+import { applyFinancingRisk } from './financing-risk';
 
 const BATCH_SIZE = 1;
 const HISTORY_BATCH_SIZE = 18;
@@ -259,6 +260,7 @@ export async function processScanBatch(runId: string) {
         const last = history.at(-1);
         const historyEvidence={source:historical.source,url:historical.url,retrievedAt:historical.retrievedAt,availableAt:historical.availableAt,periodEnd:last?.date??now.slice(0,10),confidence:'medium' as const};
         snapshot=reviewShareSplits(snapshot,historical.splits,history[0]?.date??'',last?.date??'',historyEvidence);
+        snapshot=applyFinancingRisk(snapshot);
         if (metrics.return12m != null) {
           snapshot.return12m = metrics.return12m;
           snapshot.provenance.return12m = { ...historyEvidence,tag:'12-month return' };

@@ -17,7 +17,8 @@ Last verified: 2026-09-21. Keep this file free of credentials and private recove
 3. Check `GET /api/radar?strategy=bounce&limit=1&offset=0` and the homepage return 200. The live route should still identify `recovered backup` as its data run until a newer validated scan replaces it.
 4. After any storage or runtime change, redeploy and repeat the count check. Do not delete/recreate the volume to fix a deployment.
 5. Configure automated Railway volume backups and perform a restore drill. Persistence across redeploy is not a backup.
-6. After the current GitHub push, production still returned the older company/logo behavior. Redeploy `master` from commit `843d6b4` after restoring Railway CLI/project authentication, then repeat the company Arabic-field and PNG logo smoke checks.
+6. After the current GitHub push, production still returned the older company/logo behavior. Redeploy the latest `master` commit after restoring Railway CLI/project authentication, then repeat the company Arabic-field and PNG logo smoke checks.
+7. After deploying the Core financing-risk fix, start a new full-market scan. The old zero-result snapshot may be re-evaluated from saved fundamentals, but only a new scan supplies current quotes and actual 20-session liquidity.
 
 ## Recovery and security
 
