@@ -135,3 +135,10 @@ test('portfolio allocation keeps every company logo and percentage in a readable
  assert.match(css,/@container allocation-tile \(max-width:90px\)/);
  assert.match(css,/@media\(max-width:600px\)\{\.allocation-legend\{grid-template-columns:1fr\}/);
 });
+
+test('portfolio logo source uses the verified public stock-logo endpoint',async()=>{
+ const route=await readFile(path.join(root,'app/api/portfolio-logo/route.ts'),'utf8');
+ assert.match(route,/https:\/\/financialmodelingprep\.com\/image-stock\/\$\{encodeURIComponent\(symbol\)\}\.png/);
+ assert.match(route,/if \(financialLogo\) return financialLogo/);
+ assert.match(route,/if \(companyLogo\) return companyLogo/);
+});

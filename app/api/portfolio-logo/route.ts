@@ -54,10 +54,12 @@ export async function GET(request: Request) {
   // Run the two trusted logo lookups together so a missing provider does not
   // make every portfolio row wait through two sequential network timeouts.
   const [financialLogo, companyLogo] = await Promise.all([
-    safeImage(`https://images.financialmodelingprep.com/symbol/${encodeURIComponent(symbol)}.png`),
+    safeImage(`https://financialmodelingprep.com/image-stock/${encodeURIComponent(symbol)}.png`),
     domainLogo,
   ]);
   if (financialLogo) return financialLogo;
   if (companyLogo) return companyLogo;
+  const newerLogo = await safeImage(`https://images.financialmodelingprep.com/symbol/${encodeURIComponent(symbol)}.png`);
+  if (newerLogo) return newerLogo;
   return fallback(symbol);
 }
