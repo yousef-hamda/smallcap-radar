@@ -19,6 +19,7 @@ Last verified: 2026-09-21. Keep this file free of credentials and private recove
 5. Configure automated Railway volume backups and perform a restore drill. Persistence across redeploy is not a backup.
 6. After the current GitHub push, production still returned the older company/logo behavior. Redeploy the latest `master` commit after restoring Railway CLI/project authentication, then repeat the company Arabic-field and PNG logo smoke checks.
 7. After deploying the Core financing-risk fix, start a new full-market scan. The old zero-result snapshot may be re-evaluated from saved fundamentals, but only a new scan supplies current quotes and actual 20-session liquidity.
+8. The production smoke check on 2026-09-21 still returned Core spec `2.6.0-draft.1-category-alignment`; this proves the latest GitHub commits have not been adopted by Railway yet. Do not use run `a68789e7-f053-49d9-9033-95cecd4b2537` as validation of the new Core logic.
 
 ## Recovery and security
 

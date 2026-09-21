@@ -13,7 +13,7 @@ Updated 2026-09-21. Start with `docs/PROJECT_MEMORY.md`, `docs/OPERATIONS_MEMORY
 
 ## Next work
 
-1. Redeploy commit `2f33edc` from the linked Railway project, then verify Arabic fields, a real PNG logo, and a fresh Core full scan through the public routes.
+1. Redeploy commit `71bf721` from the linked Railway project, verify `/api/export?kind=spec` reports Core `2.7.0-draft.1-financing-risk-review`, then start a fresh Core full scan and verify its ranked rows.
 2. Ask the owner whether the one-time favorite claim succeeded; if not, investigate without exposing the token or another visitor's data.
 3. Enable Railway volume backups and verify a restore. Recommend rotation of the project token posted in chat.
 4. If the owner wants the attached Postgres database to become active, plan and execute a backed-up D1-to-Postgres migration with validation and rollback. Do not switch storage by changing only `DATABASE_URL`.
