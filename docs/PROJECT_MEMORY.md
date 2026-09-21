@@ -1,6 +1,6 @@
 # Project memory — Small-Cap Radar
 
-Last verified: 2026-09-21. This is the repository-owned memory for future maintainers; historical research notes in `docs/` may describe older releases. The deep audit and changes from this date are in `docs/DEEP_IMPROVEMENT_PLAN_2026_09_21_AR.md`.
+Last verified: 2026-09-21. This is the repository-owned memory for future maintainers; historical research notes in `docs/` may describe older releases. The deep audit and changes from this date are in `docs/DEEP_IMPROVEMENT_PLAN_2026_09_21_AR.md` and the second-cycle plan in `docs/DEEP_IMPROVEMENT_PLAN_2026_09_21_V2_AR.md`.
 
 ## Product and source of truth
 
@@ -12,7 +12,7 @@ Last verified: 2026-09-21. This is the repository-owned memory for future mainta
 ## Recovered data
 
 - A 2026-09-21 recovery copied 2,908 old market snapshots and six additional company snapshots needed for the seven saved symbols. The seventh symbol was already in the market snapshot. The durable recovered run is `7857f783-7749-4000-8f90-b0f0af848331`, source `recovered backup`, with 2,914 records.
-- Deep company files now use cache key `deep:v6`, preserve original provider text, and add best effort Arabic fields for the company name, description, sector, industry, and news titles/sources. Translation failure leaves the original text visible and is recorded as a data limitation.
+- Deep company files now use cache key `deep:v7`, preserve original provider text, and add best effort Arabic fields for the company name, description, sector, industry, and news titles/sources. Translation failure leaves the original text visible and is recorded as a data limitation. Portfolio reads v7 first and retains v6/v5/v4 compatibility.
 - Portfolio allocation uses a squarified treemap with proportional area and a complete readable legend. Company logos load through `/api/portfolio-logo` so the browser does not depend on a client-side third party request; the resolver tries FMP, website Clearbit, Parqet, then a stable fallback.
 - Live `GET /api/radar?status=1` returned `complete` and `processed: 2914` on 2026-09-21, including after redeployments. This verifies app-visible persistence, not an independent database backup.
 - The seven historical favorite symbols were APLD, CLBT, DEFT, SOFI, TMDX, XE, and ZTS. A one-time private claim link was given to the owner in chat. Whether the owner clicked it is not verified here. Do not store or publish the claim token.
@@ -25,5 +25,12 @@ Last verified: 2026-09-21. This is the repository-owned memory for future mainta
 - Railway volume persistence is working, but automated volume backups and restore drills have **not** been verified. Configure and test them before relying on this for irreplaceable data.
 - Railway is a single volume-backed web instance; do not assume multi-replica availability. The scan and financial data pipelines remain subject to provider outages and stale data. See `docs/ACCEPTANCE.md` and `docs/SCORING_AUDIT_2026_09_20.md` for remaining quality gates.
 - A Railway project token was posted in chat. It should be rotated by the owner; never add it or any database URL, recovery token, or secret to Git.
+
+## Second-cycle implementation notes — 2026-09-21
+
+- Translation requests are limited to three active external calls per process, and repeated news sources are translated once per snapshot. The in-memory translation cache remains a performance layer, not a durable source of truth.
+- Logo resolution now deduplicates concurrent requests and caches verified image bytes for one day. Initials SVG fallbacks expire after ten minutes so a recovered provider logo can appear without waiting a day.
+- Treemap tests now verify proportional area, frame bounds, total area, and pairwise non-overlap. Arabic tests verify source preservation, translated company/news fields, and visible failure limitations.
+- The broad second-cycle plan, future work, and acceptance gates are in `docs/DEEP_IMPROVEMENT_PLAN_2026_09_21_V2_AR.md`.
 
 See `docs/OPERATIONS_MEMORY.md` for deployment/storage details and `HANDOFF.md` for the immediate continuation checklist.

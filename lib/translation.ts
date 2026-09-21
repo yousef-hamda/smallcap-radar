@@ -7,9 +7,25 @@ const translationCache = new Map<string, { expiresAt: number; value: Translation
 const inFlight = new Map<string, Promise<TranslationResult | null>>();
 const MAX_CACHE = 256;
 const TTL = 24 * 60 * 60_000;
+const MAX_TRANSLATION_CONCURRENCY = 3;
+let activeTranslations = 0;
+const translationQueue: Array<() => void> = [];
 
 const hasArabic = (value: string) => /[\u0600-\u06ff]/.test(value);
 const clean = (value: string) => value.replace(/\s+/g, ' ').trim();
+
+async function withTranslationSlot<T>(work: () => Promise<T>): Promise<T> {
+  if (activeTranslations >= MAX_TRANSLATION_CONCURRENCY) {
+    await new Promise<void>(resolve => translationQueue.push(resolve));
+  }
+  activeTranslations += 1;
+  try {
+    return await work();
+  } finally {
+    activeTranslations -= 1;
+    translationQueue.shift()?.();
+  }
+}
 
 function remember(key: string, value: TranslationResult | null) {
   if (translationCache.size >= MAX_CACHE) translationCache.delete(translationCache.keys().next().value!);
@@ -41,7 +57,7 @@ export async function translateToArabic(input: unknown, maxLength = 2_800): Prom
       url.searchParams.set('tl', 'ar');
       url.searchParams.set('dt', 't');
       url.searchParams.set('q', text);
-      const response = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(4_000) });
+      const response = await withTranslationSlot(() => fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(4_000) }));
       if (!response.ok) return remember(key, null);
       const payload = await response.json() as unknown;
       const rows = Array.isArray(payload) && Array.isArray(payload[0]) ? payload[0] : [];
@@ -62,6 +78,15 @@ async function translatedField(value: string | undefined, maxLength?: number) {
 /** Enrich the deep company file without changing any sourced numeric value. */
 export async function translateSnapshotContent(snapshot: Snapshot): Promise<Snapshot> {
   const news = snapshot.news ?? [];
+  const sourceTranslations = new Map<string, Promise<string | undefined>>();
+  const translateSource = (source: string | undefined) => {
+    if (!source) return Promise.resolve(undefined);
+    const existing = sourceTranslations.get(source);
+    if (existing) return existing;
+    const request = translatedField(source, 120);
+    sourceTranslations.set(source, request);
+    return request;
+  };
   const [nameAr, descriptionAr, sectorAr, industryAr, translatedNews] = await Promise.all([
     translatedField(snapshot.name, 220),
     translatedField(snapshot.description, 3_600),
@@ -70,7 +95,7 @@ export async function translateSnapshotContent(snapshot: Snapshot): Promise<Snap
     Promise.all(news.map(async item => ({
       ...item,
       titleAr: (await translateToArabic(item.title, 500))?.text,
-      sourceAr: (await translateToArabic(item.source, 120))?.text,
+      sourceAr: await translateSource(item.source),
     }))),
   ]);
   const next: Snapshot = {

@@ -147,13 +147,63 @@ test('portfolio allocation uses proportional squarified geometry inside the fram
  assert.equal(nodes.length,3);assert(nodes.every(node=>node.x>=0&&node.y>=0&&node.x+node.width<=100.0001&&node.y+node.height<=100.0001));
  assert(area(nodes[0])>area(nodes[1]));assert(area(nodes[1])>area(nodes[2]));
  assert(Math.abs(nodes.reduce((sum,node)=>sum+area(node),0)-10000)<0.1);
+ for(let left=0;left<nodes.length;left+=1){
+  for(let right=left+1;right<nodes.length;right+=1){
+   const overlapWidth=Math.max(0,Math.min(nodes[left].x+nodes[left].width,nodes[right].x+nodes[right].width)-Math.max(nodes[left].x,nodes[right].x));
+   const overlapHeight=Math.max(0,Math.min(nodes[left].y+nodes[left].height,nodes[right].y+nodes[right].height)-Math.max(nodes[left].y,nodes[right].y));
+   assert(overlapWidth*overlapHeight<0.01,`treemap nodes overlap: ${nodes[left].symbol}/${nodes[right].symbol}`);
+  }
+ }
+});
+
+test('Arabic enrichment preserves sourced fields and translates company news',async()=>{
+ const {translateSnapshotContent}=await vite.ssrLoadModule('/lib/translation.ts');
+ const originalFetch=globalThis.fetch;
+ const calls=[];
+ globalThis.fetch=async url=>{
+  const text=new URL(url).searchParams.get('q')||'';
+  calls.push(text);
+  const translations={
+   'Synthetic Trading Company':'شركة التداول التجريبية',
+   'A synthetic company description.':'وصف شركة تجريبية.',
+   'Software':'برمجيات',
+   'Synthetic headline':'عنوان تجريبي',
+   'Newswire':'مصدر الأخبار',
+  };
+  return new Response(JSON.stringify([[ [translations[text]||'ترجمة عربية'] ]]),{status:200,headers:{'content-type':'application/json'}});
+ };
+ try{
+  const result=await translateSnapshotContent({symbol:'ARTEST',name:'Synthetic Trading Company',description:'A synthetic company description.',sector:'Software',industry:'Software',asOf:'2025-01-01T00:00:00Z',price:10,news:[{title:'Synthetic headline',source:'Newswire',url:'https://example.test/news',publishedAt:'2025-01-01'},{title:'Second synthetic headline',source:'Newswire',url:'https://example.test/news-2',publishedAt:'2025-01-02'}],provenance:{}});
+  assert.equal(result.name,'Synthetic Trading Company');
+  assert.equal(result.nameAr,'شركة التداول التجريبية');
+  assert.equal(result.descriptionAr,'وصف شركة تجريبية.');
+  assert.equal(result.sectorAr,'برمجيات');
+  assert.equal(result.news[0].title,'Synthetic headline');
+  assert.equal(result.news[0].titleAr,'عنوان تجريبي');
+  assert.equal(result.news[0].sourceAr,'مصدر الأخبار');
+  assert.equal(result.news[1].sourceAr,'مصدر الأخبار');
+  assert.equal(result.provenance.translation.confidence,'medium');
+  assert(calls.length<=7,'duplicate source text should be translated once');
+ } finally { globalThis.fetch=originalFetch; }
+});
+
+test('Arabic enrichment records a visible issue when the translation provider fails',async()=>{
+ const {translateSnapshotContent}=await vite.ssrLoadModule('/lib/translation.ts');
+ const originalFetch=globalThis.fetch;
+ globalThis.fetch=async()=>new Response('',{status:503});
+ try{
+  const result=await translateSnapshotContent({symbol:'ARFAIL',name:'Unique Failing Synthetic Company',description:'Unique failing synthetic description.',asOf:'2025-01-01T00:00:00Z',provenance:{}});
+  assert.match((result.dataIssues||[]).join(' '),/تعذّرت ترجمة اسم الشركة/);
+  assert.equal(result.nameAr,undefined);
+ } finally { globalThis.fetch=originalFetch; }
 });
 
 test('portfolio logo source uses the verified public stock-logo endpoint',async()=>{
  const [route,view]=await Promise.all([readFile(path.join(root,'app/api/portfolio-logo/route.ts'),'utf8'),readFile(path.join(root,'app/portfolio-view.tsx'),'utf8')]);
  assert.match(route,/https:\/\/financialmodelingprep\.com\/image-stock\/\$\{encodeURIComponent\(symbol\)\}\.png/);
- assert.match(route,/if \(financialLogo\) return financialLogo/);
- assert.match(route,/if \(companyLogo\) return companyLogo/);
+ assert.match(route,/financialLogo \|\| companyLogo \|\| parqetLogo/);
+ assert.match(route,/logoInFlight/);
+ assert.match(route,/FALLBACK_TTL/);
  assert.match(view,/\/api\/portfolio-logo\?symbol=\$\{encodeURIComponent\(symbol\)\}/);
  assert.match(view,/loading="lazy"/);
 });
