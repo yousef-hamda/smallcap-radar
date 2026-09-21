@@ -46,7 +46,7 @@ export async function POST(req:Request){
    if(!parsed.success)return json({error:'ملف غير صالح: '+parsed.error.issues.slice(0,3).map(i=>i.path.join('.')+': '+i.message).join('؛ ')},400);
    const id=await createRun('import',parsed.data.length);
    try{
-    for(const snapshot of parsed.data)await insertSnapshot(id,snapshot as any).run();
+    for(let offset=0;offset<parsed.data.length;offset+=50)await db().batch(parsed.data.slice(offset,offset+50).map(snapshot=>insertSnapshot(id,snapshot as any)));
     await db().prepare("UPDATE strategy_runs SET status='complete',processed=total,offset=total,stage=13,updated_at=? WHERE id=?").bind(new Date().toISOString(),id).run();return json({runId:id});
    }catch(e){await db().prepare("UPDATE strategy_runs SET status='failed',error=?,updated_at=? WHERE id=?").bind(String(e).slice(0,500),new Date().toISOString(),id).run();throw Error('تعذّر حفظ الاستيراد؛ لم تتغير النتائج السابقة')}
   }
@@ -58,7 +58,7 @@ export async function POST(req:Request){
    let id=typeof b.runId==='string'&&/^[0-9a-f-]{36}$/i.test(b.runId)?b.runId:'';
    if(id){const run=await db().prepare("SELECT id FROM strategy_runs WHERE id=? AND source='recovered backup' AND status='running'").bind(id).first();if(!run)return json({error:'جلسة الاستعادة غير صالحة'},409);}
    else id=await createRun('recovered backup',0,[],'running');
-   for(const snapshot of parsed.data)await insertSnapshot(id,snapshot as any).run();
+   for(let offset=0;offset<parsed.data.length;offset+=50)await db().batch(parsed.data.slice(offset,offset+50).map(snapshot=>insertSnapshot(id,snapshot as any)));
    const count=Number((await db().prepare('SELECT COUNT(*) AS count FROM fundamental_snapshots WHERE run_id=?').bind(id).first() as any)?.count||0),final=b.final===true;
    if(final){
     const symbols=Array.isArray(b.favoriteSymbols)?[...new Set(b.favoriteSymbols.filter((value:unknown)=>typeof value==='string'&&/^[A-Z0-9.^-]{1,16}$/.test(value)))].slice(0,100):[];

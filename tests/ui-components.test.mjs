@@ -125,3 +125,13 @@ test('portfolio allocation shows an explicit empty state when no position has a 
  assert.match(html,/لا يمكن رسم التوزيع/);
  assert.doesNotMatch(html,/portfolio-treemap/);
 });
+
+test('portfolio allocation keeps every company logo and percentage in a readable legend',async()=>{
+ const [source,css]=await Promise.all([readFile(path.join(root,'app/portfolio-view.tsx'),'utf8'),readFile(path.join(root,'app/globals.css'),'utf8')]);
+ assert.match(source,/className="allocation-legend"/);
+ assert.match(source,/aria-label="نسب شركات المحفظة"/);
+ assert.match(source,/className="treemap-node-logo"/);
+ assert.match(source,/className="treemap-node-copy"/);
+ assert.match(css,/@container allocation-tile \(max-width:90px\)/);
+ assert.match(css,/@media\(max-width:600px\)\{\.allocation-legend\{grid-template-columns:1fr\}/);
+});

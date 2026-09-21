@@ -114,9 +114,9 @@ function treemap(positions: PortfolioPosition[]) {
 export function AllocationTreemap({ positions, onOpen }: { positions: PortfolioPosition[]; onOpen: (position: PortfolioPosition) => void }) {
   const nodes = useMemo(() => treemap(positions), [positions]);
   return <section className="portfolio-panel allocation-panel"><div className="section-line"><div><h3>توزيع المحفظة</h3><p>مساحة كل مستطيل تساوي وزن الشركة من القيمة الحالية.</p></div><span>{positions.length} مراكز</span></div>
-    {nodes.length ? <div className="portfolio-treemap" role="group" aria-label="توزيع مراكز المحفظة">{nodes.map(node => <button key={node.symbol} style={{ insetInlineStart: `${node.x}%`, top: `${node.y}%`, width: `${node.width}%`, height: `${node.height}%`, '--node-color': node.color } as React.CSSProperties} onClick={() => onOpen(node)} aria-label={`${node.symbol}، وزن ${pct(node.weight)}`}>
-      <CompanyLogo symbol={node.symbol} size={Math.max(28, Math.min(54, node.width * 1.2))}/><b dir="ltr">{node.symbol}</b><span dir="ltr">{pct(node.weight)}</span><small>{usd(node.marketValue)}</small>
-    </button>)}</div> : <div className="portfolio-chart-empty">لا يمكن رسم التوزيع حتى يتوفر سعر موثوق لمركز واحد على الأقل.</div>}
+    {nodes.length ? <><div className="portfolio-treemap" role="group" aria-label="خريطة توزيع مراكز المحفظة">{nodes.map(node => <button className="treemap-node" key={node.symbol} style={{ insetInlineStart: `${node.x}%`, top: `${node.y}%`, width: `${node.width}%`, height: `${node.height}%`, '--node-color': node.color } as React.CSSProperties} onClick={() => onOpen(node)} aria-label={`${node.name}، ${node.symbol}، وزن ${pct(node.weight)}`} title={`${node.symbol} · ${pct(node.weight)} · ${usd(node.marketValue)}`}>
+      <span className="treemap-node-logo"><CompanyLogo symbol={node.symbol} size={44}/></span><span className="treemap-node-copy"><b dir="ltr">{node.symbol}</b><span dir="ltr">{pct(node.weight)}</span><small>{usd(node.marketValue)}</small></span>
+    </button>)}</div><div className="allocation-legend" role="list" aria-label="نسب شركات المحفظة">{nodes.map(node => <button role="listitem" key={node.symbol} onClick={() => onOpen(node)} aria-label={`فتح ${node.name}، وزن ${pct(node.weight)}`}><CompanyLogo symbol={node.symbol} size={36}/><span><b dir="ltr">{node.symbol}</b><small dir="auto">{node.name}</small></span><strong dir="ltr">{pct(node.weight)}</strong></button>)}</div></> : <div className="portfolio-chart-empty">لا يمكن رسم التوزيع حتى يتوفر سعر موثوق لمركز واحد على الأقل.</div>}
   </section>;
 }
 

@@ -30,22 +30,34 @@ async function safeImage(url: string) {
 export async function GET(request: Request) {
   const symbol = new URL(request.url).searchParams.get('symbol')?.trim().toUpperCase() || '';
   if (!symbolPattern.test(symbol)) return new Response('Invalid symbol', { status: 400 });
-  const financialLogo = await safeImage(`https://images.financialmodelingprep.com/symbol/${encodeURIComponent(symbol)}.png`);
-  if (financialLogo) return financialLogo;
+  let website: unknown = null;
   try {
     await ensureSchema();
     const identity = visitor(request);
     const row = await db().prepare('SELECT metadata FROM portfolio_transactions WHERE owner=? AND symbol=? ORDER BY updated_at DESC LIMIT 1').bind(identity.owner, symbol).first() as any;
-    const website = row?.metadata ? JSON.parse(String(row.metadata))?.website : null;
-    if (typeof website === 'string') {
-      const url = new URL(website);
-      if (url.protocol === 'https:' && !/^(localhost|127\.|0\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(url.hostname)) {
-        // Never fetch an arbitrary user-derived company host from the Worker.
-        // A fixed public logo endpoint receives only the encoded hostname.
-        const domainLogo = await safeImage(`https://logo.clearbit.com/${encodeURIComponent(url.hostname)}`);
-        if (domainLogo) return domainLogo;
-      }
+    website = row?.metadata ? JSON.parse(String(row.metadata))?.website : null;
+    if (typeof website !== 'string') {
+      const snapshot = await db().prepare("SELECT json_extract(payload,'$.website') AS website FROM fundamental_snapshots WHERE symbol=? ORDER BY as_of DESC,id DESC LIMIT 1").bind(symbol).first() as any;
+      website = snapshot?.website;
     }
   } catch { /* logo fallback remains available even when metadata is unavailable */ }
+  let domainLogo: Promise<Response | null> = Promise.resolve(null);
+  if (typeof website === 'string') {
+    try {
+      const url = new URL(website);
+      if (url.protocol === 'https:' && !/^(localhost|127\.|0\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(url.hostname)) {
+        // A fixed public logo endpoint receives only the encoded hostname.
+        domainLogo = safeImage(`https://logo.clearbit.com/${encodeURIComponent(url.hostname)}`);
+      }
+    } catch { /* invalid provider website falls through to the symbol logo */ }
+  }
+  // Run the two trusted logo lookups together so a missing provider does not
+  // make every portfolio row wait through two sequential network timeouts.
+  const [financialLogo, companyLogo] = await Promise.all([
+    safeImage(`https://images.financialmodelingprep.com/symbol/${encodeURIComponent(symbol)}.png`),
+    domainLogo,
+  ]);
+  if (financialLogo) return financialLogo;
+  if (companyLogo) return companyLogo;
   return fallback(symbol);
 }
