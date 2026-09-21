@@ -9,6 +9,20 @@ const logoInFlight = new Map<string, Promise<LogoAsset>>();
 const LOGO_TTL = 24 * 60 * 60_000;
 const FALLBACK_TTL = 10 * 60_000;
 
+// First party favicons cover the companies most often used in the portfolio.
+// Ticker based providers remain the primary source for the rest of the stock universe.
+const KNOWN_DOMAINS: Record<string, string> = {
+  AAPL: 'apple.com',
+  AMZN: 'amazon.com',
+  AVGO: 'broadcom.com',
+  GOOGL: 'google.com',
+  MSFT: 'microsoft.com',
+  NVDA: 'nvidia.com',
+  RKLB: 'rocketlabusa.com',
+  SOFI: 'sofi.com',
+  TSLA: 'tesla.com',
+};
+
 function assetResponse(asset: LogoAsset) {
   return new Response(asset.bytes.slice(), { headers: imageHeaders(asset.contentType) });
 }
@@ -18,8 +32,9 @@ function fallback(symbol: string): LogoAsset {
   for (const character of symbol) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
   const colors = ['#0f766e', '#2563eb', '#7c3aed', '#be123c', '#b45309', '#047857'];
   const color = colors[hash % colors.length];
-  const letters = symbol.replace(/[^A-Z0-9]/g, '').slice(0, 3);
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96"><rect width="96" height="96" rx="24" fill="${color}"/><text x="48" y="58" text-anchor="middle" font-family="Arial,sans-serif" font-size="30" font-weight="700" fill="white">${letters}</text></svg>`;
+  const angle = 18 + hash % 45;
+  // The final safety net is a branded geometric mark instead of a plain ticker badge.
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="${color}"/><stop offset="1" stop-color="#111827"/></linearGradient></defs><rect width="96" height="96" rx="24" fill="url(#g)"/><g transform="rotate(${angle} 48 48)" fill="none" stroke="#fff" stroke-linecap="round" stroke-linejoin="round"><path stroke-width="8" d="M23 62 38 46l11 10 24-25"/><path stroke-width="5" opacity=".72" d="M23 72h50"/></g><circle cx="73" cy="31" r="5" fill="#fff"/></svg>`;
   return { bytes: new TextEncoder().encode(svg), contentType: 'image/svg+xml; charset=utf-8', fallback: true };
 }
 
@@ -48,24 +63,25 @@ async function resolveLogo(symbol: string, website: string | null, forceRefresh 
   const existing = logoInFlight.get(key);
   if (existing) return existing;
   const request = (async () => {
-    let domainLogo: Promise<LogoAsset | null> = Promise.resolve(null);
-    if (website) {
+    let websiteLogo: Promise<LogoAsset | null> = Promise.resolve(null);
+    const websiteDomain = website ? (() => {
       try {
         const url = new URL(website);
-        if (url.protocol === 'https:' && !/^(localhost|127\.|0\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(url.hostname)) {
-          domainLogo = safeImage(`https://logo.clearbit.com/${encodeURIComponent(url.hostname)}`);
-        }
-      } catch { /* invalid provider website falls through to the symbol logo */ }
-    }
+        return url.protocol === 'https:' && !/^(localhost|127\.|0\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(url.hostname) ? url.hostname : null;
+      } catch { return null; }
+    })() : null;
+    const domain = websiteDomain || KNOWN_DOMAINS[symbol];
+    if (domain) websiteLogo = safeImage(`https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=128`);
     // Run trusted logo lookups together so one unavailable provider does not
     // make every portfolio row wait through two sequential network timeouts.
-    const [financialLogo, companyLogo, parqetLogo, marketCapLogo] = await Promise.all([
+    const [financialLogo, companyLogo, parqetLogo, marketCapLogo, faviconLogo] = await Promise.all([
       safeImage(`https://financialmodelingprep.com/image-stock/${encodeURIComponent(symbol)}.png`),
-      domainLogo,
+      websiteLogo,
       safeImage(`https://assets.parqet.com/logos/symbol/${encodeURIComponent(symbol)}.png`),
       safeImage(`https://companiesmarketcap.com/img/company-logos/128/${encodeURIComponent(symbol)}.png`),
+      safeImage(`https://www.google.com/s2/favicons?domain=${encodeURIComponent(KNOWN_DOMAINS[symbol] || `${symbol.toLowerCase()}.com`)}&sz=128`),
     ]);
-    const asset = financialLogo || companyLogo || parqetLogo || marketCapLogo || await safeImage(`https://images.financialmodelingprep.com/symbol/${encodeURIComponent(symbol)}.png`) || fallback(symbol);
+    const asset = financialLogo || companyLogo || parqetLogo || marketCapLogo || faviconLogo || await safeImage(`https://images.financialmodelingprep.com/symbol/${encodeURIComponent(symbol)}.png`) || fallback(symbol);
     logoCache.set(key, { expiresAt: Date.now() + (asset.fallback ? FALLBACK_TTL : LOGO_TTL), asset });
     return asset;
   })();

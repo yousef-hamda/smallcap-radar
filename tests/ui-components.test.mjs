@@ -136,6 +136,14 @@ test('portfolio allocation keeps every company logo and percentage in a readable
  assert.match(css,/@media\(max-width:600px\)\{\.allocation-legend\{grid-template-columns:1fr\}/);
 });
 
+test('portfolio company picker keeps results in a large readable dialog row',async()=>{
+ const css=await readFile(path.join(root,'app/globals.css'),'utf8');
+ assert.match(css,/\.portfolio-dialog\[data-slot=dialog-content\]\{width:min\(760px/);
+ assert.match(css,/\.portfolio-search-results\.in-dialog\{position:static/);
+ assert.match(css,/\.portfolio-search-results\.in-dialog button\{grid-template-columns:64px minmax\(0,1fr\) auto;min-height:84px/);
+ assert.match(css,/\.portfolio-search-results\.in-dialog \.company-logo\{width:56px;height:56px/);
+});
+
 test('portfolio allocation uses proportional squarified geometry inside the frame',async()=>{
  const {squarifiedTreemap}=await vite.ssrLoadModule('/app/portfolio-view.tsx');
  const positions=[
@@ -206,6 +214,9 @@ test('portfolio logo source uses the verified public stock-logo endpoint',async(
  assert.match(route,/logoInFlight/);
  assert.match(route,/FALLBACK_TTL/);
  assert.match(route,/forceRefresh/);
+ assert.match(route,/KNOWN_DOMAINS/);
+ assert.match(route,/www\.google\.com\/s2\/favicons/);
+ assert.match(route,/linearGradient/);
  assert.match(view,/\/api\/portfolio-logo\?symbol=\$\{encodeURIComponent\(symbol\)\}/);
  assert.match(view,/loading="lazy"/);
 });
