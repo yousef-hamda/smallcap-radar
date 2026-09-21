@@ -1,6 +1,8 @@
 # Small-Cap Radar V2
 
-**Production:** releases are built from the pushed source commit, saved as an immutable Sites version, then deployed after automated and browser acceptance. Historical release records remain under `docs/DEPLOYMENT_*.md`; physical-phone notification receipt remains evidence-gated.
+**Current deployments:** GitHub `master` is the code source for the live [Railway app](https://smallcap-radar-production.up.railway.app/). The original ChatGPT Site is a separate historical deployment. Earlier Sites release records remain under `docs/DEPLOYMENT_*.md`; they do not prove the Railway release passed physical-phone notification acceptance.
+
+For maintainers, read the [project memory](docs/PROJECT_MEMORY.md), [operations memory](docs/OPERATIONS_MEMORY.md), and [handoff](HANDOFF.md) first. These files record the verified Railway storage/recovery state without secrets.
 
 **حملة التحسين الحالية:** راجع [التغييرات والأدلة والفجوات](docs/IMPROVEMENT_CAMPAIGN_2026_09_08.md). ملاحظات الإصدارات الأقدم أدناه تاريخية؛ لا تثبت أداء النسخة الحالية أو اكتمال القبول.
 
@@ -8,7 +10,7 @@
 
 للدليل العربي الكامل الذي يغطي المنتج، المحرك، البيانات، الفحص الخلفي، الواجهة، الإشعارات، الاختبارات، النشر، والفجوات المتبقية، راجع [README_FULL_AR.md](docs/README_FULL_AR.md).
 
-Arabic RTL mobile-first PWA, published through Sites. It is a working research platform with a deliberately disabled final ranking until the remaining research requirements are validated. Do not interpret synthetic fixtures or referenced historical benchmark rates as market results.
+Arabic RTL mobile-first PWA, currently deployed on Railway with an older separate ChatGPT Site deployment. It is a working research platform; the visible qualified-category scores are diagnostic rankings, not validated predictions or investment recommendations. Do not interpret synthetic fixtures or referenced historical benchmark rates as market results.
 
 ## Implemented
 
@@ -22,7 +24,7 @@ Arabic RTL mobile-first PWA, published through Sites. It is a working research p
 - Conservative SEC annual + current YTD − prior YTD normalization, provenance, foreign-filer flag, unavailable-data handling. Some issuers require custom taxonomy support and remain incomplete.
 - PIT availability filter, deterministic firm holdout assignment, firm bootstrap, Bonferroni correction, conservative Bounce exit simulation and costs.
 - Web manifest and icons; device cache stores the last viewed snapshot; offline fallback reading is not implemented in the rebuilt UI. Installation and notification receipt still require final verification on the owner's physical phone; server-side VAPID request generation is covered by automated tests.
-- 63 engine/normalization tests, 45 runtime/API/provider tests and 19 build/UI/research tests currently pass. The release workflow also reruns TypeScript checking, ESLint, dependency audit and a verified production build before publication.
+- The engine, runtime/API/provider, UI, TypeScript, ESLint, and production-build checks passed for the September 2026 QA changes. Re-run the full suite for each release; historical counts in older reports are not a substitute for a current run.
 
 ## Not complete / not validated
 
@@ -59,7 +61,7 @@ Operational conventions: 20-day median dollar volume for Core and Bounce (Bounce
 - `GET /api/chart?symbol=...`: on-demand current-session 5-minute chart data for the 1D period, with bounded caching and explicit Arabic provider errors.
 - `GET|POST|PUT|DELETE /api/portfolio`: private owner-scoped ledger, bounded company-directory search and recalculated position/return summary. Mutations are same-origin and overselling is rejected against the full chronological ledger.
 - `GET /api/portfolio-history`: aggregate performance series from sourced historical bars, cached for six hours. Stale or absent prices are not converted to zero and cannot silently bridge a chart gap.
-- `GET /api/portfolio-logo?symbol=...`: bounded image proxy using a public symbol-logo source, then the verified company favicon when known, then an explicit ticker-mark fallback.
+- Wallet logos first load from a public company-logo image endpoint in the browser. `GET /api/portfolio-logo?symbol=...` remains the bounded same-origin fallback; it can return a ticker-mark when external logos are unavailable.
 - `POST /api/radar`: same-origin `{action:'favorite',symbol,saved:boolean}` or `{action:'import',records: Snapshot[]}`. Favorites are private by platform identity or opaque visitor cookie and stored in D1. A new visitor starts with zero; legacy global favorites are not migrated to an arbitrary owner. Import max 500 records / 4MB; rejects duplicate symbols and malformed provenance.
 - `POST /api/background-scan/start`: starts or revives a server-owned quick/full scan and returns immediately. The Worker passes a signed internal baton between bounded stages/pages, so browser suspension does not control progress.
 - `POST /api/background-scan/resume`: same-origin recovery kick for an expired scan lease. The client may call it after observing a stale run; the scan cursor, retry queue and results remain server-owned.
@@ -71,9 +73,7 @@ Do not import the schema wrapper itself: import the actual array of sourced snap
 
 ## GitHub ownership and backup
 
-Connected account discovered: `yousef-hamda`. The available connector can write to an existing repository but has **no create-repository tool**, and no GitHub CLI credential is installed. No GitHub repository has been created. Source is checkpointed to this Site's source repository, which is not the user's requested GitHub backup.
-
-After an empty private `yousef-hamda/small-cap-radar-v2` exists, synchronize this complete source tree to it. Keep `.openai/hosting.json` for this Site's identity. Do not copy site credentials, .env files, dependency directories, runtime caches or built archives into GitHub. The CI workflow runs typecheck, engine tests and build.
+The owner repository exists at `https://github.com/yousef-hamda/smallcap-radar`; the deployment branch is `master`. Keep `.openai/hosting.json` for the original Site identity, but do not copy credentials, `.env` files, dependency directories, runtime caches, or built archives into GitHub. The current Railway storage and backup caveats are in `docs/OPERATIONS_MEMORY.md`.
 
 ## Secrets and access
 
