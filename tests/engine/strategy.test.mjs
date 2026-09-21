@@ -180,6 +180,11 @@ test('Company Facts fallback retries a transient provider error and returns a da
  globalThis.fetch=async()=>{calls++;if(calls===1)return new Response('',{status:503});return Response.json({facts:{'us-gaap':{Revenues:{units:{USD:[{start:'2025-01-01',end:'2025-12-31',val:120,filed:'2026-02-15',form:'10-K'}]}}}}});};
  try{const result=await fetchCompanyFactsFallback([9876543],asOf);assert.equal(result.requests,1);assert.equal(result.success,1);assert.equal(result.failed,0);assert(calls>=2);assert.equal(result.fundamentals.get(9876543).revenue.val,120);assert.equal(result.fundamentals.get(9876543).revenue.kind,'companyfacts');}finally{globalThis.fetch=original;}
 });
+test('Company Facts permission failures are recorded without an unbounded retry queue',async()=>{
+ const original=globalThis.fetch;globalThis.fetch=async()=>new Response('',{status:403});
+ try{const result=await fetchCompanyFactsFallback([9876544],new Date('2026-09-01T00:00:00Z'));assert.equal(result.failed,1);assert.deepEqual(result.retryableFailedCiks,[]);}
+ finally{globalThis.fetch=original;}
+});
 test('deep financial enrichment derives cash debt EV/S without treating missing debt as zero',()=>{
  const row=val=>({val,end:'2026-06-30',filed:'2026-08-01',form:'10-Q'});
  const facts={'us-gaap':Object.fromEntries([['CashAndCashEquivalentsAtCarryingValue',20e6],['LongTermDebtCurrent',3e6],['LongTermDebtNoncurrent',7e6]].map(([tag,val])=>[tag,{units:{USD:[row(val)]}}]))};

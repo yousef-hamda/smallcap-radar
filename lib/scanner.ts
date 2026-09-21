@@ -182,11 +182,11 @@ export async function processScanBatch(runId: string) {
     const jobs = retrying ? queue.slice(0, COMPANY_FACTS_BATCH_SIZE) : companies.slice(run.offset, run.offset + COMPANY_FACTS_BATCH_SIZE).map((company: any) => ({ company, attempt: 0 }));
     const remaining = retrying ? queue.slice(COMPANY_FACTS_BATCH_SIZE) : queue;
     const candidates: number[] = jobs.map((job: any) => Number(job.company?.cik)).filter((cik: number): cik is number => Number.isInteger(cik) && cik > 0 && needsCompanyFacts(facts.get(cik))) as number[];
-    const fallback = candidates.length ? await fetchCompanyFactsFallback([...new Set(candidates)], new Date(), facts) : { fundamentals: facts, changed: [], requests: 0, success: 0, empty: 0, failed: 0, failedCiks: [], errors: [] };
-    const failedSet = new Set(fallback.failedCiks);
+    const fallback = candidates.length ? await fetchCompanyFactsFallback([...new Set(candidates)], new Date(), facts) : { fundamentals: facts, changed: [], requests: 0, success: 0, empty: 0, failed: 0, failedCiks: [], retryableFailedCiks: [], errors: [] };
+    const retryableFailedSet = new Set(fallback.retryableFailedCiks);
     for (const job of jobs) {
       const cik = Number(job.company?.cik);
-      if (failedSet.has(cik) && job.attempt < 2) remaining.push({ ...job, attempt: job.attempt + 1 });
+      if (retryableFailedSet.has(cik) && job.attempt < 2) remaining.push({ ...job, attempt: job.attempt + 1 });
     }
     const statements = fallback.changed.map((cik) => database.prepare('INSERT OR REPLACE INTO bulk_fundamentals(run_id,cik,payload) VALUES(?,?,?)').bind(run.id, cik, JSON.stringify(fallback.fundamentals.get(cik))));
     for (let index = 0; index < statements.length; index += 75) await database.batch(statements.slice(index, index + 75));

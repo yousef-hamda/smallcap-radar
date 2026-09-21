@@ -129,6 +129,7 @@ export async function fetchCompanyFactsFallback(candidateCiks: number[], asOf = 
   const changed = new Set<number>();
   const errors: string[] = [];
   const failedCiks: number[] = [];
+  const retryableFailedCiks: number[] = [];
   let success = 0, empty = 0, failed = 0;
   const outcomes = await Promise.all(candidateCiks.map(async (cik) => {
     const url = companyFactsUrl(cik);
@@ -144,6 +145,10 @@ export async function fetchCompanyFactsFallback(candidateCiks: number[], asOf = 
       failed++;
       failedCiks.push(outcome.cik);
       errors.push(outcome.error.message);
+      // Authentication, permission, and missing-resource responses are stable
+      // provider gaps. Retrying thousands of them only delays scoring. Network
+      // failures, rate limits, and 5xx responses remain retryable.
+      if (!/\bHTTP (400|401|403|404|405|422)\b/.test(outcome.error.message)) retryableFailedCiks.push(outcome.cik);
       continue;
     }
     success++;
@@ -152,7 +157,7 @@ export async function fetchCompanyFactsFallback(candidateCiks: number[], asOf = 
     const merged = mergeCompanyFacts(current, outcome.parsed);
     if (JSON.stringify(merged) !== JSON.stringify(current || {})) { fundamentals.set(outcome.cik, merged); changed.add(outcome.cik); }
   }
-  return { fundamentals, changed: [...changed], requests: candidateCiks.length, success, empty, failed, failedCiks, errors: [...new Set(errors)].slice(0, 8) };
+  return { fundamentals, changed: [...changed], requests: candidateCiks.length, success, empty, failed, failedCiks, retryableFailedCiks, errors: [...new Set(errors)].slice(0, 8) };
 }
 
 export async function fetchBulkFundamentals(candidateCiks: number[], asOf = new Date(), page?:{offset:number;limit:number;initial?:Map<number,BulkFundamentals>}) {
