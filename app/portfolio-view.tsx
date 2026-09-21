@@ -54,7 +54,14 @@ const post = (method: 'POST' | 'PUT' | 'DELETE', body: unknown) => ({ method, he
 const performanceRanges = { '1M': 31, '3M': 93, '6M': 186, '1Y': 366, MAX: Infinity } as const;
 
 function CompanyLogo({ symbol, size = 44 }: { symbol: string; size?: number }) {
-  return <Image unoptimized className="company-logo" src={`/api/portfolio-logo?symbol=${encodeURIComponent(symbol)}`} width={size} height={size} alt={`شعار ${symbol}`} />;
+  const [failedFor, setFailedFor] = useState<string | null>(null);
+  // The browser can fetch the public logo CDN directly even when the isolated
+  // Cloudflare worker cannot reach that host. Keep our same-origin initials
+  // endpoint as an explicit fallback for symbols without a published logo.
+  const src = failedFor === symbol
+    ? `/api/portfolio-logo?symbol=${encodeURIComponent(symbol)}`
+    : `https://financialmodelingprep.com/image-stock/${encodeURIComponent(symbol)}.png`;
+  return <Image unoptimized className="company-logo" src={src} width={size} height={size} alt={`شعار ${symbol}`} onError={() => setFailedFor(symbol)} />;
 }
 
 export function PerformanceChart({ history }: { history: HistoryData | null }) {

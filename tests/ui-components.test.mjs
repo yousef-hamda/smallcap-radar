@@ -137,8 +137,10 @@ test('portfolio allocation keeps every company logo and percentage in a readable
 });
 
 test('portfolio logo source uses the verified public stock-logo endpoint',async()=>{
- const route=await readFile(path.join(root,'app/api/portfolio-logo/route.ts'),'utf8');
+ const [route,view]=await Promise.all([readFile(path.join(root,'app/api/portfolio-logo/route.ts'),'utf8'),readFile(path.join(root,'app/portfolio-view.tsx'),'utf8')]);
  assert.match(route,/https:\/\/financialmodelingprep\.com\/image-stock\/\$\{encodeURIComponent\(symbol\)\}\.png/);
  assert.match(route,/if \(financialLogo\) return financialLogo/);
  assert.match(route,/if \(companyLogo\) return companyLogo/);
+ assert.match(view,/https:\/\/financialmodelingprep\.com\/image-stock\/\$\{encodeURIComponent\(symbol\)\}\.png/);
+ assert.match(view,/onError=\{\(\) => setFailedFor\(symbol\)\}/);
 });
