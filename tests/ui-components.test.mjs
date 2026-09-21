@@ -139,7 +139,8 @@ test('portfolio allocation keeps every company logo and percentage in a readable
 test('portfolio company picker keeps results in a large readable dialog row',async()=>{
  const css=await readFile(path.join(root,'app/globals.css'),'utf8');
  assert.match(css,/\.portfolio-dialog\[data-slot=dialog-content\]\{width:min\(760px/);
- assert.match(css,/\.portfolio-search-results\.in-dialog\{position:static/);
+ assert.match(css,/\.portfolio-dialog\.picker-dialog\{height:min\(680px/);
+ assert.match(css,/\.portfolio-search-results\.in-dialog\{position:static;grid-column:1 \/ -1/);
  assert.match(css,/\.portfolio-search-results\.in-dialog button\{grid-template-columns:64px minmax\(0,1fr\) auto;min-height:84px/);
  assert.match(css,/\.portfolio-search-results\.in-dialog \.company-logo\{width:56px;height:56px/);
 });
@@ -218,5 +219,6 @@ test('portfolio logo source uses the verified public stock-logo endpoint',async(
  assert.match(route,/www\.google\.com\/s2\/favicons/);
  assert.match(route,/linearGradient/);
  assert.match(view,/\/api\/portfolio-logo\?symbol=\$\{encodeURIComponent\(symbol\)\}/);
+ assert.match(view,/logoVersion = '3'/);
  assert.match(view,/loading="lazy"/);
 });
