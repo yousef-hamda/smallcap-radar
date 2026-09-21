@@ -81,6 +81,12 @@ export async function translateSnapshotContent(snapshot: Snapshot): Promise<Snap
     industryAr: industryAr || snapshot.industryAr,
     news: translatedNews,
   };
+  const translationIssues = [
+    snapshot.name && !nameAr && !hasArabic(snapshot.name) ? 'تعذّرت ترجمة اسم الشركة إلى العربية.' : '',
+    snapshot.description && !descriptionAr && !hasArabic(snapshot.description) ? 'تعذّرت ترجمة وصف الشركة إلى العربية.' : '',
+    news.some(item => item.title && !item.titleAr && !hasArabic(item.title)) ? 'تعذّرت ترجمة خبر واحد أو أكثر إلى العربية.' : '',
+  ].filter(Boolean);
+  if (translationIssues.length) next.dataIssues = [...new Set([...(snapshot.dataIssues ?? []), ...translationIssues])];
   if (next.nameAr || next.descriptionAr || next.sectorAr || next.industryAr || translatedNews.some(item => item.titleAr)) {
     next.provenance = {
       ...next.provenance,
