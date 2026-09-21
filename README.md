@@ -42,7 +42,7 @@ npm run build
 
 The bundled verified build and install scripts target Linux. Use the supplied Sites development tooling for its supported runtime. Standard npm dev uses Vite/Vinext, with a logical D1 binding declared in `.openai/hosting.json`.
 
-On Railway this app still runs the Cloudflare-compatible local D1 binding. Attach a Railway volume to the web service at `/app/.wrangler`; the Vite configuration explicitly stores Miniflare state inside that runtime volume. `DATABASE_URL` alone does not replace D1 and must not be treated as persistence for this build.
+On Railway this app still runs the Cloudflare-compatible local D1 binding. Attach a Railway volume to the web service at `/app/data`; the Vite configuration explicitly stores Miniflare state inside that runtime volume. Do not mount over `/app/.wrangler`: the build's deployment configuration lives there and hiding it prevents startup. `DATABASE_URL` alone does not replace D1 and must not be treated as persistence for this build.
 
 Current implementation uses **Vinext/React instead of the plan's TanStack Start**, matching the available supported hosting starter. Strategy/data modules are framework-independent. This is a documented architectural deviation, not a claim of exact plan compliance.
 
