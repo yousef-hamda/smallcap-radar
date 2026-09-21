@@ -118,11 +118,24 @@ export function evaluateStrategy(strategy:keyof typeof SPECS,s:Snapshot){
  const conflictStatus=s.sourceConflicts?.length?null:requiredEvidenceComplete?true:null;
  add('conflict','تعارض المصادر',conflictStatus,s.sourceConflicts?.join('؛ ')||(conflictStatus===true?'لا يوجد تعارض موثق بين المقاييس المطلوبة.':'أدلة المقاييس المطلوبة غير مكتملة؛ لا يمكن نفي التعارض.'));
  const evidenceRequirements:Record<string,string[]>={cap:['marketCap'],liquidity:['medianDollarVolume20d'],revenue:['revenue'],valuation:[strategy==='legacy'?'ps':'evSales'],collapse:['return12m'],low:['price','low52w'],dilution:['dilution','shareCountRatio'],reversal:['price','ma30w']};
- const profitKeys=finite(s.netIncome)&&s.netIncome>0?['netIncome']:finite(s.fcf)&&s.fcf>0?['fcf']:['netIncome','fcf'];
+ // Profitability is an explicit OR gate. A positive, evidenced FCF must be
+ // enough even when net income is missing or its evidence is unavailable, and
+ // vice versa. Choosing net income merely because it is numerically present
+ // would incorrectly turn a valid FCF path into UNKNOWN.
+ const profitKeys=['netIncome','fcf'].filter(key=>{
+  const value=s[key as 'netIncome'|'fcf'];
+  return finite(value)&&value>0;
+ });
  evidenceRequirements.profitability=profitKeys;
  for(const check of checks){
   const keys=evidenceRequirements[check.id];
-  if(keys&&check.status!=='UNKNOWN'&&!keys.every(key=>usableEvidence(s.provenance[key],s.asOf))){check.status='UNKNOWN';check.explanation+=` · الدليل الزمني غير مكتمل: ${keys.filter(key=>!usableEvidence(s.provenance[key],s.asOf)).join(', ')}`;}
+  if (check.id === 'profitability' && check.status !== 'UNKNOWN') {
+   const positiveProfitKeys=profitKeys.length?profitKeys:['netIncome','fcf'];
+   if (!positiveProfitKeys.some(key=>usableEvidence(s.provenance[key],s.asOf))) {
+    check.status='UNKNOWN';
+    check.explanation+=` · الدليل الزمني غير مكتمل: ${positiveProfitKeys.filter(key=>!usableEvidence(s.provenance[key],s.asOf)).join(', ')}`;
+   }
+  } else if(keys&&check.status!=='UNKNOWN'&&!keys.every(key=>usableEvidence(s.provenance[key],s.asOf))){check.status='UNKNOWN';check.explanation+=` · الدليل الزمني غير مكتمل: ${keys.filter(key=>!usableEvidence(s.provenance[key],s.asOf)).join(', ')}`;}
  }
  // Every documented strategy condition is a hard category gate. The score is
  // still useful for ordering qualified rows, but can never rescue FAIL/UNKNOWN.

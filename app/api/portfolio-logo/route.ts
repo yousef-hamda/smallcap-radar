@@ -25,7 +25,10 @@ function fallback(symbol: string): LogoAsset {
 
 async function safeImage(url: string): Promise<LogoAsset | null> {
   try {
-    const response = await fetch(url, { headers: { Accept: 'image/png,image/svg+xml,image/webp,image/x-icon;q=0.8' }, redirect: 'error', signal: AbortSignal.timeout(4_000) });
+    // The URLs are fixed provider endpoints (the website host is encoded
+    // after HTTPS/private-network validation). Follow provider redirects so
+    // the same resolver behaves consistently in Vite preview and Workers.
+    const response = await fetch(url, { headers: { Accept: 'image/png,image/svg+xml,image/webp,image/x-icon;q=0.8' }, redirect: 'follow', signal: AbortSignal.timeout(4_000) });
     const contentType = response.headers.get('content-type') || '';
     const length = Number(response.headers.get('content-length') || 0);
     const mediaType=contentType.toLowerCase().split(';',1)[0].trim();
@@ -36,8 +39,9 @@ async function safeImage(url: string): Promise<LogoAsset | null> {
   } catch { return null; }
 }
 
-async function resolveLogo(symbol: string, website: string | null) {
+async function resolveLogo(symbol: string, website: string | null, forceRefresh = false) {
   const key = `${symbol}|${website || ''}`;
+  if (forceRefresh) logoCache.delete(key);
   const cached = logoCache.get(key);
   if (cached && cached.expiresAt > Date.now()) return cached.asset;
   logoCache.delete(key);
@@ -55,12 +59,13 @@ async function resolveLogo(symbol: string, website: string | null) {
     }
     // Run trusted logo lookups together so one unavailable provider does not
     // make every portfolio row wait through two sequential network timeouts.
-    const [financialLogo, companyLogo, parqetLogo] = await Promise.all([
+    const [financialLogo, companyLogo, parqetLogo, marketCapLogo] = await Promise.all([
       safeImage(`https://financialmodelingprep.com/image-stock/${encodeURIComponent(symbol)}.png`),
       domainLogo,
       safeImage(`https://assets.parqet.com/logos/symbol/${encodeURIComponent(symbol)}.png`),
+      safeImage(`https://companiesmarketcap.com/img/company-logos/128/${encodeURIComponent(symbol)}.png`),
     ]);
-    const asset = financialLogo || companyLogo || parqetLogo || await safeImage(`https://images.financialmodelingprep.com/symbol/${encodeURIComponent(symbol)}.png`) || fallback(symbol);
+    const asset = financialLogo || companyLogo || parqetLogo || marketCapLogo || await safeImage(`https://images.financialmodelingprep.com/symbol/${encodeURIComponent(symbol)}.png`) || fallback(symbol);
     logoCache.set(key, { expiresAt: Date.now() + (asset.fallback ? FALLBACK_TTL : LOGO_TTL), asset });
     return asset;
   })();
@@ -69,7 +74,9 @@ async function resolveLogo(symbol: string, website: string | null) {
 }
 
 export async function GET(request: Request) {
-  const symbol = new URL(request.url).searchParams.get('symbol')?.trim().toUpperCase() || '';
+  const params = new URL(request.url).searchParams;
+  const symbol = params.get('symbol')?.trim().toUpperCase() || '';
+  const forceRefresh = params.get('retry') === '1';
   if (!symbolPattern.test(symbol)) return new Response('Invalid symbol', { status: 400 });
   let website: unknown = null;
   try {
@@ -82,6 +89,6 @@ export async function GET(request: Request) {
       website = snapshot?.website;
     }
   } catch { /* logo fallback remains available even when metadata is unavailable */ }
-  const asset = await resolveLogo(symbol, typeof website === 'string' ? website : null);
+  const asset = await resolveLogo(symbol, typeof website === 'string' ? website : null, forceRefresh);
   return assetResponse(asset);
 }

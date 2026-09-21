@@ -25,6 +25,7 @@ export type PortfolioTransaction = {
 export type PortfolioQuote = {
   symbol: string;
   name: string;
+  nameAr?: string;
   price: number | null;
   dailyChange: number | null;
   asOf: string | null;
@@ -42,6 +43,7 @@ export type PortfolioQuote = {
 export type PortfolioPosition = {
   symbol: string;
   name: string;
+  nameAr?: string;
   quantity: number;
   averageCost: number;
   costBasis: number;
@@ -164,6 +166,7 @@ export function calculatePortfolio(transactions: PortfolioTransaction[], quotes:
     positions.push({
       symbol: position.symbol,
       name: quote?.name || position.name,
+      nameAr: quote?.nameAr || quote?.snapshot?.nameAr,
       quantity: position.quantity,
       averageCost: position.costBasis / position.quantity,
       costBasis: position.costBasis,

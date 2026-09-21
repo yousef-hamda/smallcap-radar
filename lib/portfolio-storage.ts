@@ -100,6 +100,7 @@ export async function readPortfolioQuotes(symbols: string[]) {
     quotes[symbol] = {
       symbol,
       name: snapshot?.name || company?.name || symbol,
+      nameAr: snapshot?.nameAr,
       price,
       dailyChange: live?.dailyChange ?? snapshot?.dailyChange ?? company?.dailyChange ?? null,
       asOf: live?.quoteAvailableAt || snapshot?.provenance?.price?.availableAt || snapshot?.asOf || company?.quoteAvailableAt || null,

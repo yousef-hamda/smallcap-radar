@@ -201,9 +201,11 @@ test('Arabic enrichment records a visible issue when the translation provider fa
 test('portfolio logo source uses the verified public stock-logo endpoint',async()=>{
  const [route,view]=await Promise.all([readFile(path.join(root,'app/api/portfolio-logo/route.ts'),'utf8'),readFile(path.join(root,'app/portfolio-view.tsx'),'utf8')]);
  assert.match(route,/https:\/\/financialmodelingprep\.com\/image-stock\/\$\{encodeURIComponent\(symbol\)\}\.png/);
- assert.match(route,/financialLogo \|\| companyLogo \|\| parqetLogo/);
+ assert.match(route,/financialLogo \|\| companyLogo \|\| parqetLogo \|\| marketCapLogo/);
+ assert.match(route,/companiesmarketcap\.com\/img\/company-logos\/128/);
  assert.match(route,/logoInFlight/);
  assert.match(route,/FALLBACK_TTL/);
+ assert.match(route,/forceRefresh/);
  assert.match(view,/\/api\/portfolio-logo\?symbol=\$\{encodeURIComponent\(symbol\)\}/);
  assert.match(view,/loading="lazy"/);
 });

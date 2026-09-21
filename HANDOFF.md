@@ -4,7 +4,7 @@ Updated 2026-09-21. Start with `docs/PROJECT_MEMORY.md`, `docs/OPERATIONS_MEMORY
 
 ## Current state
 
-- GitHub `master` contains the deep strategy, Arabic enrichment, wallet layout, and logo resolver changes through commit `457ad83`. Railway production still needs a deployment from this commit before the live service can be considered updated. The last verified live status returned recovered run `7857f783-7749-4000-8f90-b0f0af848331`, `complete`, 2,914 records.
+- GitHub `master` contains the deep strategy, Arabic enrichment, wallet layout, and resilient logo resolver changes through the latest pushed commit. Railway production must still be checked after that commit; the current smoke check before this cycle served an older release whose AAPL logo response was an initials SVG and whose company payload lacked Arabic fields. The last verified live status returned recovered run `7857f783-7749-4000-8f90-b0f0af848331`, `complete`, 2,914 records.
 - The web service uses D1-compatible local state on the Railway volume at `/app/data`, not the attached Railway Postgres database. Data survived multiple redeployments. `RECOVERY_SECRET` was removed after recovery.
 - Wallet allocation uses a squarified treemap with proportional tile areas, a complete legend, and responsive tile content. Logos load through the same-origin resolver, which tries published logo providers before the stable local fallback.
 - Deep company payloads use `deep:v7`; translation requests are bounded and logo requests are cached and deduplicated in-process. The second-cycle plan and its deferred queue are recorded in `docs/DEEP_IMPROVEMENT_PLAN_2026_09_21_V2_AR.md`.

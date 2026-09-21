@@ -2,11 +2,12 @@ import type { Snapshot } from './engine';
 
 type TranslationResult = { text: string; source: string };
 
-const GOOGLE_TRANSLATE = 'https://translate.googleapis.com/translate_a/single';
+const GOOGLE_TRANSLATE_HOSTS = ['translate.googleapis.com', 'translate.google.com'];
 const translationCache = new Map<string, { expiresAt: number; value: TranslationResult | null }>();
 const inFlight = new Map<string, Promise<TranslationResult | null>>();
 const MAX_CACHE = 256;
 const TTL = 24 * 60 * 60_000;
+const FAILURE_TTL = 5 * 60_000;
 const MAX_TRANSLATION_CONCURRENCY = 3;
 let activeTranslations = 0;
 const translationQueue: Array<() => void> = [];
@@ -29,7 +30,7 @@ async function withTranslationSlot<T>(work: () => Promise<T>): Promise<T> {
 
 function remember(key: string, value: TranslationResult | null) {
   if (translationCache.size >= MAX_CACHE) translationCache.delete(translationCache.keys().next().value!);
-  translationCache.set(key, { expiresAt: Date.now() + TTL, value });
+  translationCache.set(key, { expiresAt: Date.now() + (value ? TTL : FAILURE_TTL), value });
   return value;
 }
 
@@ -51,18 +52,28 @@ export async function translateToArabic(input: unknown, maxLength = 2_800): Prom
 
   const request = (async () => {
     try {
-      const url = new URL(GOOGLE_TRANSLATE);
-      url.searchParams.set('client', 'gtx');
-      url.searchParams.set('sl', 'auto');
-      url.searchParams.set('tl', 'ar');
-      url.searchParams.set('dt', 't');
-      url.searchParams.set('q', text);
-      const response = await withTranslationSlot(() => fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(4_000) }));
-      if (!response.ok) return remember(key, null);
-      const payload = await response.json() as unknown;
-      const rows = Array.isArray(payload) && Array.isArray(payload[0]) ? payload[0] : [];
-      const translated = rows.map(row => Array.isArray(row) ? row[0] : '').filter(value => typeof value === 'string').join('');
-      return remember(key, translated ? { text: clean(translated), source: 'Google Translate · English to Arabic' } : null);
+      let lastError: unknown;
+      for (const host of GOOGLE_TRANSLATE_HOSTS) {
+        try {
+          const url = new URL(`https://${host}/translate_a/single`);
+          url.searchParams.set('client', 'gtx');
+          url.searchParams.set('sl', 'auto');
+          url.searchParams.set('tl', 'ar');
+          url.searchParams.set('dt', 't');
+          url.searchParams.set('q', text);
+          const response = await withTranslationSlot(() => fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(4_000) }));
+          if (!response.ok) { lastError = Error(`${host}: HTTP ${response.status}`); continue; }
+          const payload = await response.json() as unknown;
+          const rows = Array.isArray(payload) && Array.isArray(payload[0]) ? payload[0] : [];
+          const translated = rows.map(row => Array.isArray(row) ? row[0] : '').filter(value => typeof value === 'string').join('');
+          if (translated) return remember(key, { text: clean(translated), source: 'Google Translate · English to Arabic' });
+          lastError = Error(`${host}: empty translation`);
+        } catch (error) { lastError = error; }
+      }
+      // Keep the failure quiet in the user-facing payload while allowing a
+      // later request to retry after a short outage window.
+      void lastError;
+      return remember(key, null);
     } catch {
       return remember(key, null);
     }
@@ -109,6 +120,8 @@ export async function translateSnapshotContent(snapshot: Snapshot): Promise<Snap
   const translationIssues = [
     snapshot.name && !nameAr && !hasArabic(snapshot.name) ? 'تعذّرت ترجمة اسم الشركة إلى العربية.' : '',
     snapshot.description && !descriptionAr && !hasArabic(snapshot.description) ? 'تعذّرت ترجمة وصف الشركة إلى العربية.' : '',
+    snapshot.sector && !sectorAr && !hasArabic(snapshot.sector) ? 'تعذّرت ترجمة قطاع الشركة إلى العربية.' : '',
+    snapshot.industry && !industryAr && !hasArabic(snapshot.industry) ? 'تعذّرت ترجمة صناعة الشركة إلى العربية.' : '',
     news.some(item => item.title && !item.titleAr && !hasArabic(item.title)) ? 'تعذّرت ترجمة خبر واحد أو أكثر إلى العربية.' : '',
   ].filter(Boolean);
   if (translationIssues.length) next.dataIssues = [...new Set([...(snapshot.dataIssues ?? []), ...translationIssues])];

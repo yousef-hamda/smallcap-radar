@@ -32,6 +32,6 @@ If moving to Postgres, first take and verify a volume backup. Inventory all D1 t
 
 - `/api/company` cache version is `deep:v7` because the second-cycle payload contract includes the Arabic enrichment guarantee. Older `deep:v6`, `deep:v5`, and `deep:v4` rows remain readable by portfolio quote recovery.
 - Translation uses a bounded, in-memory 24-hour cache, in-flight dedupe, a three-request concurrency limit, and a four-second request timeout. It is enrichment only; no sourced financial value, date, or link is translated or altered.
-- Portfolio logo requests are same-origin and cacheable for one day with stale-while-revalidate for seven days. The resolver deduplicates concurrent symbol requests; initials fallback entries expire after ten minutes so provider recovery is visible quickly.
+- Portfolio logo requests are same-origin and cacheable for one day with stale-while-revalidate for seven days. The resolver deduplicates concurrent symbol requests, tries FMP, Clearbit, Parqet, CompaniesMarketCap, and FMP's newer endpoint, and follows only validated provider redirects; initials fallback entries expire after ten minutes and `retry=1` bypasses the in-process cache.
 - The allocation layout is squarified and clamped to the 0–100 frame. If a browser does not support `color-mix`, the tile still keeps its proportional geometry and readable legend.
 - The full second-cycle scope, test matrix, acceptance gates, and deferred operations work are in `docs/DEEP_IMPROVEMENT_PLAN_2026_09_21_V2_AR.md`.
