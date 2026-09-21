@@ -7,6 +7,7 @@ import quickCache from './quick-cache.generated.json';
 import {enrichFinancials} from './financials';
 import {parseYahooIntraday,type ChartPayload} from './chart-data';
 import {parseOfficialDirectory} from './directory';
+import { translateSnapshotContent } from './translation';
 
 export type Company = { cik: number; name: string; ticker: string; exchange: string; price?: number; dailyChange?: number; marketCap?: number; volume?: number; averageVolume10d?: number; return52w?: number; low52w?: number; high52w?: number; ma50d?: number; ma200d?: number; sector?: string; industry?: string; quoteSource?: string; quoteAvailableAt?: string; priceSource?:string; priceAvailableAt?:string; marketCapSource?:string; marketCapAvailableAt?:string };
 type NasdaqRow = { symbol: string; name?: string; lastsale?: string; marketCap?: string; volume?: string; sector?: string; industry?: string };
@@ -461,7 +462,7 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
     }
     await enrichWithYahooProfile(snapshot, symbol, now, profilePromise);
     snapshot.research = { financials: !!snapshot.revenue, valuation: snapshot.evSales != null || snapshot.ps != null, analysts: snapshot.analystTarget != null, sector: !!snapshot.sector };
-    return snapshot;
+    return translateSnapshotContent(snapshot);
   }
 
   let facts: Record<string, unknown>;
@@ -473,7 +474,7 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
     // earnings and analyst data on demand.
     await enrichWithYahooProfile(snapshot, symbol, now, profilePromise);
     snapshot.research = { financials: false, valuation: snapshot.evSales != null || snapshot.ps != null, analysts: snapshot.analystTarget != null, sector: !!snapshot.sector };
-    return snapshot;
+    return translateSnapshotContent(snapshot);
   }
 
   const shares = latestInstant(observations(facts, ['EntityCommonStockSharesOutstanding', 'CommonStockSharesOutstanding'], 'shares'), now);
@@ -506,7 +507,7 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
   }
   await enrichWithYahooProfile(snapshot, symbol, now, profilePromise);
   snapshot.research = { financials: !!snapshot.revenue, valuation: snapshot.evSales != null || snapshot.ps != null, analysts: snapshot.analystTarget != null, sector: !!snapshot.sector };
-  return enrichFinancials(snapshot,facts,factsUrl);
+  return translateSnapshotContent(enrichFinancials(snapshot,facts,factsUrl));
 }
 
 export function parseNews(xml:string,asOf:string) {

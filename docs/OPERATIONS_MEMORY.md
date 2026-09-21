@@ -28,3 +28,9 @@ Last verified: 2026-09-21. Keep this file free of credentials and private recove
 ## Migration guardrails
 
 If moving to Postgres, first take and verify a volume backup. Inventory all D1 tables, including runs, snapshots, watchlists, portfolios, cache, and recovery metadata. Preserve private owner keys and transaction order. Import into Postgres, compare counts and selected payloads, run app-level read/write tests, then cut over with a rollback plan. Never point `DATABASE_URL` at Postgres and assume the existing D1 data moved.
+## 2026-09-21 deep improvement notes
+
+- `/api/company` cache version is `deep:v6` because the payload now includes Arabic enrichment fields. Older `deep:v5` and `deep:v4` rows remain readable by portfolio quote recovery.
+- Translation uses a bounded, in-memory 24-hour cache and a four-second request timeout. It is enrichment only; no sourced financial value, date, or link is translated or altered.
+- Portfolio logo requests are same-origin and cacheable for one day with stale-while-revalidate for seven days. The initials SVG is the last fallback for a symbol without a retrievable published mark.
+- The allocation layout is squarified and clamped to the 0–100 frame. If a browser does not support `color-mix`, the tile still keeps its proportional geometry and readable legend.

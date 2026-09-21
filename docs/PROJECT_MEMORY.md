@@ -1,6 +1,6 @@
 # Project memory — Small-Cap Radar
 
-Last verified: 2026-09-21. This is the repository-owned memory for future maintainers; historical research notes in `docs/` may describe older releases.
+Last verified: 2026-09-21. This is the repository-owned memory for future maintainers; historical research notes in `docs/` may describe older releases. The deep audit and changes from this date are in `docs/DEEP_IMPROVEMENT_PLAN_2026_09_21_AR.md`.
 
 ## Product and source of truth
 
@@ -12,6 +12,8 @@ Last verified: 2026-09-21. This is the repository-owned memory for future mainta
 ## Recovered data
 
 - A 2026-09-21 recovery copied 2,908 old market snapshots and six additional company snapshots needed for the seven saved symbols. The seventh symbol was already in the market snapshot. The durable recovered run is `7857f783-7749-4000-8f90-b0f0af848331`, source `recovered backup`, with 2,914 records.
+- Deep company files now use cache key `deep:v6`, preserve original provider text, and add best effort Arabic fields for the company name, description, sector, industry, and news titles/sources. Translation failure leaves the original text visible and is recorded as a data limitation.
+- Portfolio allocation uses a squarified treemap with proportional area and a complete readable legend. Company logos load through `/api/portfolio-logo` so the browser does not depend on a client-side third party request; the resolver tries FMP, website Clearbit, Parqet, then a stable fallback.
 - Live `GET /api/radar?status=1` returned `complete` and `processed: 2914` on 2026-09-21, including after redeployments. This verifies app-visible persistence, not an independent database backup.
 - The seven historical favorite symbols were APLD, CLBT, DEFT, SOFI, TMDX, XE, and ZTS. A one-time private claim link was given to the owner in chat. Whether the owner clicked it is not verified here. Do not store or publish the claim token.
 - The old site's portfolio transaction table had zero rows. No historical portfolio positions were available to recover.

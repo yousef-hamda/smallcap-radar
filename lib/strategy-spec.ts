@@ -8,11 +8,12 @@
 export const SPECS = {
   core: {
     id: 'CORE_VALUE_V2',
-    version: '2.5.0-draft.1-thesis-gates',
+    version: '2.6.0-draft.1-category-alignment',
     marketCap: { min: 25e6, max: 2e9 },
     liquidity: 150e3,
     liquidityMetric: 'medianDollarVolume20d',
     evSalesMax: 10,
+    dilutionMax: 0.25,
     weights: {
       Valuation: 24,
       Quality: 19,
@@ -33,7 +34,7 @@ export const SPECS = {
     factorCheckIds: ['revenue', 'valuation', 'profitability', 'deathSpiral'],
     model: {
       id: 'CORE_DIAGNOSTIC_BASELINE',
-      version: 'diagnostic-2.5.0-thesis-gates',
+      version: 'diagnostic-2.6.0-category-alignment',
       validation: 'blocked' as const,
       objective: '12–24 month benchmark-relative risk-adjusted return',
       probabilityAvailable: false,
@@ -44,7 +45,7 @@ export const SPECS = {
   },
   bounce: {
     id: 'BOUNCE_V2',
-    version: '2.5.0-draft.1-thesis-gates',
+    version: '2.6.0-draft.1-category-alignment',
     marketCap: { min: 25e6, max: 600e6 },
     liquidity: 150e3,
     liquidityMetric: 'medianDollarVolume20d',
@@ -69,7 +70,7 @@ export const SPECS = {
     factorCheckIds: ['collapse', 'low', 'dilution', 'reversal'],
     model: {
       id: 'BOUNCE_DIAGNOSTIC_BASELINE',
-      version: 'diagnostic-2.5.0-thesis-gates',
+      version: 'diagnostic-2.6.0-category-alignment',
       validation: 'blocked' as const,
       objective: '3-month net risk-adjusted utility; +20% target before −15% stop reported separately',
       probabilityAvailable: false,

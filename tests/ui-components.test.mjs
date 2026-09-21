@@ -136,11 +136,24 @@ test('portfolio allocation keeps every company logo and percentage in a readable
  assert.match(css,/@media\(max-width:600px\)\{\.allocation-legend\{grid-template-columns:1fr\}/);
 });
 
+test('portfolio allocation uses proportional squarified geometry inside the frame',async()=>{
+ const {squarifiedTreemap}=await vite.ssrLoadModule('/app/portfolio-view.tsx');
+ const positions=[
+  {symbol:'AAA',name:'A',quantity:1,averageCost:700,costBasis:700,currentPrice:700,marketValue:700,unrealizedPnl:0,unrealizedPct:0,realizedPnl:0,dailyPnl:0,weight:null,quoteAsOf:null},
+  {symbol:'BBB',name:'B',quantity:1,averageCost:200,costBasis:200,currentPrice:200,marketValue:200,unrealizedPnl:0,unrealizedPct:0,realizedPnl:0,dailyPnl:0,weight:null,quoteAsOf:null},
+  {symbol:'CCC',name:'C',quantity:1,averageCost:100,costBasis:100,currentPrice:100,marketValue:100,unrealizedPnl:0,unrealizedPct:0,realizedPnl:0,dailyPnl:0,weight:null,quoteAsOf:null},
+ ];
+ const nodes=squarifiedTreemap(positions),area=node=>node.width*node.height;
+ assert.equal(nodes.length,3);assert(nodes.every(node=>node.x>=0&&node.y>=0&&node.x+node.width<=100.0001&&node.y+node.height<=100.0001));
+ assert(area(nodes[0])>area(nodes[1]));assert(area(nodes[1])>area(nodes[2]));
+ assert(Math.abs(nodes.reduce((sum,node)=>sum+area(node),0)-10000)<0.1);
+});
+
 test('portfolio logo source uses the verified public stock-logo endpoint',async()=>{
  const [route,view]=await Promise.all([readFile(path.join(root,'app/api/portfolio-logo/route.ts'),'utf8'),readFile(path.join(root,'app/portfolio-view.tsx'),'utf8')]);
  assert.match(route,/https:\/\/financialmodelingprep\.com\/image-stock\/\$\{encodeURIComponent\(symbol\)\}\.png/);
  assert.match(route,/if \(financialLogo\) return financialLogo/);
  assert.match(route,/if \(companyLogo\) return companyLogo/);
- assert.match(view,/https:\/\/financialmodelingprep\.com\/image-stock\/\$\{encodeURIComponent\(symbol\)\}\.png/);
- assert.match(view,/onError=\{\(\) => setFailedFor\(symbol\)\}/);
+ assert.match(view,/\/api\/portfolio-logo\?symbol=\$\{encodeURIComponent\(symbol\)\}/);
+ assert.match(view,/loading="lazy"/);
 });

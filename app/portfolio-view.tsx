@@ -55,13 +55,8 @@ const performanceRanges = { '1M': 31, '3M': 93, '6M': 186, '1Y': 366, MAX: Infin
 
 function CompanyLogo({ symbol, size = 44 }: { symbol: string; size?: number }) {
   const [failedFor, setFailedFor] = useState<string | null>(null);
-  // The browser can fetch the public logo CDN directly even when the isolated
-  // Cloudflare worker cannot reach that host. Keep our same-origin initials
-  // endpoint as an explicit fallback for symbols without a published logo.
-  const src = failedFor === symbol
-    ? `/api/portfolio-logo?symbol=${encodeURIComponent(symbol)}`
-    : `https://financialmodelingprep.com/image-stock/${encodeURIComponent(symbol)}.png`;
-  return <Image unoptimized className="company-logo" src={src} width={size} height={size} alt={`شعار ${symbol}`} onError={() => setFailedFor(symbol)} />;
+  const src = `/api/portfolio-logo?symbol=${encodeURIComponent(symbol)}`;
+  return <Image unoptimized className="company-logo" src={failedFor === symbol ? `/api/portfolio-logo?symbol=${encodeURIComponent(symbol)}&retry=1` : src} width={size} height={size} alt={`شعار ${symbol}`} loading="lazy" onError={() => setFailedFor(symbol)} />;
 }
 
 export function PerformanceChart({ history }: { history: HistoryData | null }) {
@@ -103,24 +98,69 @@ export function PerformanceChart({ history }: { history: HistoryData | null }) {
 }
 
 type TreemapNode = PortfolioPosition & { x: number; y: number; width: number; height: number; color: string };
-function treemap(positions: PortfolioPosition[]) {
+type TreemapRect = { x: number; y: number; width: number; height: number };
+
+// Bruls, Huizing and van Wijk's squarified treemap keeps related tiles in
+// rows with a good aspect ratio while preserving area exactly. The old binary
+// split made the result depend on input order and often produced thin tiles.
+export function squarifiedTreemap(positions: PortfolioPosition[]): TreemapNode[] {
   const palette = ['#5eead4', '#60a5fa', '#c084fc', '#fb7185', '#fbbf24', '#34d399', '#818cf8', '#f472b6'];
-  const values = positions.filter(position => (position.marketValue ?? 0) > 0);
-  const layout = (items: PortfolioPosition[], x: number, y: number, width: number, height: number, depth: number): TreemapNode[] => {
-    if (!items.length) return [];
-    if (items.length === 1) return [{ ...items[0], x, y, width, height, color: palette[values.indexOf(items[0]) % palette.length] }];
-    const total = items.reduce((sum, item) => sum + item.marketValue!, 0), half = total / 2;
-    let sum = 0, split = 1;
-    for (let index = 0; index < items.length - 1; index++) { sum += items[index].marketValue!; if (sum >= half) { split = index + 1; break; } }
-    const first = items.slice(0, split), second = items.slice(split), ratio = first.reduce((value, item) => value + item.marketValue!, 0) / total;
-    if ((width >= height) !== (depth % 2 === 1)) return [...layout(first, x, y, width * ratio, height, depth + 1), ...layout(second, x + width * ratio, y, width * (1 - ratio), height, depth + 1)];
-    return [...layout(first, x, y, width, height * ratio, depth + 1), ...layout(second, x, y + height * ratio, width, height * (1 - ratio), depth + 1)];
+  const values = positions.filter(position => Number.isFinite(position.marketValue) && position.marketValue! > 0)
+    .sort((a, b) => (b.marketValue! - a.marketValue!) || a.symbol.localeCompare(b.symbol));
+  if (!values.length) return [];
+
+  const total = values.reduce((sum, item) => sum + item.marketValue!, 0);
+  const scaled = values.map((position, index) => ({ position, index, value: position.marketValue! / total * 10_000 }));
+  const nodes = new Map<string, TreemapNode>();
+  const worst = (row: typeof scaled, side: number) => {
+    if (!row.length || side <= 0) return Number.POSITIVE_INFINITY;
+    const sum = row.reduce((totalValue, item) => totalValue + item.value, 0);
+    const max = Math.max(...row.map(item => item.value));
+    const min = Math.min(...row.map(item => item.value));
+    return Math.max((side * side * max) / (sum * sum), (sum * sum) / (side * side * min));
   };
-  return layout(values, 0, 0, 100, 100, 0);
+  const writeRow = (row: typeof scaled, rect: TreemapRect) => {
+    const rowValue = row.reduce((sum, item) => sum + item.value, 0);
+    const horizontal = rect.width >= rect.height;
+    if (horizontal) {
+      const height = rowValue / rect.width;
+      let cursor = rect.x;
+      for (const item of row) {
+        const width = item.value / height;
+        nodes.set(item.position.symbol, { ...item.position, x: cursor, y: rect.y, width, height, color: palette[item.index % palette.length] });
+        cursor += width;
+      }
+      return { x: rect.x, y: rect.y + height, width: rect.width, height: Math.max(0, rect.height - height) };
+    }
+    const width = rowValue / rect.height;
+    let cursor = rect.y;
+    for (const item of row) {
+      const height = item.value / width;
+      nodes.set(item.position.symbol, { ...item.position, x: rect.x, y: cursor, width, height, color: palette[item.index % palette.length] });
+      cursor += height;
+    }
+    return { x: rect.x + width, y: rect.y, width: Math.max(0, rect.width - width), height: rect.height };
+  };
+
+  const remaining = scaled.slice();
+  let rect: TreemapRect = { x: 0, y: 0, width: 100, height: 100 };
+  while (remaining.length && rect.width > 0 && rect.height > 0) {
+    const side = Math.min(rect.width, rect.height);
+    const row = [remaining.shift()!];
+    while (remaining.length && worst([...row, remaining[0]], side) <= worst(row, side)) row.push(remaining.shift()!);
+    rect = writeRow(row, rect);
+  }
+  return values.map(position => nodes.get(position.symbol)).filter((node): node is TreemapNode => !!node).map(node => ({
+    ...node,
+    x: Math.max(0, Math.min(100, node.x)),
+    y: Math.max(0, Math.min(100, node.y)),
+    width: Math.max(0, Math.min(100 - node.x, node.width)),
+    height: Math.max(0, Math.min(100 - node.y, node.height)),
+  }));
 }
 
 export function AllocationTreemap({ positions, onOpen }: { positions: PortfolioPosition[]; onOpen: (position: PortfolioPosition) => void }) {
-  const nodes = useMemo(() => treemap(positions), [positions]);
+  const nodes = useMemo(() => squarifiedTreemap(positions), [positions]);
   return <section className="portfolio-panel allocation-panel"><div className="section-line"><div><h3>توزيع المحفظة</h3><p>مساحة كل مستطيل تساوي وزن الشركة من القيمة الحالية.</p></div><span>{positions.length} مراكز</span></div>
     {nodes.length ? <><div className="portfolio-treemap" role="group" aria-label="خريطة توزيع مراكز المحفظة">{nodes.map(node => <button className="treemap-node" key={node.symbol} style={{ insetInlineStart: `${node.x}%`, top: `${node.y}%`, width: `${node.width}%`, height: `${node.height}%`, '--node-color': node.color } as React.CSSProperties} onClick={() => onOpen(node)} aria-label={`${node.name}، ${node.symbol}، وزن ${weightPct(node.weight)}`} title={`${node.symbol} · ${weightPct(node.weight)} · ${usd(node.marketValue)}`}>
       <span className="treemap-node-logo"><CompanyLogo symbol={node.symbol} size={44}/></span><span className="treemap-node-copy"><b dir="ltr">{node.symbol}</b><span dir="ltr">{weightPct(node.weight)}</span><small>{usd(node.marketValue)}</small></span>

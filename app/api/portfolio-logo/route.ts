@@ -20,7 +20,7 @@ async function safeImage(url: string) {
     const contentType = response.headers.get('content-type') || '';
     const length = Number(response.headers.get('content-length') || 0);
     const mediaType=contentType.toLowerCase().split(';',1)[0].trim();
-    if (!response.ok || !['image/png','image/jpeg','image/webp','image/x-icon','image/vnd.microsoft.icon'].includes(mediaType) || length > 500_000) return null;
+    if (!response.ok || !['image/png','image/jpeg','image/webp','image/svg+xml','image/x-icon','image/vnd.microsoft.icon'].includes(mediaType) || length > 500_000) return null;
     const bytes = await response.arrayBuffer();
     if (!bytes.byteLength || bytes.byteLength > 500_000) return null;
     return new Response(bytes, { headers: imageHeaders(contentType) });
@@ -53,12 +53,14 @@ export async function GET(request: Request) {
   }
   // Run the two trusted logo lookups together so a missing provider does not
   // make every portfolio row wait through two sequential network timeouts.
-  const [financialLogo, companyLogo] = await Promise.all([
+  const [financialLogo, companyLogo, parqetLogo] = await Promise.all([
     safeImage(`https://financialmodelingprep.com/image-stock/${encodeURIComponent(symbol)}.png`),
     domainLogo,
+    safeImage(`https://assets.parqet.com/logos/symbol/${encodeURIComponent(symbol)}.png`),
   ]);
   if (financialLogo) return financialLogo;
   if (companyLogo) return companyLogo;
+  if (parqetLogo) return parqetLogo;
   const newerLogo = await safeImage(`https://images.financialmodelingprep.com/symbol/${encodeURIComponent(symbol)}.png`);
   if (newerLogo) return newerLogo;
   return fallback(symbol);
