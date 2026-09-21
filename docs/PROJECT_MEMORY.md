@@ -33,5 +33,6 @@ Last verified: 2026-09-21. This is the repository-owned memory for future mainta
 - Logo retry now invalidates the in-process fallback cache, and the resolver follows provider image redirects after checking the final content type and 500KB size limit. Local smoke testing returned a real PNG for AAPL.
 - Treemap tests now verify proportional area, frame bounds, total area, and pairwise non-overlap. Arabic tests verify source preservation, translated company/news fields, and visible failure limitations.
 - The broad second-cycle plan, future work, and acceptance gates are in `docs/DEEP_IMPROVEMENT_PLAN_2026_09_21_V2_AR.md`.
+- Final local audit commit `843d6b4` is pushed to GitHub. The Railway URL was checked after the push and still served the previous release: no Arabic enrichment fields in a fresh company response and an initials SVG for AAPL. Railway CLI authentication/project linking is unavailable in this workspace, so production adoption of this commit is not claimed.
 
 See `docs/OPERATIONS_MEMORY.md` for deployment/storage details and `HANDOFF.md` for the immediate continuation checklist.
