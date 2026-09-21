@@ -131,15 +131,15 @@ test('portfolio allocation keeps every company logo and percentage in a readable
  assert.match(source,/className="allocation-legend"/);
  assert.match(source,/aria-label="نسب شركات المحفظة"/);
  assert.match(source,/className="treemap-node-logo"/);
- assert.match(source,/className="treemap-node-watermark"/);
+ assert.doesNotMatch(source,/treemap-node-watermark/);
  assert.match(source,/className="treemap-node-copy"/);
  assert.match(css,/@container allocation-tile \(max-width:90px\)/);
  assert.match(css,/@media\(max-width:600px\)\{\.allocation-legend\{grid-template-columns:1fr\}/);
  assert.match(css,/\.portfolio-visual-grid\{display:grid;grid-template-columns:1\.15fr \.85fr;align-items:start/);
  assert.match(css,/\.portfolio-insights\{align-self:start;height:max-content\}/);
- assert.match(css,/\.portfolio-treemap\{height:clamp\(240px,26vw,330px\)/);
- assert.match(css,/\.treemap-node-watermark\{position:absolute;top:50%;left:50%/);
- assert.match(css,/@container allocation-tile \(max-width:180px\)\{\.treemap-node-watermark\{display:none\}/);
+ assert.match(css,/\.portfolio-treemap\{height:clamp\(290px,30vw,390px\)/);
+ assert.match(css,/\.portfolio-treemap \.treemap-node-watermark\{display:none\}/);
+ assert.match(css,/\.sector-bars>div\{grid-template-columns:minmax\(110px,1fr\) minmax\(240px,2\.4fr\) 72px;gap:10px\}/);
 });
 
 test('portfolio company picker keeps results in a large readable dialog row',async()=>{

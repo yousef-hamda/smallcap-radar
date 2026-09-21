@@ -64,3 +64,9 @@ button,input{font:inherit}button,a{-webkit-tap-highlight-color:transparent}butto
 @container allocation-tile (max-width:52px){.treemap-node-copy>span{display:none}.treemap-node-copy>b{font-size:10px}}
 @container allocation-tile (max-height:42px){.treemap-node-copy>span,.treemap-node-copy>small{display:none}.treemap-node-copy>b{font-size:10px}}
 @media(max-width:600px){.allocation-legend{grid-template-columns:1fr}.portfolio-treemap>.treemap-node{padding:5px}.allocation-legend>button{min-height:52px}}
+
+/* Keep the allocation tiles clean and give the sector bars the available width. */
+.portfolio-treemap{height:clamp(290px,30vw,390px)}
+.portfolio-treemap .treemap-node-watermark{display:none}
+.sector-bars>div{grid-template-columns:minmax(110px,1fr) minmax(240px,2.4fr) 72px;gap:10px}
+@media(max-width:600px){.sector-bars>div{grid-template-columns:minmax(75px,1fr) minmax(150px,2fr) 58px;gap:8px}}
