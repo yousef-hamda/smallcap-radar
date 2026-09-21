@@ -56,7 +56,7 @@ export async function POST(req:Request){
    const parsed=importSchema.safeParse(b.records);
    if(!parsed.success)return json({error:'دفعة الاستعادة غير صالحة: '+parsed.error.issues.slice(0,3).map(i=>i.path.join('.')+': '+i.message).join('؛ ')},400);
    let id=typeof b.runId==='string'&&/^[0-9a-f-]{36}$/i.test(b.runId)?b.runId:'';
-   if(id){const run=await db().prepare("SELECT id FROM strategy_runs WHERE id=? AND source='recovered backup' AND status='running'").bind(id).first();if(!run)return json({error:'جلسة الاستعادة غير صالحة'},409);}
+   if(id){const run=await db().prepare("SELECT id FROM strategy_runs WHERE id=? AND source='recovered backup' AND (status='running' OR (status='complete' AND ?=1))").bind(id,b.final===true?1:0).first();if(!run)return json({error:'جلسة الاستعادة غير صالحة'},409);}
    else id=await createRun('recovered backup',0,[],'running');
    for(let offset=0;offset<parsed.data.length;offset+=50)await db().batch(parsed.data.slice(offset,offset+50).map(snapshot=>insertSnapshot(id,snapshot as any)));
    const count=Number((await db().prepare('SELECT COUNT(*) AS count FROM fundamental_snapshots WHERE run_id=?').bind(id).first() as any)?.count||0),final=b.final===true;
