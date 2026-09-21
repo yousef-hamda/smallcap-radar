@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import Image from 'next/image';
+import { hierarchy, treemap, treemapSquarify } from 'd3-hierarchy';
 import { AlertTriangle, ArrowDownRight, ArrowUpRight, BriefcaseBusiness, Download, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
@@ -102,65 +103,31 @@ export function PerformanceChart({ history }: { history: HistoryData | null }) {
 }
 
 type TreemapNode = PortfolioPosition & { x: number; y: number; width: number; height: number; color: string };
-type TreemapRect = { x: number; y: number; width: number; height: number };
+type TreemapDatum = { position: PortfolioPosition; index: number };
+type TreemapRoot = { children: TreemapDatum[] };
+type TreemapData = TreemapRoot | TreemapDatum;
 
-// Bruls, Huizing and van Wijk's squarified treemap keeps related tiles in
-// rows with a good aspect ratio while preserving area exactly. The old binary
-// split made the result depend on input order and often produced thin tiles.
+// D3's standard squarified treemap keeps areas proportional while choosing
+// readable rectangles, adding consistent inner/outer gaps, and recalculating
+// the complete layout whenever the portfolio values change.
 export function squarifiedTreemap(positions: PortfolioPosition[]): TreemapNode[] {
   const palette = ['#5eead4', '#60a5fa', '#c084fc', '#fb7185', '#fbbf24', '#34d399', '#818cf8', '#f472b6'];
   const values = positions.filter(position => Number.isFinite(position.marketValue) && position.marketValue! > 0)
     .sort((a, b) => (b.marketValue! - a.marketValue!) || a.symbol.localeCompare(b.symbol));
   if (!values.length) return [];
-
-  const total = values.reduce((sum, item) => sum + item.marketValue!, 0);
-  const scaled = values.map((position, index) => ({ position, index, value: position.marketValue! / total * 10_000 }));
-  const nodes = new Map<string, TreemapNode>();
-  const worst = (row: typeof scaled, side: number) => {
-    if (!row.length || side <= 0) return Number.POSITIVE_INFINITY;
-    const sum = row.reduce((totalValue, item) => totalValue + item.value, 0);
-    const max = Math.max(...row.map(item => item.value));
-    const min = Math.min(...row.map(item => item.value));
-    return Math.max((side * side * max) / (sum * sum), (sum * sum) / (side * side * min));
-  };
-  const writeRow = (row: typeof scaled, rect: TreemapRect) => {
-    const rowValue = row.reduce((sum, item) => sum + item.value, 0);
-    const horizontal = rect.width >= rect.height;
-    if (horizontal) {
-      const height = rowValue / rect.width;
-      let cursor = rect.x;
-      for (const item of row) {
-        const width = item.value / height;
-        nodes.set(item.position.symbol, { ...item.position, x: cursor, y: rect.y, width, height, color: palette[item.index % palette.length] });
-        cursor += width;
-      }
-      return { x: rect.x, y: rect.y + height, width: rect.width, height: Math.max(0, rect.height - height) };
-    }
-    const width = rowValue / rect.height;
-    let cursor = rect.y;
-    for (const item of row) {
-      const height = item.value / width;
-      nodes.set(item.position.symbol, { ...item.position, x: rect.x, y: cursor, width, height, color: palette[item.index % palette.length] });
-      cursor += height;
-    }
-    return { x: rect.x + width, y: rect.y, width: Math.max(0, rect.width - width), height: rect.height };
-  };
-
-  const remaining = scaled.slice();
-  let rect: TreemapRect = { x: 0, y: 0, width: 100, height: 100 };
-  while (remaining.length && rect.width > 0 && rect.height > 0) {
-    const side = Math.min(rect.width, rect.height);
-    const row = [remaining.shift()!];
-    while (remaining.length && worst([...row, remaining[0]], side) <= worst(row, side)) row.push(remaining.shift()!);
-    rect = writeRow(row, rect);
-  }
-  return values.map(position => nodes.get(position.symbol)).filter((node): node is TreemapNode => !!node).map(node => ({
-    ...node,
-    x: Math.max(0, Math.min(100, node.x)),
-    y: Math.max(0, Math.min(100, node.y)),
-    width: Math.max(0, Math.min(100 - node.x, node.width)),
-    height: Math.max(0, Math.min(100 - node.y, node.height)),
-  }));
+  const root = hierarchy<TreemapData>({ children: values.map((position, index) => ({ position, index })) }, datum => 'children' in datum ? datum.children : undefined)
+    .sum(datum => 'position' in datum ? datum.position.marketValue! : 0)
+    .sort((a, b) => (b.value ?? 0) - (a.value ?? 0) || ('position' in a.data && 'position' in b.data ? a.data.position.symbol.localeCompare(b.data.position.symbol) : 0));
+  const layoutRoot = treemap<TreemapData>()
+    .size([100, 100])
+    .round(false)
+    .paddingOuter(0.8)
+    .paddingInner(1.1)
+    .tile(treemapSquarify.ratio((1 + Math.sqrt(5)) / 2))(root);
+  return layoutRoot.leaves().flatMap(node => {
+    if (!('position' in node.data)) return [];
+    return [{ ...node.data.position, x: node.x0, y: node.y0, width: Math.max(0, node.x1 - node.x0), height: Math.max(0, node.y1 - node.y0), color: palette[node.data.index % palette.length] }];
+  });
 }
 
 export function AllocationTreemap({ positions, onOpen }: { positions: PortfolioPosition[]; onOpen: (position: PortfolioPosition) => void }) {

@@ -139,8 +139,10 @@ test('portfolio allocation keeps every company logo and percentage in a readable
 test('portfolio company picker keeps results in a large readable dialog row',async()=>{
  const css=await readFile(path.join(root,'app/globals.css'),'utf8');
  assert.match(css,/\.portfolio-dialog\[data-slot=dialog-content\]\{width:min\(760px/);
- assert.match(css,/\.portfolio-dialog\.picker-dialog\{height:min\(680px/);
+ assert.match(css,/\.portfolio-dialog\.picker-dialog\{height:min\(520px/);
  assert.match(css,/\.portfolio-search-results\.in-dialog\{position:static;grid-column:1 \/ -1/);
+ assert.match(css,/\.dialog-search\{position:relative;display:grid;[^}]*overflow:hidden/);
+ assert.match(css,/\.portfolio-search-results\.in-dialog\{[^}]*max-height:100%;height:100%;overflow:auto/);
  assert.match(css,/\.portfolio-search-results\.in-dialog button\{grid-template-columns:64px minmax\(0,1fr\) auto;min-height:84px/);
  assert.match(css,/\.portfolio-search-results\.in-dialog \.company-logo\{width:56px;height:56px/);
 });
@@ -155,7 +157,8 @@ test('portfolio allocation uses proportional squarified geometry inside the fram
  const nodes=squarifiedTreemap(positions),area=node=>node.width*node.height;
  assert.equal(nodes.length,3);assert(nodes.every(node=>node.x>=0&&node.y>=0&&node.x+node.width<=100.0001&&node.y+node.height<=100.0001));
  assert(area(nodes[0])>area(nodes[1]));assert(area(nodes[1])>area(nodes[2]));
- assert(Math.abs(nodes.reduce((sum,node)=>sum+area(node),0)-10000)<0.1);
+ const visibleArea=nodes.reduce((sum,node)=>sum+area(node),0);
+ assert(visibleArea<10000&&visibleArea>9000,'padding should leave only a small, bounded gutter around the treemap');
  for(let left=0;left<nodes.length;left+=1){
   for(let right=left+1;right<nodes.length;right+=1){
    const overlapWidth=Math.max(0,Math.min(nodes[left].x+nodes[left].width,nodes[right].x+nodes[right].width)-Math.max(nodes[left].x,nodes[right].x));
