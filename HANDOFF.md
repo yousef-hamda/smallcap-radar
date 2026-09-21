@@ -4,9 +4,9 @@ Updated 2026-09-21. Start with `docs/PROJECT_MEMORY.md` and `docs/OPERATIONS_MEM
 
 ## Current state
 
-- GitHub `master` and Railway production contain the QA/recovery and wallet fixes through commit `bff3558` before this documentation update. The latest production deployment was successful, and a live status check returned recovered run `7857f783-7749-4000-8f90-b0f0af848331`, `complete`, 2,914 records.
+- GitHub `master` contains the deep strategy, Arabic enrichment, wallet layout, and logo resolver changes through commit `457ad83`. Railway production still needs a deployment from this commit before the live service can be considered updated. The last verified live status returned recovered run `7857f783-7749-4000-8f90-b0f0af848331`, `complete`, 2,914 records.
 - The web service uses D1-compatible local state on the Railway volume at `/app/data`, not the attached Railway Postgres database. Data survived multiple redeployments. `RECOVERY_SECRET` was removed after recovery.
-- Wallet allocation labels now have a readable legend and tile-size responsive rules. The browser loads real company logos directly from the verified public image URL, falling back to a local ticker mark if unavailable.
+- Wallet allocation uses a squarified treemap with proportional tile areas, a complete legend, and responsive tile content. Logos load through the same-origin resolver, which tries published logo providers before the stable local fallback.
 - Seven favorite symbols were recovered into a one-time private claim bundle. The owner must open the previously supplied claim link in their normal Railway browser session to attach them to that visitor identity; completion is unverified. Do not put the token in this repository.
 - No portfolio transactions were present in the original site's database, so there was no portfolio ledger to restore.
 
