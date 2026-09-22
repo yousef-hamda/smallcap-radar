@@ -77,13 +77,29 @@ button,input{font:inherit}button,a{-webkit-tap-highlight-color:transparent}butto
 .portfolio-treemap{background:#0b0d0f;padding:2px}
 .portfolio-treemap>button{border:2px solid #0b0d0f;border-radius:3px;background:var(--node-color);box-shadow:inset 0 0 0 1px #ffffff26;color:#fff;text-shadow:0 1px 2px #000b;}
 .portfolio-treemap>button:hover{filter:brightness(1.12);transform:none}
-.portfolio-treemap .company-logo{background:#f7f7f8;border:2px solid #fff;padding:2px;box-shadow:0 2px 8px #0005}
+.portfolio-treemap .company-logo{background:#f7f7f8;border:2px solid #fff;padding:2px;box-shadow:none}
 .portfolio-treemap .treemap-node-copy{padding:5px 6px;margin:-5px -6px;background:linear-gradient(90deg,#0009,transparent);border-radius:3px}
 .portfolio-treemap .treemap-node-copy>b{font-size:clamp(15px,2.2vw,30px);line-height:1.05;color:#fff}
 .portfolio-treemap .treemap-node-copy>span{font-size:clamp(12px,1.2vw,19px);color:#fff}
 .portfolio-treemap .treemap-node-copy>small{font-size:clamp(10px,.9vw,14px);color:#f3f4f6}
 @container allocation-tile (max-width:180px){.portfolio-treemap .treemap-node-copy{padding:2px 3px;margin:-2px -3px}.portfolio-treemap .treemap-node-copy>b{font-size:15px}.portfolio-treemap .treemap-node-copy>span{font-size:11px}}
 @container allocation-tile (min-width:300px) and (min-height:220px){.portfolio-treemap .treemap-node-copy>b{font-size:30px}.portfolio-treemap .treemap-node-copy>span{font-size:18px}.portfolio-treemap .treemap-node-copy>small{font-size:13px}}
+
+/* Keep proportional area while placing the information where a heatmap can
+   be read at a glance. Large holdings use the middle of their tile so the
+   empty area feels intentional; small holdings keep a compact corner label. */
+.portfolio-treemap>button{justify-content:center}
+.portfolio-treemap .treemap-node-logo{position:absolute;top:12px;left:12px;z-index:1;margin:0}
+.portfolio-treemap .treemap-node-copy{position:absolute;left:12px;right:12px;bottom:12px;z-index:2;margin:0;align-items:flex-start;background:linear-gradient(90deg,#000b,transparent);border-radius:3px}
+.portfolio-treemap .treemap-node-company{display:block;max-width:100%;overflow:hidden;color:#f3f4f6;font-size:clamp(10px,.9vw,14px);font-style:normal;font-weight:500;line-height:1.25;text-overflow:ellipsis;white-space:nowrap}
+@container allocation-tile (min-width:300px) and (min-height:220px){
+ .portfolio-treemap .treemap-node-copy{top:50%;left:50%;right:auto;bottom:auto;min-width:min(65%,320px);max-width:82%;padding:12px 22px;margin:0;transform:translate(-50%,-50%);align-items:center;background:linear-gradient(90deg,transparent,#0009 18%,#0009 82%,transparent);text-align:center}
+ .portfolio-treemap .treemap-node-company{font-size:14px}
+}
+@container allocation-tile (max-width:180px){.portfolio-treemap .treemap-node-company{display:none}}
+@container allocation-tile (max-height:140px){.portfolio-treemap .treemap-node-company{display:none}}
+.sector-bars>div{grid-template-columns:minmax(160px,1.4fr) minmax(220px,2.2fr) 72px}
+@media(max-width:600px){.sector-bars>div{grid-template-columns:minmax(96px,1fr) minmax(120px,1.6fr) 58px}}
 
 /* Account access is deliberately compact so the sync control remains usable
    on a phone without competing with the market tabs. */

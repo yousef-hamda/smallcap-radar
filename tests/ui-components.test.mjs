@@ -133,6 +133,7 @@ test('portfolio allocation keeps every company logo and percentage in a readable
  assert.match(source,/className="treemap-node-logo"/);
  assert.doesNotMatch(source,/treemap-node-watermark/);
  assert.match(source,/className="treemap-node-copy"/);
+ assert.match(source,/className="treemap-node-company"/);
  assert.match(css,/@container allocation-tile \(max-width:90px\)/);
  assert.match(css,/@media\(max-width:600px\)\{\.allocation-legend\{grid-template-columns:1fr\}/);
  assert.match(css,/\.portfolio-visual-grid\{display:grid;grid-template-columns:1\.15fr \.85fr;align-items:start/);
@@ -140,6 +141,7 @@ test('portfolio allocation keeps every company logo and percentage in a readable
  assert.match(css,/\.portfolio-treemap\{height:clamp\(290px,30vw,390px\)/);
  assert.match(css,/\.portfolio-treemap \.treemap-node-watermark\{display:none\}/);
  assert.match(css,/\.sector-bars>div\{grid-template-columns:minmax\(110px,1fr\) minmax\(240px,2\.4fr\) 72px;gap:10px\}/);
+ assert.match(css,/\.portfolio-treemap \.company-logo\{background:#f7f7f8;border:2px solid #fff;padding:2px;box-shadow:none\}/);
 });
 
 test('portfolio company picker keeps results in a large readable dialog row',async()=>{
@@ -230,6 +232,6 @@ test('portfolio logo source uses the verified public stock-logo endpoint',async(
  assert.match(route,/www\.google\.com\/s2\/favicons/);
  assert.match(route,/linearGradient/);
  assert.match(view,/\/api\/portfolio-logo\?symbol=\$\{encodeURIComponent\(symbol\)\}/);
- assert.match(view,/logoVersion = '3'/);
+ assert.match(view,/logoVersion = '5'/);
  assert.match(view,/loading="lazy"/);
 });

@@ -58,7 +58,7 @@ function CompanyLogo({ symbol, size = 44 }: { symbol: string; size?: number }) {
   const [failedFor, setFailedFor] = useState<string | null>(null);
   // Bump this when the resolver changes so a browser cannot keep an old
   // initials placeholder cached for a full day after a deployment.
-  const logoVersion = '3';
+  const logoVersion = '5';
   const src = `/api/portfolio-logo?symbol=${encodeURIComponent(symbol)}&v=${logoVersion}`;
   const retrySrc = `/api/portfolio-logo?symbol=${encodeURIComponent(symbol)}&v=${logoVersion}&retry=1`;
   return <Image unoptimized className="company-logo" src={failedFor === symbol ? retrySrc : src} width={size} height={size} alt={`شعار ${symbol}`} loading="lazy" onError={() => setFailedFor(symbol)} />;
@@ -134,7 +134,7 @@ export function AllocationTreemap({ positions, onOpen }: { positions: PortfolioP
   const nodes = useMemo(() => squarifiedTreemap(positions), [positions]);
   return <section className="portfolio-panel allocation-panel"><div className="section-line"><div><h3>توزيع المحفظة</h3><p>مساحة كل مستطيل تساوي وزن الشركة من القيمة الحالية.</p></div><span>{positions.length} مراكز</span></div>
     {nodes.length ? <><div className="portfolio-treemap" role="group" aria-label="خريطة توزيع مراكز المحفظة">{nodes.map(node => <button className="treemap-node" key={node.symbol} style={{ insetInlineStart: `${node.x}%`, top: `${node.y}%`, width: `${node.width}%`, height: `${node.height}%`, '--node-color': node.color } as React.CSSProperties} onClick={() => onOpen(node)} aria-label={`${node.nameAr || node.name}، ${node.symbol}، وزن ${weightPct(node.weight)}`} title={`${node.symbol} · ${weightPct(node.weight)} · ${usd(node.marketValue)}`}>
-      <span className="treemap-node-logo"><CompanyLogo symbol={node.symbol} size={44}/></span><span className="treemap-node-copy"><b dir="ltr">{node.symbol}</b><span dir="ltr">{weightPct(node.weight)}</span><small>{usd(node.marketValue)}</small></span>
+      <span className="treemap-node-logo"><CompanyLogo symbol={node.symbol} size={44}/></span><span className="treemap-node-copy"><b dir="ltr">{node.symbol}</b><span dir="ltr">{weightPct(node.weight)}</span><small>{usd(node.marketValue)}</small><em className="treemap-node-company" dir="auto">{node.nameAr || node.name}</em></span>
     </button>)}</div><div className="allocation-legend" role="list" aria-label="نسب شركات المحفظة">{nodes.map(node => <button role="listitem" key={node.symbol} onClick={() => onOpen(node)} aria-label={`فتح ${node.nameAr || node.name}، وزن ${weightPct(node.weight)}`}><CompanyLogo symbol={node.symbol} size={36}/><span><b dir="ltr">{node.symbol}</b><small dir="auto">{node.nameAr || node.name}</small></span><strong dir="ltr">{weightPct(node.weight)}</strong></button>)}</div></> : <div className="portfolio-chart-empty">لا يمكن رسم التوزيع حتى يتوفر سعر موثوق لمركز واحد على الأقل.</div>}
   </section>;
 }

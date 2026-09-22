@@ -1,5 +1,5 @@
 export async function apiJson<T>(url:string,options?:RequestInit):Promise<T>{
- const response=await fetch(url,options);
+ const response=await fetch(url,{cache:'no-store',...options});
  const raw=await response.text();
  let payload:any=null;
  const contentType=response.headers.get('content-type')||'';
