@@ -1,7 +1,7 @@
 'use client';
 
 import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
-import {Star,RefreshCw,Download,Bell,Database,Search,X,ChevronDown,BriefcaseBusiness} from 'lucide-react';
+import {Star,RefreshCw,Download,Bell,Database,Search,X,ChevronDown,BriefcaseBusiness,LogIn,LogOut,UserRound} from 'lucide-react';
 import {Tabs,TabsList,TabsTrigger} from '@/components/ui/tabs';
 import {Progress} from '@/components/ui/progress';
 import {Dialog,DialogContent,DialogTitle,DialogDescription,DialogClose} from '@/components/ui/dialog';
@@ -16,6 +16,7 @@ import {VALIDATION_REPORT} from '@/lib/validation-report';
 import PortfolioView from './portfolio-view';
 
 type View='core'|'bounce'|'favorites'|'portfolio';
+type AccountSession={username:string};
 type RadarData={run:ScanRun|null;dataRun:ScanRun|null;dataRunId?:string;snapshots:Snapshot[];favorites:string[];portfolioCount?:number;coverage?:{runId:string;total:number;fields:Record<string,number>}|null;summary:{total:number;coreQualified:number;bounceQualified:number;coreRanked?:number;bounceRanked?:number;coreUnknown:number;bounceUnknown:number;coreFailed?:number;bounceFailed?:number;stale?:boolean};page:{hasMore:boolean;offset?:number}};
 const names:Record<View,string>={bounce:'فرص الارتداد',core:'القيمة الأساسية',favorites:'المفضلة',portfolio:'محفظتي'};
 const request=apiJson;
@@ -28,6 +29,7 @@ export default function RadarApp(){
  const [selected,setSelected]=useState<Snapshot|null>(null),[selectedEvaluation,setSelectedEvaluation]=useState<ReturnType<typeof evaluateStrategy>|null>(null),[detailLoading,setDetailLoading]=useState(false),[detailError,setDetailError]=useState('');
  const [reportOpen,setReportOpen]=useState(false);
  const [portfolioCount,setPortfolioCount]=useState(0);
+ const [account,setAccount]=useState<AccountSession|null>(null),[accountOpen,setAccountOpen]=useState(false),[accountMode,setAccountMode]=useState<'login'|'signup'>('login'),[accountUsername,setAccountUsername]=useState(''),[accountPassword,setAccountPassword]=useState(''),[accountBusy,setAccountBusy]=useState(false),[accountRevision,setAccountRevision]=useState(0);
  const [settings,setSettings]=useState(false),[notificationBusy,setNotificationBusy]=useState(false),[saving,setSaving]=useState<string|null>(null);
  const [hasMore,setHasMore]=useState(false),[copied,setCopied]=useState('');
  const selection=useRef<AbortController|null>(null),lastView=useRef({view,search}),listRequest=useRef<AbortController|null>(null);
@@ -66,6 +68,13 @@ export default function RadarApp(){
   return()=>{window.clearInterval(timer);controller.abort();};
  },[progress.active,refresh]);
  useEffect(()=>{if('serviceWorker'in navigator)void navigator.serviceWorker.register('/sw.js').catch(()=>{});return()=>selection.current?.abort()},[]);
+ useEffect(()=>{void request<{account:AccountSession|null}>('/api/account').then(value=>setAccount(value.account)).catch(()=>undefined)},[]);
+ useEffect(()=>{
+  const refreshWhenVisible=()=>{if(document.visibilityState==='visible'&&!loadingRequest.current)void refresh()};
+  const timer=window.setInterval(refreshWhenVisible,5*60_000);
+  window.addEventListener('focus',refreshWhenVisible);document.addEventListener('visibilitychange',refreshWhenVisible);
+  return()=>{window.clearInterval(timer);window.removeEventListener('focus',refreshWhenVisible);document.removeEventListener('visibilitychange',refreshWhenVisible)};
+ },[refresh]);
 
  async function scan(mode:'quick'|'full'='full'){
   setBusy(true);setError('');
@@ -76,6 +85,17 @@ export default function RadarApp(){
   if(favoritePending.current)return;favoritePending.current=true;favoriteVersion.current++;setSaving(s.symbol);setError('');
   try{const p=await request<{favorites:string[]}>('/api/radar',post({action:'favorite',symbol:s.symbol,saved:!favorites.includes(s.symbol)}));setFavorites(p.favorites);if(view==='favorites')await refresh()}
   catch(e){setError(e instanceof Error?e.message:'تعذّر حفظ المفضلة')}finally{favoritePending.current=false;favoriteVersion.current++;setSaving(null)}
+ }
+ async function accountAction(event:React.FormEvent){
+  event.preventDefault();setAccountBusy(true);setError('');
+  try{
+   const value=await request<{account:AccountSession|null}>('/api/account',post({action:accountMode,username:accountUsername,password:accountPassword}));
+   setAccount(value.account);setAccountPassword('');setAccountOpen(false);setAccountRevision(version=>version+1);await refresh();setNotice(accountMode==='signup'?'تم إنشاء الحساب ومزامنة بيانات هذا الجهاز.':'تم تسجيل الدخول ومزامنة بياناتك.');
+  }catch(error){setError(error instanceof Error?error.message:'تعذّر تسجيل الحساب.')}finally{setAccountBusy(false)}
+ }
+ async function logout(){
+  setAccountBusy(true);setError('');
+  try{await request('/api/account',post({action:'logout'}));setAccount(null);setAccountRevision(version=>version+1);await refresh();setNotice('تم تسجيل الخروج.')}catch(error){setError(error instanceof Error?error.message:'تعذّر تسجيل الخروج.')}finally{setAccountBusy(false)}
  }
  async function openCompany(s:Snapshot,baseline:ReturnType<typeof evaluateStrategy>|null=evaluateStrategy(strategy,s)){
   selection.current?.abort();const controller=new AbortController();selection.current=controller;
@@ -119,7 +139,7 @@ export default function RadarApp(){
  return <div className="radar-app" dir="rtl">
   <header className="radar-header"><div className="header-inner">
    <div className="header-line"><div className="brand"><h1>رادار الشركات الصغيرة</h1><p>{(data?.summary.total??0).toLocaleString('en-US')} شركة مفحوصة · {day(data?.dataRun?.updated_at)}</p></div>
-    <div className="header-actions"><button className={`favorite-pill ${view==='favorites'?'chosen':''}`} onClick={()=>setView('favorites')} aria-label={`المفضلة: ${favorites.length}`}><Star size={18} fill={view==='favorites'?'currentColor':'none'}/><span>{favorites.length}</span></button><button className="scan-button" onClick={()=>scan()} disabled={busy||progress.active}><RefreshCw size={16} className={busy||progress.active?'spin':''}/>{busy?'جارٍ البدء':progress.active?'جارٍ الفحص':'فحص السوق'}</button></div></div>
+    <div className="header-actions"><button className={`favorite-pill ${view==='favorites'?'chosen':''}`} onClick={()=>setView('favorites')} aria-label={`المفضلة: ${favorites.length}`}><Star size={18} fill={view==='favorites'?'currentColor':'none'}/><span>{favorites.length}</span></button><button className={`account-pill ${account?'signed-in':''}`} onClick={()=>setAccountOpen(true)} aria-label={account?`الحساب ${account.username}`:'فتح مزامنة الحساب'}><UserRound size={17}/><span>{account?.username||'مزامنة'}</span></button><button className="scan-button" onClick={()=>scan()} disabled={busy||progress.active}><RefreshCw size={16} className={busy||progress.active?'spin':''}/>{busy?'جارٍ البدء':progress.active?'جارٍ الفحص':'فحص السوق'}</button></div></div>
    <form className="search-box" onSubmit={e=>{e.preventDefault();void lookup()}}><Search size={18}/><input aria-label="ابحث برمز السهم أو اسم الشركة" placeholder="ابحث برمز السهم أو اسم الشركة" value={query} onChange={e=>{setQuery(e.target.value);if(!e.target.value)setSearch('')}}/><button disabled={!query.trim()||busy}>بحث</button></form>
   </div></header>
   <main className="radar-main">
@@ -128,7 +148,7 @@ export default function RadarApp(){
    {(data?.run||busy)&&<section className="scan-panel" aria-label="تقدم فحص السوق"><div className="scan-heading"><b>{busy&&!data?.run?'تجهيز الفحص':progress.phase}</b><strong dir="ltr">{progress.percent.toFixed(2)}<small> / 100.00%</small></strong></div><Progress value={progress.percent} aria-label="تقدم فحص السوق" aria-valuetext={`${progress.percent.toFixed(2)} بالمئة، ${progress.phase}`}/><div className="scan-meta"><span>{(([4,5,10].includes(data?.run?.stage??-1)?data?.run?.offset:data?.run?.processed)??0).toLocaleString('en-US')} / {(data?.run?.total??0).toLocaleString('en-US')} في المرحلة</span><span>{progress.active?'الفحص مستمر على الخادم':data?.run?.failed?`${data.run.failed} شركة تعذّر جلب تاريخها`:'النتائج محفوظة'}</span></div>{data?.run?.error&&<p className="muted">{data.run.error}</p>}<details><summary>تفاصيل التقدم</summary><p>النسبة تمثل مراحل العمل المنجزة، وليست نسبة الوقت المتبقي. تتحرك فقط مع تقدم محفوظ من الخادم؛ مرحلة الاستعادة تعرض عدد الشركات التي تمت معالجتها.</p><p dir="ltr">{data?.run?.id}</p><p>آخر تحديث: {data?.run?.updated_at||'بانتظار الخادم'}</p></details></section>}
    {(data?.run||data?.dataRun)&&<p><button className="text-button" onClick={()=>{setReportOpen(true);setSettings(true)}}>عرض نتائج الجولة وأسباب عدم التأهيل</button>{data?.run&&data?.dataRun&&data.run.id!==data.dataRun.id&&<span> · القوائم تعرض آخر نتيجة محفوظة؛ تقرير الجولة يعرض الفحص الأحدث.</span>}</p>}
    <Tabs value={view} onValueChange={v=>{setView(v as View);setQuery('');setSearch('')}} dir="rtl" className="main-tabs"><TabsList aria-label="القوائم الرئيسية">{(['bounce','core','favorites','portfolio'] as View[]).map(v=><TabsTrigger key={v} value={v} className={v}>{v==='portfolio'&&<BriefcaseBusiness size={16}/>} {names[v]} <span>({v==='portfolio'?portfolioCount:v==='favorites'?favorites.length:v==='core'?data?.summary.coreRanked??0:data?.summary.bounceRanked??0})</span></TabsTrigger>)}</TabsList></Tabs>
-   {view==='portfolio'?<PortfolioView onOpenCompany={snapshot=>void openCompany(snapshot,null)} onCountChange={setPortfolioCount}/>:<>
+   {view==='portfolio'?<PortfolioView key={accountRevision} onOpenCompany={snapshot=>void openCompany(snapshot,null)} onCountChange={setPortfolioCount}/>:<>
    <section className={`strategy-brief ${view}`}>
     {view==='favorites'?<><div className="section-line"><h2>المفضلة ({favorites.length})</h2><button className="text-button" onClick={()=>setView('bounce')}>عودة للكل</button></div><p>قائمتك الخاصة. الحفظ لا يجعل السهم مؤهلًا للاستراتيجية.</p></>:<>
      <p>{view==='bounce'?<>قائمة ارتداد قصيرة الأجل. لا يدخلها إلا سهم يجتاز الهبوط، الابتعاد عن القاع، التخفيف المراجَع، والانعكاس فوق MA30W؛ ثم ترتبه الدرجة.</>:<>قائمة قيمة طويلة الأجل. لا يدخلها إلا سهم يجتاز الإيرادات، EV/S، الربحية، السيولة، الحجم، ومراجعة مخاطر التمويل؛ ثم ترتبه الدرجة.</>}</p>
@@ -151,6 +171,7 @@ export default function RadarApp(){
    </>}
   </main>
   <CompanySheet snapshot={selected} strategy={strategy} baselineEvaluation={selectedEvaluation} loading={detailLoading} error={detailError} onClose={closeCompany} onRetry={()=>selected&&openCompany(selected,selectedEvaluation)} favorite={selected?favorites.includes(selected.symbol):false} onFavorite={()=>selected&&favorite(selected)} onCopy={()=>selected&&copy(selected.symbol)}/>
+  <Dialog open={accountOpen} onOpenChange={setAccountOpen}><DialogContent className="account-dialog" dir="rtl"><DialogTitle>{account?'حساب المزامنة':'مزامنة بياناتك بين الأجهزة'}</DialogTitle><DialogDescription>{account?'المحفظة والمفضلة محفوظتان على هذا الحساب ويمكن فتحهما من الهاتف والكمبيوتر.':'أنشئ حسابًا بكلمة مرور حتى تظهر المحفظة والمفضلة نفسها على كل أجهزتك.'}</DialogDescription>{account?<div className="account-status"><div><UserRound size={22}/><b dir="ltr">{account.username}</b></div><p>آخر التغييرات تُحفظ على الخادم وتظهر بعد تسجيل الدخول بهذا الحساب.</p><button className="account-submit" onClick={()=>void logout()} disabled={accountBusy}><LogOut size={17}/>{accountBusy?'جارٍ التنفيذ…':'تسجيل الخروج'}</button></div>:<form className="account-form" onSubmit={accountAction}><div className="account-mode" role="tablist" aria-label="نوع الحساب"><button type="button" className={accountMode==='login'?'active':''} onClick={()=>setAccountMode('login')}>تسجيل الدخول</button><button type="button" className={accountMode==='signup'?'active':''} onClick={()=>setAccountMode('signup')}>إنشاء حساب</button></div><label>اسم المستخدم<input required minLength={3} maxLength={32} pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,31}" autoComplete="username" value={accountUsername} onChange={event=>setAccountUsername(event.target.value)} placeholder="مثال: yousef" dir="ltr"/></label><label>كلمة المرور<input required minLength={8} maxLength={128} type="password" autoComplete={accountMode==='login'?'current-password':'new-password'} value={accountPassword} onChange={event=>setAccountPassword(event.target.value)} placeholder="8 أحرف على الأقل" dir="ltr"/></label><p>بياناتك الحالية على هذا الجهاز ستُنقل إلى الحساب عند الإنشاء أو تسجيل الدخول.</p><button className="account-submit" disabled={accountBusy}>{accountBusy?<RefreshCw className="spin" size={17}/>:accountMode==='login'?<LogIn size={17}/>:<UserRound size={17}/>} {accountBusy?'جارٍ الحفظ…':accountMode==='login'?'دخول ومزامنة':'إنشاء ومزامنة'}</button></form>}</DialogContent></Dialog>
   <Dialog open={settings} onOpenChange={setSettings}><DialogContent className="settings-dialog" dir="rtl" showCloseButton={false}><DialogClose className="absolute top-4 left-4" aria-label="إغلاق مركز البيانات"><X size={20}/></DialogClose><DialogTitle>مركز البيانات والإشعارات</DialogTitle><DialogDescription>حالة المصادر والفحص، وأدوات حفظ النتائج ومراجعتها.</DialogDescription>
    <div className="settings-scroll">{(error||notice)&&<div className={`message ${error?'error':''}`} role={error?'alert':'status'}>{error||notice}</div>}<section><h3>إشعار اكتمال الفحص</h3><p>على iPhone: افتح الموقع في Safari ← أضف إلى الشاشة الرئيسية ← افتحه من الأيقونة ← فعّل الإشعارات ← وافق على الإذن ← اختبر الإشعار.</p><div className="action-pair"><button onClick={()=>notifications()} disabled={notificationBusy}>تفعيل الإشعارات</button><button onClick={()=>notifications(true)} disabled={notificationBusy}>اختبار الإشعار</button></div><small>قبول الإرسال من المزود ليس دليل وصول على الهاتف.</small></section>
    <section><h3>حالة نموذج {strategy==='bounce'?'فرص الارتداد':'القيمة الأساسية'}</h3><dl className="data-grid"><div><dt>نسخة النموذج</dt><dd dir="ltr">{SPECS[strategy].model.version}</dd></div><div><dt>نوع الدرجة</dt><dd>تشخيصية</dd></div><div><dt>احتمال النتيجة</dt><dd>محجوب</dd></div><div><dt>الاعتماد التاريخي</dt><dd>لم يكتمل</dd></div></dl><p>{SPECS[strategy].model.objective}</p><p className="muted">السبب: لا تتوفر بعد مجموعة PIT مكتملة تشمل الشركات المشطوبة ونتائج مستقبلية ناضجة. لن تُعرض أوزان مدرّبة أو احتمالات مصطنعة.</p></section>

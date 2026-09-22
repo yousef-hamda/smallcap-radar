@@ -162,6 +162,13 @@ export default function PortfolioView({ onOpenCompany, onCountChange }: { onOpen
   }, [loadHistory, onCountChange]);
   useEffect(() => { queueMicrotask(() => void refresh()); return () => companyRequest.current?.abort(); }, [refresh]);
   useEffect(() => {
+    const refreshWhenVisible = () => { if (document.visibilityState === 'visible' && !busy) void refresh(); };
+    const timer = window.setInterval(refreshWhenVisible, 5 * 60_000);
+    window.addEventListener('focus', refreshWhenVisible);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => { window.clearInterval(timer); window.removeEventListener('focus', refreshWhenVisible); document.removeEventListener('visibilitychange', refreshWhenVisible); };
+  }, [busy, refresh]);
+  useEffect(() => {
     if (query.trim().length < 1) return;
     const controller = new AbortController(), timer = window.setTimeout(() => {
       setSearching(true);

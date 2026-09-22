@@ -1,7 +1,7 @@
 import {readState,db,createRun,insertSnapshot,ensureSchema,currentHash} from '@/lib/storage';
 import {sameOrigin,sameSecret,json,body,statusOf} from '@/lib/http';
 import {importSchema} from '@/lib/validation';
-import {visitor} from '@/lib/visitor';
+import {resolveVisitor} from '@/lib/visitor';
 import {env} from 'cloudflare:workers';
 
 const tokenPattern=/^[a-f0-9]{48}$/;
@@ -9,7 +9,7 @@ async function tokenHash(token:string){const bytes=await crypto.subtle.digest('S
 
 export async function GET(req:Request){
  try {
-  const url=new URL(req.url), identity=visitor(req);
+  const url=new URL(req.url), identity=await resolveVisitor(req);
   if(url.searchParams.get('status')==='1'){
    await ensureSchema();
    const row=await db().prepare('SELECT id,status,source,stage,offset,processed,total,failed,created_at,updated_at,error,lease_until,universe_total,quote_coverage,fundamental_coverage,sec_failed,sec_success,sec_requests,json_array_length(retry_queue) AS retryPending FROM strategy_runs WHERE strategy_hash=? ORDER BY created_at DESC LIMIT 1').bind(currentHash()).first();
@@ -26,7 +26,7 @@ export async function POST(req:Request){
   sameOrigin(req);await ensureSchema();const b=await body(req);
   if(b.action==='favorite'){
    if(typeof b.symbol!=='string'||!/^[A-Z0-9.^-]{1,16}$/.test(b.symbol)||typeof b.saved!=='boolean')return json({error:'رمز أو حالة حفظ غير صالحة'},400);
-   const identity=visitor(req);
+   const identity=await resolveVisitor(req);
    if(!b.saved)await db().prepare('DELETE FROM personal_watchlist WHERE owner=? AND symbol=?').bind(identity.owner,b.symbol).run();
    else {
     const row=await db().prepare('SELECT payload FROM fundamental_snapshots WHERE symbol=? ORDER BY as_of DESC LIMIT 1').bind(b.symbol).first() as any;

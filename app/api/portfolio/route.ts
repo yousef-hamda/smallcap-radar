@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { db, ensureSchema } from '@/lib/storage';
 import { body as readBody, json, sameOrigin, statusOf } from '@/lib/http';
-import { visitor } from '@/lib/visitor';
+import { resolveVisitor, type VisitorIdentity } from '@/lib/visitor';
 import { searchCompanies } from '@/lib/providers';
 import { canonicalPortfolioAsset, readPortfolio, readPortfolioTransactions } from '@/lib/portfolio-storage';
 import { validateLedger, type PortfolioSide, type PortfolioTransaction } from '@/lib/portfolio';
@@ -43,7 +43,7 @@ function assertDate(date: string) {
   if (date < '1970-01-01') throw Object.assign(Error('تاريخ العملية أقدم من النطاق المدعوم.'), { status: 400 });
 }
 
-async function respond(request: Request, identity: ReturnType<typeof visitor>) {
+async function respond(request: Request, identity: VisitorIdentity) {
   const response = json(await readPortfolio(identity.owner));
   if (identity.cookie) response.headers.set('Set-Cookie', identity.cookie);
   return response;
@@ -56,7 +56,7 @@ export async function GET(request: Request) {
       if (query.length > 100) return json({ error: 'عبارة البحث طويلة جدًا.' }, 400);
       return json({ results: searchCompanies(query).map(company => ({ symbol: company.ticker, name: company.name, exchange: company.exchange, price: company.price ?? null, sector: company.sector, industry: company.industry })) });
     }
-    const identity = visitor(request);
+    const identity = await resolveVisitor(request);
     return await respond(request, identity);
   } catch (error: any) { return json({ error: error.message || 'تعذّر تحميل المحفظة.' }, error.status || 503); }
 }
@@ -67,7 +67,7 @@ export async function POST(request: Request) {
     const parsed = inputSchema.safeParse(await readBody(request,20_000));
     if (!parsed.success) return json({ error: 'تحقق من الرمز، نوع العملية، العدد، السعر والتاريخ.' }, 400);
     assertDate(parsed.data.tradeDate);
-    const identity = visitor(request), revision=await portfolioRevision(identity.owner), current=await readPortfolioTransactions(identity.owner);
+    const identity = await resolveVisitor(request), revision=await portfolioRevision(identity.owner), current=await readPortfolioTransactions(identity.owner);
     if(current.length>=MAX_TRANSACTIONS)return json({error:`بلغت المحفظة حد ${MAX_TRANSACTIONS.toLocaleString('en-US')} عملية.`},422);
     const asset = await canonicalPortfolioAsset(parsed.data.symbol);
     if (!asset) return json({ error: 'الشركة غير موجودة في دليل الأسهم الأمريكية.' }, 404);
@@ -88,7 +88,7 @@ export async function PUT(request: Request) {
     const parsed = inputSchema.required({ id: true }).safeParse(await readBody(request,20_000));
     if (!parsed.success) return json({ error: 'بيانات تعديل العملية غير صالحة.' }, 400);
     assertDate(parsed.data.tradeDate);
-    const identity = visitor(request),revision=await portfolioRevision(identity.owner);
+    const identity = await resolveVisitor(request),revision=await portfolioRevision(identity.owner);
     const existing = await db().prepare('SELECT created_at FROM portfolio_transactions WHERE id=? AND owner=?').bind(parsed.data.id, identity.owner).first() as any;
     if (!existing) return json({ error: 'العملية غير موجودة.' }, 404);
     const asset = await canonicalPortfolioAsset(parsed.data.symbol);
@@ -110,7 +110,7 @@ export async function DELETE(request: Request) {
     sameOrigin(request); await ensureSchema();
     const payload = await readBody(request,20_000), id = typeof payload?.id === 'string' ? payload.id : '';
     if (!z.string().uuid().safeParse(id).success) return json({ error: 'معرّف العملية غير صالح.' }, 400);
-    const identity = visitor(request),revision=await portfolioRevision(identity.owner);
+    const identity = await resolveVisitor(request),revision=await portfolioRevision(identity.owner);
     const current=await readPortfolioTransactions(identity.owner);
     if(!current.some(transaction=>transaction.id===id))return json({ error: 'العملية غير موجودة.' }, 404);
     const remaining = current.filter(transaction => transaction.id !== id);

@@ -70,3 +70,27 @@ button,input{font:inherit}button,a{-webkit-tap-highlight-color:transparent}butto
 .portfolio-treemap .treemap-node-watermark{display:none}
 .sector-bars>div{grid-template-columns:minmax(110px,1fr) minmax(240px,2.4fr) 72px;gap:10px}
 @media(max-width:600px){.sector-bars>div{grid-template-columns:minmax(75px,1fr) minmax(150px,2fr) 58px;gap:8px}}
+
+/* Market heatmap treatment: the value remains proportional, while each tile
+   uses a full color field and compact information cluster instead of a dark
+   card floating inside a large empty rectangle. */
+.portfolio-treemap{background:#0b0d0f;padding:2px}
+.portfolio-treemap>button{border:2px solid #0b0d0f;border-radius:3px;background:var(--node-color);box-shadow:inset 0 0 0 1px #ffffff26;color:#fff;text-shadow:0 1px 2px #000b;}
+.portfolio-treemap>button:hover{filter:brightness(1.12);transform:none}
+.portfolio-treemap .company-logo{background:#f7f7f8;border:2px solid #fff;padding:2px;box-shadow:0 2px 8px #0005}
+.portfolio-treemap .treemap-node-copy{padding:5px 6px;margin:-5px -6px;background:linear-gradient(90deg,#0009,transparent);border-radius:3px}
+.portfolio-treemap .treemap-node-copy>b{font-size:clamp(15px,2.2vw,30px);line-height:1.05;color:#fff}
+.portfolio-treemap .treemap-node-copy>span{font-size:clamp(12px,1.2vw,19px);color:#fff}
+.portfolio-treemap .treemap-node-copy>small{font-size:clamp(10px,.9vw,14px);color:#f3f4f6}
+@container allocation-tile (max-width:180px){.portfolio-treemap .treemap-node-copy{padding:2px 3px;margin:-2px -3px}.portfolio-treemap .treemap-node-copy>b{font-size:15px}.portfolio-treemap .treemap-node-copy>span{font-size:11px}}
+@container allocation-tile (min-width:300px) and (min-height:220px){.portfolio-treemap .treemap-node-copy>b{font-size:30px}.portfolio-treemap .treemap-node-copy>span{font-size:18px}.portfolio-treemap .treemap-node-copy>small{font-size:13px}}
+
+/* Account access is deliberately compact so the sync control remains usable
+   on a phone without competing with the market tabs. */
+.account-pill{display:flex;align-items:center;gap:6px;min-height:43px;max-width:150px;border:1px solid var(--line);border-radius:99px;padding:8px 12px;background:transparent;color:#a1a1aa;white-space:nowrap;overflow:hidden}
+.account-pill span{overflow:hidden;text-overflow:ellipsis}
+.account-pill.signed-in{color:#65e6bd;border-color:#087b5f;background:#071d18}
+.account-dialog[data-slot=dialog-content]{width:min(440px,calc(100% - 24px));background:#0e0f10;border-color:#2b3230;border-radius:20px;padding:24px}
+.account-dialog [data-slot=dialog-title]{font-size:22px}.account-dialog [data-slot=dialog-description]{color:#8e9299;line-height:1.7}
+.account-form,.account-status{display:grid;gap:14px;margin-top:16px}.account-form label{display:grid;gap:6px;color:#b6b8bd;font-size:13px}.account-form input{width:100%;min-height:45px;border:1px solid #343a37;border-radius:11px;background:#151817;color:#f4f4f5;padding:9px 11px;font-size:16px}.account-form p,.account-status p{color:#858b89;font-size:12px;line-height:1.7}.account-mode{display:grid;grid-template-columns:1fr 1fr;gap:7px}.account-mode button{min-height:42px;border:1px solid #343a37;border-radius:10px;background:#151817;color:#9ca3a0}.account-mode button.active{border-color:#0b9b75;background:#092a21;color:#71e5be}.account-submit{display:flex;align-items:center;justify-content:center;gap:7px;min-height:45px;border:0;border-radius:11px;background:#00bc8b;color:#04130d;font-weight:700}.account-submit:disabled{opacity:.55}.account-status>div{display:flex;align-items:center;gap:10px;color:#65e6bd}.account-status>div b{font-size:19px;color:#f4f4f5}
+@media(max-width:600px){.account-pill{min-height:44px;max-width:100px;padding:7px 9px;font-size:12px}.account-pill svg{flex:none}.account-pill span{max-width:55px}.account-dialog[data-slot=dialog-content]{padding:20px}.portfolio-treemap{height:clamp(270px,78vw,390px)}.portfolio-treemap .treemap-node-copy>b{font-size:16px}.portfolio-treemap .treemap-node-copy>span{font-size:12px}}

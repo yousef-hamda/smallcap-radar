@@ -1,6 +1,6 @@
 import { db, ensureSchema } from '@/lib/storage';
 import { json } from '@/lib/http';
-import { visitor } from '@/lib/visitor';
+import { resolveVisitor } from '@/lib/visitor';
 import { buildPerformanceSeries, type PortfolioHistory } from '@/lib/portfolio';
 import { readPortfolioQuotes, readPortfolioTransactions } from '@/lib/portfolio-storage';
 import { historicalMarketData } from '@/lib/providers';
@@ -23,7 +23,7 @@ async function mapLimited<T, R>(values: T[], limit: number, work: (value: T) => 
 export async function GET(request: Request) {
   try {
     await ensureSchema();
-    const identity = visitor(request), transactions = await readPortfolioTransactions(identity.owner);
+    const identity = await resolveVisitor(request), transactions = await readPortfolioTransactions(identity.owner);
     if (!transactions.length) {
       const response = json({ points: [], unavailable: [], incompleteSymbols: [], sources: [], asOf: new Date().toISOString() });
       if (identity.cookie) response.headers.set('Set-Cookie', identity.cookie);

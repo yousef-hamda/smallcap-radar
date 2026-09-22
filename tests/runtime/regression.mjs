@@ -25,6 +25,7 @@ import {calculatePortfolio,buildPerformanceSeries,validateLedger} from '../../.t
 import {GET as portfolioGET,POST as portfolioPOST,PUT as portfolioPUT,DELETE as portfolioDELETE} from '../../.test-build/portfolio-api.mjs';
 import {GET as portfolioHistoryGET} from '../../.test-build/portfolio-history-api.mjs';
 import {GET as portfolioLogoGET} from '../../.test-build/portfolio-logo-api.mjs';
+import {GET as accountGET,POST as accountPOST} from '../../.test-build/account-api.mjs';
 import webpush from 'web-push';
 await ensureSchema();
 const base=fixtures[0];
@@ -62,6 +63,17 @@ test('ten-day volume proxy cannot reject a historical candidate',()=>{
 test('source conflict prevents both screening and final qualification',()=>{for(const strategy of ['core','bounce']){const e=evaluateStrategy(strategy,{...base,sourceConflicts:['injected conflict']});assert.equal(e.screeningQualified,false);assert.equal(e.status,'UNKNOWN');assert.equal(e.finalRanked,false)}});
 test('visitor isolation and cookie flags',()=>{
  const a=visitor(new Request('https://radar.test')),b=visitor(new Request('https://radar.test'));assert.notEqual(a.owner,b.owner);assert.match(a.cookie,/HttpOnly; SameSite=Lax; Secure/);assert.equal(visitor(new Request('https://radar.test',{headers:{cookie:a.cookie.split(';')[0]}})).owner,a.owner);
+});
+test('account sync moves anonymous wallet data and keeps it available on another device',async()=>{
+ const anonymous=visitor(new Request('https://radar.test')),cookie=anonymous.cookie.split(';')[0],now=new Date().toISOString();
+ sqlite.prepare('INSERT INTO portfolio_revisions(owner,revision) VALUES(?,0)').run(anonymous.owner);
+ sqlite.prepare('INSERT INTO portfolio_transactions(id,owner,symbol,company_name,side,quantity,price,fees,trade_date,note,metadata,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run('sync-account-tx',anonymous.owner,'TEST','Synthetic','buy',2,10,0,'2026-01-01','', '{}',now,now);
+ sqlite.prepare('INSERT INTO personal_watchlist(owner,symbol,created_at,payload) VALUES(?,?,?,?)').run(anonymous.owner,'TEST',now,JSON.stringify(base));
+ const origin='https://radar.test',signup=await accountPOST(new Request(`${origin}/api/account`,{method:'POST',headers:{origin,cookie,'content-type':'application/json'},body:JSON.stringify({action:'signup',username:'sync-test-user',password:'strong-password-123'})}));
+ assert.equal(signup.status,200);const setCookies=signup.headers.get('set-cookie')||'';assert.match(setCookies,/radar-session=/);const session=setCookies.match(/radar-session=[^;]+/)?.[0];assert(session);
+ const accountId=sqlite.prepare('SELECT id FROM radar_accounts WHERE username=?').get('sync-test-user').id,owner=`account:${accountId}`;
+ assert.equal(sqlite.prepare('SELECT COUNT(*) AS count FROM portfolio_transactions WHERE owner=?').get(owner).count,1);assert.equal(sqlite.prepare('SELECT COUNT(*) AS count FROM personal_watchlist WHERE owner=?').get(owner).count,1);
+ const secondDevice=await accountGET(new Request(`${origin}/api/account`,{headers:{cookie:session}}));assert.equal(secondDevice.status,200);assert.equal((await secondDevice.json()).account.username,'sync-test-user');
 });
 test('portfolio average cost, partial sale, fees and realized profit are deterministic',()=>{
  const tx=(id,side,quantity,price,fees,tradeDate)=>({id,symbol:'TEST',companyName:'Synthetic',side,quantity,price,fees,tradeDate,createdAt:`${tradeDate}T12:00:00Z`,updatedAt:`${tradeDate}T12:00:00Z`});

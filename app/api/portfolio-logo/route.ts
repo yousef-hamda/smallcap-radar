@@ -1,5 +1,5 @@
 import { db, ensureSchema } from '@/lib/storage';
-import { visitor } from '@/lib/visitor';
+import { resolveVisitor } from '@/lib/visitor';
 
 const symbolPattern = /^[A-Z][A-Z0-9.^-]{0,15}$/;
 const imageHeaders = (contentType: string) => ({ 'Content-Type': contentType, 'Cache-Control': 'public, max-age=86400, stale-while-revalidate=604800', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; sandbox" });
@@ -12,15 +12,26 @@ const FALLBACK_TTL = 10 * 60_000;
 // First party favicons cover the companies most often used in the portfolio.
 // Ticker based providers remain the primary source for the rest of the stock universe.
 const KNOWN_DOMAINS: Record<string, string> = {
+  ABNB: 'airbnb.com',
   AAPL: 'apple.com',
+  AMD: 'amd.com',
   AMZN: 'amazon.com',
   AVGO: 'broadcom.com',
+  COIN: 'coinbase.com',
+  CRWD: 'crowdstrike.com',
+  DLO: 'dlocal.com',
   GOOGL: 'google.com',
+  GRAB: 'grab.com',
+  HOOD: 'robinhood.com',
+  META: 'meta.com',
   MSFT: 'microsoft.com',
+  NFLX: 'netflix.com',
   NVDA: 'nvidia.com',
+  PLTR: 'palantir.com',
   RKLB: 'rocketlabusa.com',
   SOFI: 'sofi.com',
   TSLA: 'tesla.com',
+  UBER: 'uber.com',
 };
 
 function assetResponse(asset: LogoAsset) {
@@ -81,7 +92,11 @@ async function resolveLogo(symbol: string, website: string | null, forceRefresh 
       safeImage(`https://companiesmarketcap.com/img/company-logos/128/${encodeURIComponent(symbol)}.png`),
       safeImage(`https://www.google.com/s2/favicons?domain=${encodeURIComponent(KNOWN_DOMAINS[symbol] || `${symbol.toLowerCase()}.com`)}&sz=128`),
     ]);
-    const asset = financialLogo || companyLogo || parqetLogo || marketCapLogo || faviconLogo || await safeImage(`https://images.financialmodelingprep.com/symbol/${encodeURIComponent(symbol)}.png`) || fallback(symbol);
+    // CompaniesMarketCap usually serves the same brand mark on a light
+    // background. FMP sometimes serves a white-only transparent mark (DLO is
+    // one example), which disappears against our light logo tile. Prefer the
+    // visible CMC asset, then the verified company favicon, before using FMP.
+    const asset = marketCapLogo || companyLogo || parqetLogo || financialLogo || faviconLogo || await safeImage(`https://images.financialmodelingprep.com/symbol/${encodeURIComponent(symbol)}.png`) || fallback(symbol);
     logoCache.set(key, { expiresAt: Date.now() + (asset.fallback ? FALLBACK_TTL : LOGO_TTL), asset });
     return asset;
   })();
@@ -97,7 +112,7 @@ export async function GET(request: Request) {
   let website: unknown = null;
   try {
     await ensureSchema();
-    const identity = visitor(request);
+    const identity = await resolveVisitor(request);
     const row = await db().prepare('SELECT metadata FROM portfolio_transactions WHERE owner=? AND symbol=? ORDER BY updated_at DESC LIMIT 1').bind(identity.owner, symbol).first() as any;
     website = row?.metadata ? JSON.parse(String(row.metadata))?.website : null;
     if (typeof website !== 'string') {
