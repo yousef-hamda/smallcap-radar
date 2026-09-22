@@ -68,6 +68,7 @@ export async function mergeOwnerData(fromOwner: string, toOwner: string) {
     d.prepare('DELETE FROM personal_watchlist WHERE owner=?').bind(fromOwner),
     d.prepare('INSERT OR IGNORE INTO portfolio_revisions(owner,revision) SELECT ?,revision FROM portfolio_revisions WHERE owner=?').bind(toOwner, fromOwner),
     d.prepare('UPDATE portfolio_revisions SET revision=MAX(revision,COALESCE((SELECT revision FROM portfolio_revisions WHERE owner=?),0)) WHERE owner=?').bind(fromOwner, toOwner),
+    d.prepare('DELETE FROM portfolio_transactions WHERE owner=? AND id IN (SELECT id FROM portfolio_transactions WHERE owner=?)').bind(fromOwner, toOwner),
     d.prepare('UPDATE portfolio_transactions SET owner=? WHERE owner=?').bind(toOwner, fromOwner),
     d.prepare('DELETE FROM portfolio_revisions WHERE owner=?').bind(fromOwner),
     d.prepare('DELETE FROM push_subscriptions WHERE owner=? AND endpoint IN (SELECT endpoint FROM push_subscriptions WHERE owner=?)').bind(fromOwner, toOwner),

@@ -26,12 +26,13 @@ export async function resolveVisitor(request: Request): Promise<VisitorIdentity>
  if (!token) return anonymous;
  try {
   await ensureSchema();
-  const row = await db().prepare('SELECT s.account_id,a.username,s.expires_at FROM radar_sessions s JOIN radar_accounts a ON a.id=s.account_id WHERE s.token_hash=?').bind(await digest(token)).first() as any;
+  const tokenHash = await digest(token);
+  const row = await db().prepare('SELECT s.account_id,a.username,s.expires_at,s.last_seen_at FROM radar_sessions s JOIN radar_accounts a ON a.id=s.account_id WHERE s.token_hash=?').bind(tokenHash).first() as any;
   if (!row || Number(row.expires_at) <= Date.now()) {
-   if (row) await db().prepare('DELETE FROM radar_sessions WHERE token_hash=?').bind(await digest(token)).run();
+   if (row) await db().prepare('DELETE FROM radar_sessions WHERE token_hash=?').bind(tokenHash).run();
    return anonymous;
   }
-  await db().prepare('UPDATE radar_sessions SET last_seen_at=? WHERE token_hash=?').bind(new Date().toISOString(), await digest(token)).run();
+  if (Date.now() - Date.parse(String(row.last_seen_at)) > 15 * 60_000) await db().prepare('UPDATE radar_sessions SET last_seen_at=? WHERE token_hash=?').bind(new Date().toISOString(), tokenHash).run();
   return { owner: accountOwner(String(row.account_id)), cookie: anonymous.cookie, accountId: String(row.account_id), username: String(row.username) };
  } catch {
   return anonymous;
