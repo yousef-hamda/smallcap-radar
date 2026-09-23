@@ -54,52 +54,33 @@ button,input{font:inherit}button,a{-webkit-tap-highlight-color:transparent}butto
 @media(max-width:600px){.scan-button,.favorite-pill,.main-tabs [data-slot=tabs-trigger],.chart-tabs [data-slot=tabs-trigger]{min-height:44px}.transactions-list article{grid-template-columns:36px 60px 42px minmax(72px,1fr) 92px;gap:6px;padding-inline:8px}.transaction-actions button{width:44px;height:44px}}
 @media(max-width:370px){.transactions-list article{grid-template-columns:34px 48px minmax(60px,1fr) 92px}}
 
-/* Keep allocation labels inside their tiles and provide a complete readable legend. */
-.portfolio-treemap>.treemap-node{container-type:size;container-name:allocation-tile;min-width:0;min-height:0}.treemap-node-logo{display:block;margin-bottom:auto}.treemap-node-copy{display:flex;flex-direction:column;align-items:flex-start;min-width:0;max-width:100%;line-height:1.25}.treemap-node-copy>b,.treemap-node-copy>span,.treemap-node-copy>small{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.portfolio-treemap .treemap-node-logo .company-logo{width:44px;height:44px;margin:0}.allocation-legend{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:12px}.allocation-legend>button{display:grid;grid-template-columns:36px minmax(0,1fr) auto;align-items:center;gap:9px;min-width:0;min-height:56px;padding:8px 10px;border:1px solid #282d2b;border-radius:12px;background:#111412;color:#f4f4f5;text-align:right;transition:background-color .15s ease,border-color .15s ease}.allocation-legend>button:hover{background:#17201d;border-color:#365049}.allocation-legend>button:focus-visible{outline:2px solid #65e6bd;outline-offset:2px}.allocation-legend>button>span{min-width:0}.allocation-legend b,.allocation-legend small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.allocation-legend small{color:#8f9693;font-size:11px}.allocation-legend strong{color:#65e6bd;font-size:13px;font-variant-numeric:tabular-nums;white-space:nowrap}
-.portfolio-treemap{height:clamp(240px,26vw,330px)}.portfolio-treemap>.treemap-node{box-sizing:border-box}.portfolio-treemap .treemap-node-watermark{position:absolute;top:50%;left:50%;z-index:0;display:block;margin:0;opacity:.12;transform:translate(-50%,-50%);pointer-events:none}.portfolio-treemap .treemap-node-watermark .company-logo{width:132px;height:132px;margin:0}.portfolio-treemap .treemap-node-copy{position:relative;z-index:1}.portfolio-treemap .treemap-node-company{max-width:80%;color:#d1d5db;font-size:13px}
-@container allocation-tile (max-width:180px){.treemap-node-watermark{display:none}.treemap-node-company{display:none}}
-@container allocation-tile (max-width:90px){.treemap-node-logo{display:none}.treemap-node-copy>small{display:none}.treemap-node-copy>b{font-size:13px}.treemap-node-copy>span{font-size:11px}}
-@container allocation-tile (max-height:140px){.treemap-node-watermark,.treemap-node-company{display:none}}
-@container allocation-tile (max-height:82px){.treemap-node-logo,.treemap-node-copy>small{display:none}}
-@container allocation-tile (max-width:52px){.treemap-node-copy>span{display:none}.treemap-node-copy>b{font-size:10px}}
-@container allocation-tile (max-height:42px){.treemap-node-copy>span,.treemap-node-copy>small{display:none}.treemap-node-copy>b{font-size:10px}}
-@media(max-width:600px){.allocation-legend{grid-template-columns:1fr}.portfolio-treemap>.treemap-node{padding:5px}.allocation-legend>button{min-height:52px}}
-
-/* Keep the allocation tiles clean and give the sector bars the available width. */
-.portfolio-treemap{height:clamp(290px,30vw,390px)}
-.portfolio-treemap .treemap-node-watermark{display:none}
-.sector-bars>div{grid-template-columns:minmax(110px,1fr) minmax(240px,2.4fr) 72px;gap:10px}
-@media(max-width:600px){.sector-bars>div{grid-template-columns:minmax(75px,1fr) minmax(150px,2fr) 58px;gap:8px}}
-
-/* Market heatmap treatment: the value remains proportional, while each tile
-   uses a full color field and compact information cluster instead of a dark
-   card floating inside a large empty rectangle. */
-.portfolio-treemap{background:#0b0d0f;padding:2px}
-.portfolio-treemap>button{border:2px solid #0b0d0f;border-radius:3px;background:var(--node-color);box-shadow:inset 0 0 0 1px #ffffff26;color:#fff;text-shadow:0 1px 2px #000b;}
-.portfolio-treemap>button:hover{filter:brightness(1.12);transform:none}
-.portfolio-treemap .company-logo{background:#f7f7f8;border:2px solid #fff;padding:2px;box-shadow:none}
-.portfolio-treemap .treemap-node-copy{padding:5px 6px;margin:-5px -6px;background:linear-gradient(90deg,#0009,transparent);border-radius:3px}
+/* Portfolio allocation is a market heatmap: each tile fills its computed
+   rectangle, while the information density adapts to that rectangle. */
+.portfolio-visual-grid{grid-template-columns:minmax(0,1.2fr) minmax(280px,.8fr);gap:16px}
+.portfolio-treemap{position:relative;width:100%;height:auto;min-height:240px;max-height:390px;aspect-ratio:1.55/1;margin-top:16px;padding:3px;border:1px solid #2d3935;border-radius:16px;background:#090c0b;direction:ltr;overflow:hidden;isolation:isolate}
+.portfolio-treemap>.treemap-node{container-type:size;container-name:allocation-tile;box-sizing:border-box;position:absolute;display:flex;min-width:0;min-height:0;align-items:flex-start;justify-content:flex-end;overflow:hidden;padding:10px;border:2px solid #090c0b;border-radius:3px;background:var(--node-color);box-shadow:inset 0 0 0 1px #ffffff26;color:#fff;text-align:left;text-shadow:0 1px 2px #000b;transition:filter .15s ease}
+.portfolio-treemap>.treemap-node:hover{z-index:2;filter:brightness(1.12)}
+.portfolio-treemap .treemap-node-logo{position:absolute;top:10px;left:10px;z-index:1;display:block;margin:0}
+.portfolio-treemap .treemap-node-logo .company-logo{width:44px;height:44px;margin:0;padding:2px;border:2px solid #fff;border-radius:12px;background:#f7f7f8;box-shadow:none}
+.portfolio-treemap .treemap-node-copy{position:absolute;right:10px;bottom:10px;left:10px;z-index:2;display:flex;min-width:0;max-width:calc(100% - 20px);flex-direction:column;align-items:flex-start;padding:7px 10px;border-radius:3px;background:linear-gradient(90deg,#000b 0%,#0008 62%,transparent 100%);line-height:1.2}
+.portfolio-treemap .treemap-node-copy>b,.portfolio-treemap .treemap-node-copy>span,.portfolio-treemap .treemap-node-copy>small,.portfolio-treemap .treemap-node-company{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .portfolio-treemap .treemap-node-copy>b{font-size:clamp(15px,2.2vw,30px);line-height:1.05;color:#fff}
-.portfolio-treemap .treemap-node-copy>span{font-size:clamp(12px,1.2vw,19px);color:#fff}
+.portfolio-treemap .treemap-node-copy>span{font-size:clamp(12px,1.2vw,19px);color:#fff;font-weight:700}
 .portfolio-treemap .treemap-node-copy>small{font-size:clamp(10px,.9vw,14px);color:#f3f4f6}
-@container allocation-tile (max-width:180px){.portfolio-treemap .treemap-node-copy{padding:2px 3px;margin:-2px -3px}.portfolio-treemap .treemap-node-copy>b{font-size:15px}.portfolio-treemap .treemap-node-copy>span{font-size:11px}}
-@container allocation-tile (min-width:300px) and (min-height:220px){.portfolio-treemap .treemap-node-copy>b{font-size:30px}.portfolio-treemap .treemap-node-copy>span{font-size:18px}.portfolio-treemap .treemap-node-copy>small{font-size:13px}}
-
-/* Keep proportional area while placing the information where a heatmap can
-   be read at a glance. Large holdings use the middle of their tile so the
-   empty area feels intentional; small holdings keep a compact corner label. */
-.portfolio-treemap>button{justify-content:center}
-.portfolio-treemap .treemap-node-logo{position:absolute;top:12px;left:12px;z-index:1;margin:0}
-.portfolio-treemap .treemap-node-copy{position:absolute;left:12px;right:12px;bottom:12px;z-index:2;margin:0;align-items:flex-start;background:linear-gradient(90deg,#000b,transparent);border-radius:3px}
-.portfolio-treemap .treemap-node-company{display:block;max-width:100%;overflow:hidden;color:#f3f4f6;font-size:clamp(10px,.9vw,14px);font-style:normal;font-weight:500;line-height:1.25;text-overflow:ellipsis;white-space:nowrap}
-@container allocation-tile (min-width:180px) and (min-height:220px){
- .portfolio-treemap .treemap-node-copy{top:50%;left:50%;right:auto;bottom:auto;min-width:min(65%,320px);max-width:82%;padding:12px 22px;margin:0;transform:translate(-50%,-50%);align-items:center;background:linear-gradient(90deg,transparent,#0009 18%,#0009 82%,transparent);text-align:center}
- .portfolio-treemap .treemap-node-company{font-size:14px}
-}
-@container allocation-tile (max-width:180px){.portfolio-treemap .treemap-node-company{display:none}}
+.portfolio-treemap .treemap-node-company{color:#e5e7eb;font-size:clamp(10px,.9vw,14px);font-style:normal;font-weight:500}
+@container allocation-tile (min-width:280px) and (min-height:180px){.portfolio-treemap .treemap-node-logo .company-logo{width:56px;height:56px}.portfolio-treemap .treemap-node-copy{padding:10px 13px}.portfolio-treemap .treemap-node-copy>b{font-size:30px}.portfolio-treemap .treemap-node-copy>span{font-size:18px}.portfolio-treemap .treemap-node-copy>small{font-size:13px}}
+@container allocation-tile (max-width:180px){.portfolio-treemap .treemap-node{padding:6px}.portfolio-treemap .treemap-node-logo .company-logo{width:32px;height:32px;border-radius:9px}.portfolio-treemap .treemap-node-copy{right:6px;bottom:6px;left:6px;max-width:calc(100% - 12px);padding:3px 4px}.portfolio-treemap .treemap-node-copy>b{font-size:15px}.portfolio-treemap .treemap-node-copy>span{font-size:11px}.portfolio-treemap .treemap-node-company{display:none}}
+@container allocation-tile (max-width:90px){.portfolio-treemap .treemap-node-logo{display:none}.portfolio-treemap .treemap-node-copy>small{display:none}.portfolio-treemap .treemap-node-copy>b{font-size:13px}.portfolio-treemap .treemap-node-copy>span{font-size:11px}}
+@container allocation-tile (max-width:52px){.portfolio-treemap .treemap-node-copy{right:3px;bottom:3px;left:3px;padding:2px}.portfolio-treemap .treemap-node-copy>b{font-size:10px}.portfolio-treemap .treemap-node-copy>span{display:none}}
 @container allocation-tile (max-height:140px){.portfolio-treemap .treemap-node-company{display:none}}
-.sector-bars>div{grid-template-columns:minmax(160px,1.4fr) minmax(220px,2.2fr) 72px}
-@media(max-width:600px){.sector-bars>div{grid-template-columns:minmax(96px,1fr) minmax(120px,1.6fr) 58px}}
+@container allocation-tile (max-height:82px){.portfolio-treemap .treemap-node-logo,.portfolio-treemap .treemap-node-copy>small{display:none}}
+@container allocation-tile (max-height:42px){.portfolio-treemap .treemap-node-copy>span{display:none}.portfolio-treemap .treemap-node-copy>b{font-size:10px}}
+.allocation-legend{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:12px}
+.allocation-legend>button{display:grid;grid-template-columns:36px minmax(0,1fr) auto;align-items:center;gap:9px;min-width:0;min-height:56px;padding:8px 10px;border:1px solid #282d2b;border-radius:12px;background:#111412;color:#f4f4f5;text-align:right;transition:background-color .15s ease,border-color .15s ease}
+.allocation-legend>button:hover{background:#17201d;border-color:#365049}.allocation-legend>button:focus-visible{outline:2px solid #65e6bd;outline-offset:2px}.allocation-legend>button>span{min-width:0}.allocation-legend b,.allocation-legend small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.allocation-legend small{color:#8f9693;font-size:11px}.allocation-legend strong{color:#65e6bd;font-size:13px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.sector-bars>div{grid-template-columns:minmax(160px,1.4fr) minmax(220px,2.2fr) 72px;gap:10px}
+@media(max-width:900px){.portfolio-visual-grid{grid-template-columns:1fr}.portfolio-treemap{max-height:none;aspect-ratio:1.55/1}}
+@media(max-width:600px){.allocation-legend{grid-template-columns:1fr}.portfolio-treemap{min-height:220px;aspect-ratio:1.45/1}.portfolio-treemap>.treemap-node{padding:6px}.portfolio-treemap .treemap-node-copy>b{font-size:16px}.portfolio-treemap .treemap-node-copy>span{font-size:12px}.sector-bars>div{grid-template-columns:minmax(96px,1fr) minmax(120px,1.6fr) 58px;gap:8px}}
 
 /* Account access is deliberately compact so the sync control remains usable
    on a phone without competing with the market tabs. */
@@ -109,4 +90,4 @@ button,input{font:inherit}button,a{-webkit-tap-highlight-color:transparent}butto
 .account-dialog[data-slot=dialog-content]{width:min(440px,calc(100% - 24px));background:#0e0f10;border-color:#2b3230;border-radius:20px;padding:24px}
 .account-dialog [data-slot=dialog-title]{font-size:22px}.account-dialog [data-slot=dialog-description]{color:#8e9299;line-height:1.7}
 .account-form,.account-status{display:grid;gap:14px;margin-top:16px}.account-form label{display:grid;gap:6px;color:#b6b8bd;font-size:13px}.account-form input{width:100%;min-height:45px;border:1px solid #343a37;border-radius:11px;background:#151817;color:#f4f4f5;padding:9px 11px;font-size:16px}.account-form p,.account-status p{color:#858b89;font-size:12px;line-height:1.7}.account-mode{display:grid;grid-template-columns:1fr 1fr;gap:7px}.account-mode button{min-height:42px;border:1px solid #343a37;border-radius:10px;background:#151817;color:#9ca3a0}.account-mode button.active{border-color:#0b9b75;background:#092a21;color:#71e5be}.account-submit{display:flex;align-items:center;justify-content:center;gap:7px;min-height:45px;border:0;border-radius:11px;background:#00bc8b;color:#04130d;font-weight:700}.account-submit:disabled{opacity:.55}.account-status>div{display:flex;align-items:center;gap:10px;color:#65e6bd}.account-status>div b{font-size:19px;color:#f4f4f5}
-@media(max-width:600px){.account-pill{min-height:44px;max-width:100px;padding:7px 9px;font-size:12px}.account-pill svg{flex:none}.account-pill span{max-width:55px}.account-dialog[data-slot=dialog-content]{padding:20px}.portfolio-treemap{height:clamp(270px,78vw,390px)}.portfolio-treemap .treemap-node-copy>b{font-size:16px}.portfolio-treemap .treemap-node-copy>span{font-size:12px}}
+@media(max-width:600px){.account-pill{min-height:44px;max-width:100px;padding:7px 9px;font-size:12px}.account-pill svg{flex:none}.account-pill span{max-width:55px}.account-dialog[data-slot=dialog-content]{padding:20px}}

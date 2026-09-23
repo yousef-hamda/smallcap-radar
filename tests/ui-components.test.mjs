@@ -138,12 +138,11 @@ test('portfolio allocation keeps every company logo and percentage in a readable
  assert.match(source,/loading=\{eager \? 'eager' : 'lazy'\}/);
  assert.match(css,/@container allocation-tile \(max-width:90px\)/);
  assert.match(css,/@media\(max-width:600px\)\{\.allocation-legend\{grid-template-columns:1fr\}/);
- assert.match(css,/\.portfolio-visual-grid\{display:grid;grid-template-columns:1\.15fr \.85fr;align-items:start/);
+ assert.match(css,/\.portfolio-visual-grid\{grid-template-columns:minmax\(0,1\.2fr\) minmax\(280px,\.8fr\);gap:16px\}/);
  assert.match(css,/\.portfolio-insights\{align-self:start;height:max-content\}/);
- assert.match(css,/\.portfolio-treemap\{height:clamp\(290px,30vw,390px\)/);
- assert.match(css,/\.portfolio-treemap \.treemap-node-watermark\{display:none\}/);
- assert.match(css,/\.sector-bars>div\{grid-template-columns:minmax\(110px,1fr\) minmax\(240px,2\.4fr\) 72px;gap:10px\}/);
- assert.match(css,/\.portfolio-treemap \.company-logo\{background:#f7f7f8;border:2px solid #fff;padding:2px;box-shadow:none\}/);
+ assert.match(css,/\.portfolio-treemap\{position:relative;width:100%;height:auto;min-height:240px;max-height:390px;aspect-ratio:1\.55\/1/);
+ assert.match(css,/\.sector-bars>div\{grid-template-columns:minmax\(160px,1\.4fr\) minmax\(220px,2\.2fr\) 72px;gap:10px\}/);
+ assert.match(css,/\.portfolio-treemap \.treemap-node-logo \.company-logo\{width:44px;height:44px;margin:0;padding:2px;border:2px solid #fff;border-radius:12px;background:#f7f7f8;box-shadow:none\}/);
 });
 
 test('portfolio company picker keeps results in a large readable dialog row',async()=>{
