@@ -143,6 +143,7 @@ test('portfolio allocation keeps every company logo and percentage in a readable
  assert.match(css,/\.portfolio-treemap\{position:relative;width:100%;height:auto;min-height:240px;max-height:390px;aspect-ratio:1\.55\/1/);
  assert.match(css,/\.sector-bars>div\{grid-template-columns:minmax\(160px,1\.4fr\) minmax\(220px,2\.2fr\) 72px;gap:10px\}/);
  assert.match(css,/\.portfolio-treemap \.treemap-node-logo \.company-logo\{width:44px;height:44px;margin:0;padding:2px;border:2px solid #fff;border-radius:12px;background:#f7f7f8;box-shadow:none\}/);
+ assert.match(css,/@container allocation-tile \(min-width:180px\) and \(min-height:120px\)/);
 });
 
 test('portfolio company picker keeps results in a large readable dialog row',async()=>{

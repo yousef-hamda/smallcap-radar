@@ -75,12 +75,16 @@ button,input{font:inherit}button,a{-webkit-tap-highlight-color:transparent}butto
 @container allocation-tile (max-height:140px){.portfolio-treemap .treemap-node-company{display:none}}
 @container allocation-tile (max-height:82px){.portfolio-treemap .treemap-node-logo,.portfolio-treemap .treemap-node-copy>small{display:none}}
 @container allocation-tile (max-height:42px){.portfolio-treemap .treemap-node-copy>span{display:none}.portfolio-treemap .treemap-node-copy>b{font-size:10px}}
+/* Large heatmap cells use the centered information treatment seen in market
+   maps; small cells keep compact edge labels so every symbol remains visible. */
+@container allocation-tile (min-width:180px) and (min-height:120px){.portfolio-treemap .treemap-node-copy{top:50%;right:auto;bottom:auto;left:50%;max-width:82%;min-width:min(65%,320px);padding:0;transform:translate(-50%,-50%);align-items:center;background:transparent;text-align:center;text-shadow:0 2px 4px #000e}.portfolio-treemap .treemap-node-company{font-size:14px}}
 .allocation-legend{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:12px}
 .allocation-legend>button{display:grid;grid-template-columns:36px minmax(0,1fr) auto;align-items:center;gap:9px;min-width:0;min-height:56px;padding:8px 10px;border:1px solid #282d2b;border-radius:12px;background:#111412;color:#f4f4f5;text-align:right;transition:background-color .15s ease,border-color .15s ease}
 .allocation-legend>button:hover{background:#17201d;border-color:#365049}.allocation-legend>button:focus-visible{outline:2px solid #65e6bd;outline-offset:2px}.allocation-legend>button>span{min-width:0}.allocation-legend b,.allocation-legend small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.allocation-legend small{color:#8f9693;font-size:11px}.allocation-legend strong{color:#65e6bd;font-size:13px;font-variant-numeric:tabular-nums;white-space:nowrap}
 .sector-bars>div{grid-template-columns:minmax(160px,1.4fr) minmax(220px,2.2fr) 72px;gap:10px}
 @media(max-width:900px){.portfolio-visual-grid{grid-template-columns:1fr}.portfolio-treemap{max-height:none;aspect-ratio:1.55/1}}
 @media(max-width:600px){.allocation-legend{grid-template-columns:1fr}.portfolio-treemap{min-height:220px;aspect-ratio:1.45/1}.portfolio-treemap>.treemap-node{padding:6px}.portfolio-treemap .treemap-node-copy>b{font-size:16px}.portfolio-treemap .treemap-node-copy>span{font-size:12px}.sector-bars>div{grid-template-columns:minmax(96px,1fr) minmax(120px,1.6fr) 58px;gap:8px}}
+@media(max-width:600px){@container allocation-tile (min-width:180px) and (min-height:120px){.portfolio-treemap .treemap-node-copy>b{font-size:24px}.portfolio-treemap .treemap-node-copy>span{font-size:15px}.portfolio-treemap .treemap-node-copy>small{font-size:11px}}}
 
 /* Account access is deliberately compact so the sync control remains usable
    on a phone without competing with the market tabs. */
