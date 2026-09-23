@@ -103,19 +103,27 @@ export function PerformanceChart({ history }: { history: HistoryData | null }) {
 }
 
 type TreemapNode = PortfolioPosition & { x: number; y: number; width: number; height: number; color: string };
-type TreemapDatum = { position: PortfolioPosition; index: number };
+type TreemapDatum = { position: PortfolioPosition };
 type TreemapRoot = { children: TreemapDatum[] };
 type TreemapData = TreemapRoot | TreemapDatum;
+
+function heatmapColor(position: PortfolioPosition) {
+  const move = position.marketValue && Number.isFinite(position.dailyPnl) ? position.dailyPnl! / position.marketValue : null;
+  if (move == null || !Number.isFinite(move)) return '#3f4744';
+  const intensity = Math.min(1, Math.abs(move) / 0.08);
+  const saturation = 48 + intensity * 18;
+  const lightness = 38 - intensity * 10;
+  return `hsl(${move >= 0 ? 148 : 4} ${saturation.toFixed(1)}% ${lightness.toFixed(1)}%)`;
+}
 
 // D3's standard squarified treemap keeps areas proportional while choosing
 // readable rectangles, adding consistent inner/outer gaps, and recalculating
 // the complete layout whenever the portfolio values change.
 export function squarifiedTreemap(positions: PortfolioPosition[]): TreemapNode[] {
-  const palette = ['#5eead4', '#60a5fa', '#c084fc', '#fb7185', '#fbbf24', '#34d399', '#818cf8', '#f472b6'];
   const values = positions.filter(position => Number.isFinite(position.marketValue) && position.marketValue! > 0)
     .sort((a, b) => (b.marketValue! - a.marketValue!) || a.symbol.localeCompare(b.symbol));
   if (!values.length) return [];
-  const root = hierarchy<TreemapData>({ children: values.map((position, index) => ({ position, index })) }, datum => 'children' in datum ? datum.children : undefined)
+  const root = hierarchy<TreemapData>({ children: values.map(position => ({ position })) }, datum => 'children' in datum ? datum.children : undefined)
     .sum(datum => 'position' in datum ? datum.position.marketValue! : 0)
     .sort((a, b) => (b.value ?? 0) - (a.value ?? 0) || ('position' in a.data && 'position' in b.data ? a.data.position.symbol.localeCompare(b.data.position.symbol) : 0));
   const layoutRoot = treemap<TreemapData>()
@@ -128,7 +136,7 @@ export function squarifiedTreemap(positions: PortfolioPosition[]): TreemapNode[]
     .tile(treemapSquarify.ratio(1))(root);
   return layoutRoot.leaves().flatMap(node => {
     if (!('position' in node.data)) return [];
-    return [{ ...node.data.position, x: node.x0, y: node.y0, width: Math.max(0, node.x1 - node.x0), height: Math.max(0, node.y1 - node.y0), color: palette[node.data.index % palette.length] }];
+    return [{ ...node.data.position, x: node.x0, y: node.y0, width: Math.max(0, node.x1 - node.x0), height: Math.max(0, node.y1 - node.y0), color: heatmapColor(node.data.position) }];
   });
 }
 

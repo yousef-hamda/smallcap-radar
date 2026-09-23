@@ -178,6 +178,15 @@ test('portfolio allocation uses proportional squarified geometry inside the fram
  }
 });
 
+test('portfolio allocation colors tiles by the sourced daily move',async()=>{
+ const {squarifiedTreemap}=await vite.ssrLoadModule('/app/portfolio-view.tsx');
+ const base={quantity:1,averageCost:100,costBasis:100,currentPrice:100,marketValue:100,unrealizedPnl:0,unrealizedPct:0,realizedPnl:0,weight:null,quoteAsOf:null};
+ const nodes=squarifiedTreemap([{...base,symbol:'GAIN',name:'Gain',dailyPnl:4},{...base,symbol:'LOSS',name:'Loss',dailyPnl:-4},{...base,symbol:'NONE',name:'None',dailyPnl:null}]);
+ assert.match(nodes.find(node=>node.symbol==='GAIN').color,/hsl\(148/);
+ assert.match(nodes.find(node=>node.symbol==='LOSS').color,/hsl\(4/);
+ assert.equal(nodes.find(node=>node.symbol==='NONE').color,'#3f4744');
+});
+
 test('Arabic enrichment preserves sourced fields and translates company news',async()=>{
  const {translateSnapshotContent}=await vite.ssrLoadModule('/lib/translation.ts');
  const originalFetch=globalThis.fetch;
