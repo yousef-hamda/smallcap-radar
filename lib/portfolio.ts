@@ -53,6 +53,8 @@ export type PortfolioPosition = {
   unrealizedPct: number | null;
   realizedPnl: number;
   dailyPnl: number | null;
+  /** The quote provider's current-session percentage change when available. */
+  dailyChange?: number | null;
   weight: number | null;
   quoteAsOf: string | null;
   sector?: string;
@@ -176,6 +178,7 @@ export function calculatePortfolio(transactions: PortfolioTransaction[], quotes:
       unrealizedPct: unrealized == null || position.costBasis <= 0 ? null : unrealized / position.costBasis,
       realizedPnl: position.realizedPnl,
       dailyPnl: daily,
+      dailyChange: quote?.dailyChange ?? null,
       weight: null,
       quoteAsOf: quote?.asOf ?? null,
       sector: quote?.sector || position.metadata?.sector,

@@ -79,7 +79,7 @@ test('portfolio average cost, partial sale, fees and realized profit are determi
  const tx=(id,side,quantity,price,fees,tradeDate)=>({id,symbol:'TEST',companyName:'Synthetic',side,quantity,price,fees,tradeDate,createdAt:`${tradeDate}T12:00:00Z`,updatedAt:`${tradeDate}T12:00:00Z`});
  const transactions=[tx('1','buy',10,10,1,'2026-01-01'),tx('2','buy',10,20,1,'2026-01-02'),tx('3','sell',5,30,1,'2026-01-03')];
  const value=calculatePortfolio(transactions,{TEST:{symbol:'TEST',name:'Synthetic',price:25,dailyChange:.02,asOf:'2026-01-04'}});
- assert.equal(value.positions[0].quantity,15);assert.equal(value.positions[0].averageCost,15.1);assert.equal(value.summary.realizedPnl,73.5);assert.equal(value.summary.unrealizedPnl,148.5);assert.equal(value.summary.totalPnl,222);
+ assert.equal(value.positions[0].quantity,15);assert.equal(value.positions[0].averageCost,15.1);assert.equal(value.positions[0].dailyChange,.02);assert.equal(value.summary.realizedPnl,73.5);assert.equal(value.summary.unrealizedPnl,148.5);assert.equal(value.summary.totalPnl,222);
  assert.throws(()=>validateLedger([...transactions,tx('4','sell',16,25,0,'2026-01-04')]),/لا يمكن بيع/);
 });
 test('portfolio full close and reopen resets cost basis instead of leaking an old average',()=>{

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import Image from 'next/image';
 import { hierarchy, treemap, treemapSquarify } from 'd3-hierarchy';
-import { AlertTriangle, ArrowDownRight, ArrowUpRight, BriefcaseBusiness, Download, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
+import { AlertTriangle, ArrowDownRight, ArrowUpRight, BriefcaseBusiness, Download, Pencil, Plus, RefreshCw, Search, Trash2, X } from 'lucide-react';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -107,12 +107,19 @@ type TreemapDatum = { position: PortfolioPosition };
 type TreemapRoot = { children: TreemapDatum[] };
 type TreemapData = TreemapRoot | TreemapDatum;
 
+function dailyMovePct(position: PortfolioPosition, quote?: PortfolioQuote | null) {
+  if (quote?.dailyChange != null && Number.isFinite(quote.dailyChange)) return quote.dailyChange;
+  if (position.dailyChange != null && Number.isFinite(position.dailyChange)) return position.dailyChange;
+  const previousValue = position.marketValue != null && position.dailyPnl != null ? position.marketValue - position.dailyPnl : null;
+  return previousValue != null && previousValue > 0 && position.dailyPnl != null && Number.isFinite(position.dailyPnl) ? position.dailyPnl / previousValue : null;
+}
+
 function heatmapColor(position: PortfolioPosition) {
-  const move = position.marketValue && Number.isFinite(position.dailyPnl) ? position.dailyPnl! / position.marketValue : null;
+  const move = dailyMovePct(position);
   if (move == null || !Number.isFinite(move)) return '#3f4744';
   const intensity = Math.min(1, Math.abs(move) / 0.08);
-  const saturation = 48 + intensity * 18;
-  const lightness = 38 - intensity * 10;
+  const saturation = 58 + intensity * 16;
+  const lightness = 60 - intensity * 14;
   return `hsl(${move >= 0 ? 148 : 4} ${saturation.toFixed(1)}% ${lightness.toFixed(1)}%)`;
 }
 
@@ -164,9 +171,9 @@ export default function PortfolioView({ onOpenCompany, onCountChange }: { onOpen
     catch (error) { setError(error instanceof Error ? error.message : 'تعذّر تحميل تاريخ المحفظة.'); }
     finally { setHistoryLoading(false); }
   }, []);
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (forceRefresh = false) => {
     setLoading(true);
-    try { const value = await apiJson<PortfolioData>('/api/portfolio'); setData(value); onCountChange?.(value.positions.length); setError(''); void loadHistory(); }
+    try { const value = await apiJson<PortfolioData>(forceRefresh ? '/api/portfolio?refresh=1' : '/api/portfolio'); setData(value); onCountChange?.(value.positions.length); setError(''); void loadHistory(); }
     catch (error) { setError(error instanceof Error ? error.message : 'تعذّر تحميل المحفظة.'); }
     finally { setLoading(false); }
   }, [loadHistory, onCountChange]);
@@ -249,7 +256,7 @@ export default function PortfolioView({ onOpenCompany, onCountChange }: { onOpen
   if (loading && !data) return <div className="portfolio-loading" role="status"><BriefcaseBusiness/> جارٍ تحميل محفظتك المحفوظة…</div>;
   return <section className="portfolio-view" aria-label="محفظتي الاستثمارية">
     {(error || notice) && <div className={`message ${error ? 'error' : ''}`} role={error ? 'alert' : 'status'}><span>{error || notice}</span><button aria-label="إغلاق الرسالة" onClick={() => { setError(''); setNotice(''); }}><X size={16}/></button></div>}
-    <div className="portfolio-hero"><div><span className="portfolio-kicker"><BriefcaseBusiness size={17}/> محفظتي</span><h2>متابعة قراراتك، لا أسعارك فقط</h2><p>سجّل الشراء والبيع، ثم راقب العائد والتوزيع والتركيز من بياناتك الحقيقية.</p></div><div className="portfolio-hero-actions"><button className="portfolio-export" onClick={exportCsv} disabled={!data?.transactions.length}><Download size={17}/> تصدير CSV</button><button className="scan-button" onClick={openNewTransaction}><Plus size={17}/> إضافة عملية</button></div></div>
+    <div className="portfolio-hero"><div><span className="portfolio-kicker"><BriefcaseBusiness size={17}/> محفظتي</span><h2>متابعة قراراتك، لا أسعارك فقط</h2><p>سجّل الشراء والبيع، ثم راقب العائد والتوزيع والتركيز من بياناتك الحقيقية.</p></div><div className="portfolio-hero-actions"><button className="portfolio-refresh" onClick={() => void refresh(true)} disabled={loading} aria-label="تحديث أسعار المحفظة"><RefreshCw size={17} className={loading ? 'spin' : ''}/> {loading ? 'جارٍ التحديث…' : 'تحديث الأسعار'}</button><button className="portfolio-export" onClick={exportCsv} disabled={!data?.transactions.length}><Download size={17}/> تصدير CSV</button><button className="scan-button" onClick={openNewTransaction}><Plus size={17}/> إضافة عملية</button></div></div>
 
     <div className="portfolio-search"><Search size={19}/><input value={query} onChange={event => { const value = event.target.value; setQuery(value); if (!value.trim()) { setResults([]); setSearching(false); } }} placeholder="ابحث عن الشركة أو رمز السهم لإضافة عملية" aria-label="ابحث عن سهم لإضافته إلى المحفظة"/><span>{searching ? 'جارٍ البحث…' : query && !results.length ? 'لا نتائج' : ''}</span>{!!results.length && <div className="portfolio-search-results">{results.map(company => <button key={company.symbol} onClick={() => void chooseCompany(company)}><CompanyLogo symbol={company.symbol}/><span><b dir="ltr">{company.symbol}</b><small dir="auto">{company.name}</small></span><em>{company.exchange || 'سوق أمريكي'}</em></button>)}</div>}</div>
 
@@ -258,7 +265,7 @@ export default function PortfolioView({ onOpenCompany, onCountChange }: { onOpen
       <PerformanceChart history={history}/>{historyLoading && <p className="muted">جارٍ تحديث التاريخ السعري للمحفظة…</p>}
       <div className="portfolio-visual-grid"><AllocationTreemap positions={data.positions} onOpen={openPosition}/><section className="portfolio-panel portfolio-insights"><div className="section-line"><div><h3>صحة المحفظة</h3><p>مؤشرات تركّز وجودة مبنية على أوزان المراكز الحالية.</p></div><strong>{data.summary.diversificationScore.toFixed(0)}<small>/100</small></strong></div><div className="insight-scores"><div><span>عدد المراكز الفعّال</span><b dir="ltr">{data.summary.effectiveHoldings.toFixed(1)}</b></div><div><span>أكبر مركز</span><b dir="ltr">{pct(data.summary.topWeight)}</b></div><div><span>Core موزون</span><b dir="ltr">{data.summary.weightedCore.score?.toFixed(1) ?? '—'}</b><small>تغطية {pct(data.summary.weightedCore.coverage)}</small></div><div><span>Bounce موزون</span><b dir="ltr">{data.summary.weightedBounce.score?.toFixed(1) ?? '—'}</b><small>تغطية {pct(data.summary.weightedBounce.coverage)}</small></div></div><div className="portfolio-alerts">{data.alerts.map(alert => <p key={alert}><AlertTriangle size={16}/>{alert}</p>)}</div><div className="sector-bars">{data.sectors.slice(0, 5).map(sector => <div key={sector.name}><span>{sector.name}</span><div><i style={{ width: `${sector.weight * 100}%` }}/></div><b dir="ltr">{pct(sector.weight)}</b></div>)}</div></section></div>
 
-      <section className="portfolio-panel positions-panel"><div className="section-line"><div><h3>المراكز المفتوحة</h3><p>مرتبة حسب القيمة الحالية؛ اضغط على الشركة لفتح ملفها الكامل.</p></div><span>{data.positions.length} مراكز</span></div><div className="positions-list">{data.positions.map(position => <button key={position.symbol} onClick={() => openPosition(position)}><CompanyLogo symbol={position.symbol}/><span className="position-name"><b dir="ltr">{position.symbol}</b><small dir="auto">{position.nameAr || position.name}</small></span><span><small>عدد الأسهم</small><b dir="ltr">{number(position.quantity)}</b></span><span><small>متوسط التكلفة</small><b dir="ltr">{usd(position.averageCost)}</b></span><span><small>القيمة</small><b dir="ltr">{usd(position.marketValue)}</b></span><span className={(position.unrealizedPnl ?? 0) >= 0 ? 'pass' : 'fail'}><small>العائد</small><b dir="ltr">{pct(position.unrealizedPct)}</b></span><span className="position-arrow">{(position.unrealizedPnl ?? 0) >= 0 ? <ArrowUpRight/> : <ArrowDownRight/>}</span></button>)}</div></section>
+      <section className="portfolio-panel positions-panel"><div className="section-line"><div><h3>المراكز المفتوحة</h3><p>مرتبة حسب القيمة الحالية؛ اضغط على الشركة لفتح ملفها الكامل.</p></div><span>{data.positions.length} مراكز</span></div><div className="positions-list">{data.positions.map(position => { const daily = dailyMovePct(position, data.quotes[position.symbol]); return <button key={position.symbol} onClick={() => openPosition(position)}><CompanyLogo symbol={position.symbol}/><span className="position-name"><b dir="ltr">{position.symbol}</b><small dir="auto">{position.nameAr || position.name}</small></span><span className="position-quantity"><small>عدد الأسهم</small><b dir="ltr">{number(position.quantity)}</b></span><span className="position-average"><small>متوسط التكلفة</small><b dir="ltr">{usd(position.averageCost)}</b></span><span className="position-value"><small>القيمة</small><b dir="ltr">{usd(position.marketValue)}</b></span><span className={(position.unrealizedPnl ?? 0) >= 0 ? 'pass position-return' : 'fail position-return'}><small>العائد</small><b dir="ltr">{pct(position.unrealizedPct)}</b></span><span className={daily == null || daily >= 0 ? 'pass position-daily' : 'fail position-daily'}><small>تغير يومي</small><b dir="ltr">{pct(daily)}</b></span><span className="position-arrow">{(position.unrealizedPnl ?? 0) >= 0 ? <ArrowUpRight/> : <ArrowDownRight/>}</span></button>; })}</div></section>
 
       <section className="portfolio-panel transactions-panel"><div className="section-line"><div><h3>سجل العمليات</h3><p>كل تعديل يعيد بناء متوسط التكلفة والربح من أول عملية.</p></div><button className="text-button" onClick={openNewTransaction}><Plus size={16}/> عملية جديدة</button></div><div className="transactions-list">{data.transactions.map(transaction => <article key={transaction.id}><CompanyLogo symbol={transaction.symbol} size={38}/><div><b dir="ltr">{transaction.symbol}</b><small>{transaction.tradeDate}</small></div><span className={transaction.side === 'buy' ? 'buy-tag' : 'sell-tag'}>{transaction.side === 'buy' ? 'شراء' : 'بيع'}</span><div dir="ltr">{number(transaction.quantity)} × {usd(transaction.price)}</div><strong dir="ltr">{usd(transaction.quantity * transaction.price + (transaction.side === 'buy' ? transaction.fees : -transaction.fees))}</strong><div className="transaction-actions"><button onClick={() => editTransaction(transaction)} aria-label={`تعديل عملية ${transaction.symbol}`}><Pencil size={16}/></button><button onClick={() => setDeleteTransaction(transaction)} aria-label={`حذف عملية ${transaction.symbol}`}><Trash2 size={16}/></button></div></article>)}</div></section>
     </>}

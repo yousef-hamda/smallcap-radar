@@ -43,8 +43,8 @@ function assertDate(date: string) {
   if (date < '1970-01-01') throw Object.assign(Error('تاريخ العملية أقدم من النطاق المدعوم.'), { status: 400 });
 }
 
-async function respond(request: Request, identity: VisitorIdentity) {
-  const response = json(await readPortfolio(identity.owner));
+async function respond(request: Request, identity: VisitorIdentity, forceRefresh = false) {
+  const response = json(await readPortfolio(identity.owner, { forceRefresh }));
   if (identity.cookie) response.headers.set('Set-Cookie', identity.cookie);
   return response;
 }
@@ -57,7 +57,7 @@ export async function GET(request: Request) {
       return json({ results: searchCompanies(query).map(company => ({ symbol: company.ticker, name: company.name, exchange: company.exchange, price: company.price ?? null, sector: company.sector, industry: company.industry })) });
     }
     const identity = await resolveVisitor(request);
-    return await respond(request, identity);
+    return await respond(request, identity, url.searchParams.get('refresh') === '1');
   } catch (error: any) { return json({ error: error.message || 'تعذّر تحميل المحفظة.' }, error.status || 503); }
 }
 

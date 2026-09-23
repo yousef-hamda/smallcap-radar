@@ -53,7 +53,7 @@ async function snapshotMap(symbols: string[]) {
   return snapshots;
 }
 
-export async function readPortfolioQuotes(symbols: string[]) {
+export async function readPortfolioQuotes(symbols: string[], options: { forceRefresh?: boolean } = {}) {
   await ensureSchema();
   const unique = [...new Set(symbols.map(symbol => symbol.toUpperCase()))].slice(0, 80);
   const snapshots = await snapshotMap(unique), now = Date.now();
@@ -62,7 +62,7 @@ export async function readPortfolioQuotes(symbols: string[]) {
     const keys = unique.map(symbol => `portfolio-quote:v1:${symbol}`);
     const cachedRows = (await db().prepare(`SELECT key,retrieved_at,payload FROM raw_cache WHERE key IN (${placeholders(keys.length)})`).bind(...keys).all()).results as any[];
     for (const row of cachedRows) {
-      if (now - Date.parse(String(row.retrieved_at)) > 5 * 60_000) continue;
+      if (options.forceRefresh || now - Date.parse(String(row.retrieved_at)) > 5 * 60_000) continue;
       try {
         const quote = JSON.parse(String(row.payload)) as Company;
         if (quote?.ticker && quote.quoteSource === 'Yahoo bulk quote live' && Number.isFinite(quote.price) && quote.price! > 0) liveQuotes.set(quote.ticker, quote);
@@ -135,9 +135,9 @@ export async function canonicalPortfolioAsset(symbol: string) {
   };
 }
 
-export async function readPortfolio(owner: string) {
+export async function readPortfolio(owner: string, options: { forceRefresh?: boolean } = {}) {
   const transactions = await readPortfolioTransactions(owner);
-  const quotes = await readPortfolioQuotes(transactions.map(transaction => transaction.symbol));
+  const quotes = await readPortfolioQuotes(transactions.map(transaction => transaction.symbol), options);
   const calculated = calculatePortfolio(transactions, quotes);
   const compactQuotes = Object.fromEntries(Object.entries(quotes).map(([symbol, quote]) => {
     const compact = { ...quote };

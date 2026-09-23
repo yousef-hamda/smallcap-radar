@@ -137,6 +137,8 @@ test('portfolio allocation keeps every company logo and percentage in a readable
  assert.match(source,/treemapSquarify\.ratio\(1\)/);
  assert.match(source,/loading=\{eager \? 'eager' : 'lazy'\}/);
  assert.match(css,/@container allocation-tile \(max-width:90px\)/);
+ assert.doesNotMatch(css,/\.treemap-node-logo\{display:none/);
+ assert.match(css,/\.treemap-node-logo \.company-logo\{width:16px;height:16px/);
  assert.match(css,/@media\(max-width:600px\)\{\.allocation-legend\{grid-template-columns:1fr\}/);
  assert.match(css,/\.portfolio-visual-grid\{grid-template-columns:minmax\(0,1\.2fr\) minmax\(280px,\.8fr\);gap:16px\}/);
  assert.match(css,/\.portfolio-insights\{align-self:start;height:max-content\}/);
@@ -185,6 +187,15 @@ test('portfolio allocation colors tiles by the sourced daily move',async()=>{
  assert.match(nodes.find(node=>node.symbol==='GAIN').color,/hsl\(148/);
  assert.match(nodes.find(node=>node.symbol==='LOSS').color,/hsl\(4/);
  assert.equal(nodes.find(node=>node.symbol==='NONE').color,'#3f4744');
+});
+
+test('portfolio exposes daily quote percentages and a force-refresh control',async()=>{
+ const source=await readFile(path.join(root,'app/portfolio-view.tsx'),'utf8');
+ const route=await readFile(path.join(root,'app/api/portfolio/route.ts'),'utf8');
+ assert.match(source,/تغير يومي/);
+ assert.match(source,/refresh\(true\)/);
+ assert.match(source,/\/api\/portfolio\?refresh=1/);
+ assert.match(route,/searchParams\.get\('refresh'\) === '1'/);
 });
 
 test('Arabic enrichment preserves sourced fields and translates company news',async()=>{
