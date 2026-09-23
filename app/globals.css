@@ -92,7 +92,7 @@ button,input{font:inherit}button,a{-webkit-tap-highlight-color:transparent}butto
 .portfolio-treemap .treemap-node-logo{position:absolute;top:12px;left:12px;z-index:1;margin:0}
 .portfolio-treemap .treemap-node-copy{position:absolute;left:12px;right:12px;bottom:12px;z-index:2;margin:0;align-items:flex-start;background:linear-gradient(90deg,#000b,transparent);border-radius:3px}
 .portfolio-treemap .treemap-node-company{display:block;max-width:100%;overflow:hidden;color:#f3f4f6;font-size:clamp(10px,.9vw,14px);font-style:normal;font-weight:500;line-height:1.25;text-overflow:ellipsis;white-space:nowrap}
-@container allocation-tile (min-width:300px) and (min-height:220px){
+@container allocation-tile (min-width:180px) and (min-height:220px){
  .portfolio-treemap .treemap-node-copy{top:50%;left:50%;right:auto;bottom:auto;min-width:min(65%,320px);max-width:82%;padding:12px 22px;margin:0;transform:translate(-50%,-50%);align-items:center;background:linear-gradient(90deg,transparent,#0009 18%,#0009 82%,transparent);text-align:center}
  .portfolio-treemap .treemap-node-company{font-size:14px}
 }

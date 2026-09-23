@@ -134,6 +134,8 @@ test('portfolio allocation keeps every company logo and percentage in a readable
  assert.doesNotMatch(source,/treemap-node-watermark/);
  assert.match(source,/className="treemap-node-copy"/);
  assert.match(source,/className="treemap-node-company"/);
+ assert.match(source,/treemapSquarify\.ratio\(1\)/);
+ assert.match(source,/loading=\{eager \? 'eager' : 'lazy'\}/);
  assert.match(css,/@container allocation-tile \(max-width:90px\)/);
  assert.match(css,/@media\(max-width:600px\)\{\.allocation-legend\{grid-template-columns:1fr\}/);
  assert.match(css,/\.portfolio-visual-grid\{display:grid;grid-template-columns:1\.15fr \.85fr;align-items:start/);
@@ -233,5 +235,5 @@ test('portfolio logo source uses the verified public stock-logo endpoint',async(
  assert.match(route,/linearGradient/);
  assert.match(view,/\/api\/portfolio-logo\?symbol=\$\{encodeURIComponent\(symbol\)\}/);
  assert.match(view,/logoVersion = '5'/);
- assert.match(view,/loading="lazy"/);
+ assert.match(view,/loading=\{eager \? 'eager' : 'lazy'\}/);
 });
