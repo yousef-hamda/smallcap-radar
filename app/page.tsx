@@ -83,7 +83,7 @@ export default function RadarApp(){
  }
  async function favorite(s:Snapshot){
   if(favoritePending.current)return;favoritePending.current=true;favoriteVersion.current++;setSaving(s.symbol);setError('');
-  try{const p=await request<{favorites:string[]}>('/api/radar',post({action:'favorite',symbol:s.symbol,saved:!favorites.includes(s.symbol)}));setFavorites(p.favorites);if(view==='favorites')await refresh()}
+  try{const saved=!favorites.includes(s.symbol);const p=await request<{favorites:string[]}>('/api/radar',post({action:'favorite',symbol:s.symbol,saved,...(saved?{snapshot:s}:{})}));setFavorites(p.favorites);if(view==='favorites')await refresh()}
   catch(e){setError(e instanceof Error?e.message:'تعذّر حفظ المفضلة')}finally{favoritePending.current=false;favoriteVersion.current++;setSaving(null)}
  }
  async function accountAction(event:React.FormEvent){

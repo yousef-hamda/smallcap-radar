@@ -1,6 +1,6 @@
 import {readState,db,createRun,insertSnapshot,ensureSchema,currentHash} from '@/lib/storage';
 import {sameOrigin,sameSecret,json,body,statusOf} from '@/lib/http';
-import {importSchema} from '@/lib/validation';
+import {completeSnapshotSchema,importSchema} from '@/lib/validation';
 import {resolveVisitor} from '@/lib/visitor';
 import {env} from 'cloudflare:workers';
 
@@ -30,11 +30,19 @@ export async function POST(req:Request){
    if(!b.saved)await db().prepare('DELETE FROM personal_watchlist WHERE owner=? AND symbol=?').bind(identity.owner,b.symbol).run();
    else {
     const row=await db().prepare('SELECT payload FROM fundamental_snapshots WHERE symbol=? ORDER BY as_of DESC LIMIT 1').bind(b.symbol).first() as any;
-    const cached=row
-      ||await db().prepare('SELECT payload FROM raw_cache WHERE key=?').bind('deep:v5:'+b.symbol).first() as any
-      ||await db().prepare('SELECT payload FROM raw_cache WHERE key=?').bind('deep:v4:'+b.symbol).first() as any;
-    if(!cached)return json({error:'افتح ملف الشركة أولًا للحصول على لقطة موثقة.'},404);
-    const snapshot=JSON.parse(cached.payload);delete snapshot.history;
+    let cached=row;
+    for(const version of ['v7','v6','v5','v4']){
+     if(cached)break;
+     cached=await db().prepare('SELECT payload FROM raw_cache WHERE key=?').bind(`deep:${version}:${b.symbol}`).first() as any;
+    }
+    let snapshot:any;
+    if(cached) snapshot=JSON.parse(cached.payload);
+    else if(b.snapshot&&typeof b.snapshot==='object'){
+     const parsed=completeSnapshotSchema.safeParse(b.snapshot);
+     if(!parsed.success||parsed.data.symbol!==b.symbol)return json({error:'لقطة الشركة المرسلة غير صالحة.'},400);
+     snapshot=parsed.data;
+    }else return json({error:'افتح ملف الشركة أولًا للحصول على لقطة موثقة.'},404);
+    delete snapshot.history;
     await db().prepare('INSERT INTO personal_watchlist(owner,symbol,created_at,payload) VALUES(?,?,?,?) ON CONFLICT(owner,symbol) DO UPDATE SET payload=excluded.payload').bind(identity.owner,b.symbol,new Date().toISOString(),JSON.stringify(snapshot)).run();
    }
    const response=json({favorites:(await db().prepare('SELECT symbol FROM personal_watchlist WHERE owner=? ORDER BY created_at DESC').bind(identity.owner).all()).results.map((row:any)=>row.symbol)});

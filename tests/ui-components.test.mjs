@@ -198,6 +198,11 @@ test('portfolio exposes daily quote percentages and a force-refresh control',asy
  assert.match(route,/searchParams\.get\('refresh'\) === '1'/);
 });
 
+test('radar favorites send the displayed verified snapshot when saving',async()=>{
+ const source=await readFile(path.join(root,'app/page.tsx'),'utf8');
+ assert.match(source,/action:'favorite',symbol:s\.symbol,saved,\.\.\.\(saved\?\{snapshot:s\}:\{\}\)/);
+});
+
 test('Arabic enrichment preserves sourced fields and translates company news',async()=>{
  const {translateSnapshotContent}=await vite.ssrLoadModule('/lib/translation.ts');
  const originalFetch=globalThis.fetch;

@@ -122,9 +122,10 @@ test('completed result with legacy processed=0 remains selectable; partial never
 test('API personal favorites start at zero, writes are idempotent and isolated',async()=>{
  await db().prepare("INSERT INTO watchlist(symbol,created_at) VALUES('OLD_SHARED','2026-01-01')").run();
  const initial=await GET(new Request('https://radar.test/api/radar'));assert.equal(initial.status,200);const cookie=initial.headers.get('set-cookie').split(';')[0];assert.deepEqual((await initial.json()).favorites,[]);
- const mutation=(saved)=>POST(new Request('https://radar.test/api/radar',{method:'POST',headers:{origin:'https://radar.test',cookie,'content-type':'application/json'},body:JSON.stringify({action:'favorite',symbol:'TEST',saved})}));
- for(let i=0;i<2;i++){const r=await mutation(true);assert.equal(r.status,200);assert.deepEqual((await r.json()).favorites,['TEST']);}
- const own=await GET(new Request('https://radar.test/api/radar?strategy=favorites',{headers:{cookie}}));assert.equal((await own.json()).snapshots[0].symbol,'TEST');
+ const directSnapshot={...base,symbol:'DIRECTFAV'};
+ const mutation=(saved)=>POST(new Request('https://radar.test/api/radar',{method:'POST',headers:{origin:'https://radar.test',cookie,'content-type':'application/json'},body:JSON.stringify({action:'favorite',symbol:'DIRECTFAV',saved,...(saved?{snapshot:directSnapshot}:{})})}));
+ for(let i=0;i<2;i++){const r=await mutation(true);assert.equal(r.status,200);assert.deepEqual((await r.json()).favorites,['DIRECTFAV']);}
+ const own=await GET(new Request('https://radar.test/api/radar?strategy=favorites',{headers:{cookie}}));assert.equal((await own.json()).snapshots[0].symbol,'DIRECTFAV');
  const stranger=await GET(new Request('https://radar.test/api/radar?strategy=favorites'));assert.deepEqual((await stranger.json()).favorites,[]);
  for(let i=0;i<2;i++)assert.deepEqual(await (await mutation(false)).json(),{favorites:[]});
  assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM watchlist').get().n,1);
