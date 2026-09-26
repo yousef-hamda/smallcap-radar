@@ -116,11 +116,11 @@ function dailyMovePct(position: PortfolioPosition, quote?: PortfolioQuote | null
 
 function heatmapColor(position: PortfolioPosition) {
   const move = dailyMovePct(position);
-  if (move == null || !Number.isFinite(move)) return '#3f4744';
+  if (move == null || !Number.isFinite(move)) return '#64748b';
   const intensity = Math.min(1, Math.abs(move) / 0.08);
-  const saturation = 58 + intensity * 16;
-  const lightness = 60 - intensity * 14;
-  return `hsl(${move >= 0 ? 148 : 4} ${saturation.toFixed(1)}% ${lightness.toFixed(1)}%)`;
+  const saturation = 68 + intensity * 12;
+  const lightness = 57 - intensity * 10;
+  return `hsl(${move >= 0 ? 151 : 3} ${saturation.toFixed(1)}% ${lightness.toFixed(1)}%)`;
 }
 
 // D3's standard squarified treemap keeps areas proportional while choosing
@@ -152,10 +152,10 @@ export function squarifiedTreemap(positions: PortfolioPosition[]): TreemapNode[]
 export function AllocationTreemap({ positions, onOpen }: { positions: PortfolioPosition[]; onOpen: (position: PortfolioPosition) => void }) {
   const nodes = useMemo(() => squarifiedTreemap(positions), [positions]);
   const density = (node: TreemapNode) => node.width >= 28 && node.height >= 22 ? 'large' : node.width >= 14 && node.height >= 10 ? 'medium' : node.width >= 6 && node.height >= 4 ? 'small' : 'micro';
-  return <section className="portfolio-panel allocation-panel"><div className="section-line"><div><h3>توزيع المحفظة</h3><p>مساحة كل مستطيل تساوي وزن الشركة من القيمة الحالية.</p></div><span>{positions.length} مراكز</span></div>
-    {nodes.length ? <><div className="portfolio-treemap" role="group" aria-label="خريطة توزيع مراكز المحفظة">{nodes.map(node => <button className="treemap-node" data-density={density(node)} key={node.symbol} style={{ left: `${node.x}%`, top: `${node.y}%`, width: `${node.width}%`, height: `${node.height}%`, '--node-color': node.color } as React.CSSProperties} onClick={() => onOpen(node)} aria-label={`${node.nameAr || node.name}، ${node.symbol}، وزن ${weightPct(node.weight)}`} title={`${node.symbol} · ${node.nameAr || node.name} · ${weightPct(node.weight)} · ${usd(node.marketValue)}`}>
-      <span className="treemap-node-logo"><CompanyLogo symbol={node.symbol} size={44} eager/></span><span className="treemap-node-copy"><b dir="ltr">{node.symbol}</b><span dir="ltr">{weightPct(node.weight)}</span><small>{usd(node.marketValue)}</small><em className="treemap-node-company" dir="auto">{node.nameAr || node.name}</em></span>
-    </button>)}</div><div className="allocation-legend" role="list" aria-label="نسب شركات المحفظة">{nodes.map(node => <button role="listitem" key={node.symbol} onClick={() => onOpen(node)} aria-label={`فتح ${node.nameAr || node.name}، وزن ${weightPct(node.weight)}`}><CompanyLogo symbol={node.symbol} size={36} eager/><span><b dir="ltr">{node.symbol}</b><small dir="auto">{node.nameAr || node.name}</small></span><strong dir="ltr">{weightPct(node.weight)}</strong></button>)}</div></> : <div className="portfolio-chart-empty">لا يمكن رسم التوزيع حتى يتوفر سعر موثوق لمركز واحد على الأقل.</div>}
+  return <section className="portfolio-panel allocation-panel"><div className="section-line"><div><h3>توزيع المحفظة</h3><p>حجم كل مستطيل يطابق وزن الشركة من القيمة الحالية، واللون يعكس التغير اليومي.</p></div><span>{positions.length} مراكز</span></div>
+    {nodes.length ? <><div className="portfolio-treemap" role="group" aria-label="خريطة توزيع مراكز المحفظة">{nodes.map(node => <button className="treemap-node" data-density={density(node)} key={node.symbol} style={{ left: `${node.x}%`, top: `${node.y}%`, width: `${node.width}%`, height: `${node.height}%`, '--node-color': node.color } as React.CSSProperties} onClick={() => onOpen(node)} aria-label={`${node.nameAr || node.name}، ${node.symbol}، وزن ${weightPct(node.weight)}، تغير يومي ${pct(dailyMovePct(node))}`} title={`${node.symbol} · ${node.nameAr || node.name} · ${weightPct(node.weight)} · ${usd(node.marketValue)} · ${pct(dailyMovePct(node))}`}>
+      <span className="treemap-node-logo"><CompanyLogo symbol={node.symbol} size={44} eager/></span><span className="treemap-node-copy"><b dir="ltr">{node.symbol}</b><span dir="ltr">{pct(dailyMovePct(node))}</span><small dir="ltr">{weightPct(node.weight)}</small><em className="treemap-node-company" dir="auto">{node.nameAr || node.name}</em></span>
+    </button>)}</div><div className="allocation-legend" role="list" aria-label="نسب شركات المحفظة">{nodes.map(node => <button role="listitem" key={node.symbol} onClick={() => onOpen(node)} aria-label={`فتح ${node.nameAr || node.name}، وزن ${weightPct(node.weight)}، تغير يومي ${pct(dailyMovePct(node))}`}><CompanyLogo symbol={node.symbol} size={36} eager/><span><b dir="ltr">{node.symbol}</b><small dir="auto">{node.nameAr || node.name}</small><small dir="ltr">{usd(node.marketValue)} · {pct(dailyMovePct(node))}</small></span><strong dir="ltr">{weightPct(node.weight)}</strong></button>)}</div></> : <div className="portfolio-chart-empty">لا يمكن رسم التوزيع حتى يتوفر سعر موثوق لمركز واحد على الأقل.</div>}
   </section>;
 }
 

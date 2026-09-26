@@ -138,19 +138,21 @@ test('portfolio allocation keeps every company logo and percentage in a readable
  assert.match(source,/left: `\$\{node\.x\}%`/);
  assert.match(source,/treemapSquarify\.ratio\(1\)/);
  assert.match(source,/loading=\{eager \? 'eager' : 'lazy'\}/);
- assert.match(css,/@container allocation-tile \(max-width:90px\)/);
+ assert.match(css,/data-density=micro/);
  assert.doesNotMatch(css,/\.portfolio-treemap \.treemap-node-logo\{display:none/);
- assert.match(css,/\.treemap-node-logo \.company-logo\{width:16px;height:16px/);
+ assert.match(css,/\.treemap-node-logo \.company-logo\{width:44px;height:44px/);
  assert.match(css,/@media\(max-width:600px\)\{\.allocation-legend\{grid-template-columns:1fr\}/);
- assert.match(css,/\.portfolio-visual-grid\{grid-template-columns:minmax\(0,1\.2fr\) minmax\(280px,\.8fr\);gap:16px\}/);
+ assert.match(css,/\.portfolio-visual-grid\{grid-template-columns:minmax\(0,1\.2fr\) minmax\(280px,\.8fr\);gap:16px;align-items:start\}/);
  assert.match(css,/\.portfolio-insights\{align-self:start;height:max-content\}/);
- assert.match(css,/\.portfolio-treemap\{position:relative;width:100%;height:auto;min-height:240px;max-height:390px;aspect-ratio:1\.55\/1/);
+ assert.match(css,/\.portfolio-treemap\{position:relative;width:100%;height:auto;min-height:240px;aspect-ratio:1\.65\/1/);
  assert.match(css,/\.sector-bars>div\{grid-template-columns:minmax\(160px,1\.4fr\) minmax\(220px,2\.2fr\) 72px;gap:10px\}/);
- assert.match(css,/\.portfolio-treemap \.treemap-node-logo \.company-logo\{width:44px;height:44px;margin:0;padding:2px;border:2px solid #fff;border-radius:12px;background:#f7f7f8;box-shadow:none\}/);
- assert.match(css,/@container allocation-tile \(min-width:180px\) and \(min-height:120px\)/);
- assert.match(css,/\.portfolio-treemap>\.treemap-node\{box-sizing:border-box;right:auto;bottom:auto/);
+ assert.match(css,/\.portfolio-treemap \.treemap-node-logo \.company-logo\{width:44px;height:44px;margin:0;padding:2px;border:2px solid #fff;border-radius:10px;background:#f8fafc/);
+ assert.match(css,/\.portfolio-treemap>\.treemap-node\{container-type:size;container-name:allocation-tile;box-sizing:border-box/);
+ assert.doesNotMatch(css,/\.portfolio-treemap[^}]*box-shadow/);
+ assert.doesNotMatch(css,/\.portfolio-treemap[^}]*text-shadow/);
+ assert.doesNotMatch(css,/\.portfolio-treemap[^}]*linear-gradient/);
  assert.match(css,/\.portfolio-treemap>\.treemap-node\[data-density=micro\] \.treemap-node-copy>span/);
- assert.match(css,/\.allocation-legend\{direction:ltr;grid-auto-flow:row\}/);
+ assert.match(css,/\.allocation-legend\{display:grid;grid-template-columns:repeat\(2,minmax\(0,1fr\)\);gap:8px;margin-top:12px;direction:ltr\}/);
 });
 
 test('portfolio company picker keeps results in a large readable dialog row',async()=>{
@@ -199,9 +201,9 @@ test('portfolio allocation colors tiles by the sourced daily move',async()=>{
  const {squarifiedTreemap}=await vite.ssrLoadModule('/app/portfolio-view.tsx');
  const base={quantity:1,averageCost:100,costBasis:100,currentPrice:100,marketValue:100,unrealizedPnl:0,unrealizedPct:0,realizedPnl:0,weight:null,quoteAsOf:null};
  const nodes=squarifiedTreemap([{...base,symbol:'GAIN',name:'Gain',dailyPnl:4},{...base,symbol:'LOSS',name:'Loss',dailyPnl:-4},{...base,symbol:'NONE',name:'None',dailyPnl:null}]);
- assert.match(nodes.find(node=>node.symbol==='GAIN').color,/hsl\(148/);
- assert.match(nodes.find(node=>node.symbol==='LOSS').color,/hsl\(4/);
- assert.equal(nodes.find(node=>node.symbol==='NONE').color,'#3f4744');
+ assert.match(nodes.find(node=>node.symbol==='GAIN').color,/hsl\(151/);
+ assert.match(nodes.find(node=>node.symbol==='LOSS').color,/hsl\(3/);
+ assert.equal(nodes.find(node=>node.symbol==='NONE').color,'#64748b');
 });
 
 test('portfolio exposes daily quote percentages and a force-refresh control',async()=>{
