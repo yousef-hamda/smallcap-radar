@@ -9,7 +9,7 @@ Last verified: 2026-09-26. Keep this file free of credentials and private recove
 - Persistent Railway web-service volume: `smallcap-radar-volume`, mounted at `/app/data`. The Vite Cloudflare plugin stores local D1/Miniflare state under `${RAILWAY_VOLUME_MOUNT_PATH}/state` (currently `/app/data/state`). The Railway Postgres service is separate and unused by the app.
 - Never mount the volume at `/app/.wrangler`: it hides the build's `.wrangler/deploy/config.json` and causes startup `ENOENT`/502. This was the deployment incident fixed on 2026-09-21.
 - `npm run build` uses the Linux verified Vinext build script; `npm start` runs Vite preview on Railway's `PORT`. `npm run typecheck`, `npm run lint`, `npm run test:engine`, `npm run test:runtime`, and `node --test tests/*.test.mjs` are the relevant checks.
-- Railway production currently has one active replica, no cron schedule, and the latest deployment is commit `a39d304` plus the current resource and heatmap optimization changes. The detailed cost plan is `docs/RESOURCE_COST_AND_PORTFOLIO_LAYOUT_PLAN_2026_09_26.md`.
+- Railway production currently has one active replica, no cron schedule, and the latest deployment is commit `9a7ecbb`, which includes the resource optimization and flat heatmap rewrite. The detailed cost plan is `docs/RESOURCE_COST_AND_PORTFOLIO_LAYOUT_PLAN_2026_09_26.md`.
 
 ## Safe checks
 
