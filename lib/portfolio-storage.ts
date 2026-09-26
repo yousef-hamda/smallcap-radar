@@ -3,6 +3,15 @@ import { companyBySymbol, yahooBulkQuotes, type Company } from './providers';
 import { evaluateStrategy, type Snapshot } from './engine';
 import { calculatePortfolio, type PortfolioQuote, type PortfolioTransaction } from './portfolio';
 
+type PortfolioResult={transactions:PortfolioTransaction[];quotes:Record<string,PortfolioQuote>;[key:string]:unknown};
+const portfolioCache=new Map<string,{expiresAt:number;value:PortfolioResult}>();
+const PORTFOLIO_CACHE_TTL=15_000;
+const PORTFOLIO_CACHE_LIMIT=64;
+export function invalidatePortfolioCache(owner?:string){
+  if(owner){portfolioCache.delete(owner);return;}
+  portfolioCache.clear();
+}
+
 const parseMetadata = (value: unknown) => {
   try { return value ? JSON.parse(String(value)) : {}; } catch { return {}; }
 };
@@ -136,6 +145,9 @@ export async function canonicalPortfolioAsset(symbol: string) {
 }
 
 export async function readPortfolio(owner: string, options: { forceRefresh?: boolean } = {}) {
+  const cached=portfolioCache.get(owner);
+  if(!options.forceRefresh&&cached&&cached.expiresAt>Date.now())return cached.value;
+  if(cached&&!options.forceRefresh)portfolioCache.delete(owner);
   const transactions = await readPortfolioTransactions(owner);
   const quotes = await readPortfolioQuotes(transactions.map(transaction => transaction.symbol), options);
   const calculated = calculatePortfolio(transactions, quotes);
@@ -144,5 +156,8 @@ export async function readPortfolio(owner: string, options: { forceRefresh?: boo
     delete compact.snapshot;
     return [symbol, compact];
   }));
-  return { transactions: [...transactions].reverse(), quotes: compactQuotes, ...calculated, asOf: new Date().toISOString() };
+  const value={ transactions: [...transactions].reverse(), quotes: compactQuotes, ...calculated, asOf: new Date().toISOString() };
+  if(portfolioCache.size>=PORTFOLIO_CACHE_LIMIT)portfolioCache.delete(portfolioCache.keys().next().value!);
+  portfolioCache.set(owner,{expiresAt:Date.now()+PORTFOLIO_CACHE_TTL,value});
+  return value;
 }

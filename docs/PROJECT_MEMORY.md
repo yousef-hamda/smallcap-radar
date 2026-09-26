@@ -1,6 +1,6 @@
 # Project memory — Small-Cap Radar
 
-Last verified: 2026-09-21. This is the repository-owned memory for future maintainers; historical research notes in `docs/` may describe older releases. The deep audit and changes from this date are in `docs/DEEP_IMPROVEMENT_PLAN_2026_09_21_AR.md` and the second-cycle plan in `docs/DEEP_IMPROVEMENT_PLAN_2026_09_21_V2_AR.md`.
+Last verified: 2026-09-26. This is the repository-owned memory for future maintainers; historical research notes in `docs/` may describe older releases. The deep audit and changes from this date are in `docs/DEEP_IMPROVEMENT_PLAN_2026_09_21_AR.md`, `docs/DEEP_IMPROVEMENT_PLAN_2026_09_21_V2_AR.md`, and `docs/RESOURCE_COST_AND_PORTFOLIO_LAYOUT_PLAN_2026_09_26.md`.
 
 ## Product and source of truth
 
@@ -14,6 +14,7 @@ Last verified: 2026-09-21. This is the repository-owned memory for future mainta
 - A 2026-09-21 recovery copied 2,908 old market snapshots and six additional company snapshots needed for the seven saved symbols. The seventh symbol was already in the market snapshot. The durable recovered run is `7857f783-7749-4000-8f90-b0f0af848331`, source `recovered backup`, with 2,914 records.
 - Deep company files now use cache key `deep:v7`, preserve original provider text, and add best effort Arabic fields for the company name, description, sector, industry, and news titles/sources. Translation failure leaves the original text visible and is recorded as a data limitation. Portfolio reads v7 first and retains v6/v5/v4 compatibility.
 - Portfolio allocation uses a squarified treemap with proportional area and a complete readable legend. Company logos load through `/api/portfolio-logo` so the browser does not depend on a client-side third party request; the resolver tries FMP, website Clearbit, Parqet, CompaniesMarketCap, the newer FMP endpoint, then a short-lived fallback. Provider redirects are followed only for fixed, validated image endpoints.
+- Portfolio heatmap coordinates are explicitly clamped to the frame, use fixed left/top geometry, and adapt label density to each rectangle. The complete legend remains ordered by market value and contains every logo, symbol, company name, and weight.
 - Live `GET /api/radar?status=1` returned `complete` and `processed: 2914` on 2026-09-21, including after redeployments. This verifies app-visible persistence, not an independent database backup.
 - The seven historical favorite symbols were APLD, CLBT, DEFT, SOFI, TMDX, XE, and ZTS. A one-time private claim link was given to the owner in chat. Whether the owner clicked it is not verified here. Do not store or publish the claim token.
 - The old site's portfolio transaction table had zero rows. No historical portfolio positions were available to recover.
@@ -24,6 +25,7 @@ Last verified: 2026-09-21. This is the repository-owned memory for future mainta
 - `DATABASE_URL` points at a Railway Postgres service but the app does not use it. Setting this variable alone never migrates D1 data. A Postgres move needs a deliberate schema/code/data migration, backup, row-count and owner-scope checks, and a reversible cutover.
 - Railway volume persistence is working, but automated volume backups and restore drills have **not** been verified. Configure and test them before relying on this for irreplaceable data.
 - Railway is a single volume-backed web instance; do not assume multi-replica availability. The scan and financial data pipelines remain subject to provider outages and stale data. See `docs/ACCEPTANCE.md` and `docs/SCORING_AUDIT_2026_09_20.md` for remaining quality gates.
+- Repeated radar scoring and portfolio reconstruction are now bounded by current-run evaluation reuse and short-lived invalidated caches. Automatic visible-screen refresh is ten minutes; manual quote refresh still bypasses portfolio cache.
 - A Railway project token was posted in chat. It should be rotated by the owner; never add it or any database URL, recovery token, or secret to Git.
 
 ## Second-cycle implementation notes — 2026-09-21

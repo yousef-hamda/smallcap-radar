@@ -143,14 +143,17 @@ export function squarifiedTreemap(positions: PortfolioPosition[]): TreemapNode[]
     .tile(treemapSquarify.ratio(1))(root);
   return layoutRoot.leaves().flatMap(node => {
     if (!('position' in node.data)) return [];
-    return [{ ...node.data.position, x: node.x0, y: node.y0, width: Math.max(0, node.x1 - node.x0), height: Math.max(0, node.y1 - node.y0), color: heatmapColor(node.data.position) }];
+    const x = Math.max(0, Math.min(100, node.x0)), y = Math.max(0, Math.min(100, node.y0));
+    const width = Math.max(0, Math.min(100 - x, node.x1 - node.x0)), height = Math.max(0, Math.min(100 - y, node.y1 - node.y0));
+    return [{ ...node.data.position, x, y, width, height, color: heatmapColor(node.data.position) }];
   });
 }
 
 export function AllocationTreemap({ positions, onOpen }: { positions: PortfolioPosition[]; onOpen: (position: PortfolioPosition) => void }) {
   const nodes = useMemo(() => squarifiedTreemap(positions), [positions]);
+  const density = (node: TreemapNode) => node.width >= 28 && node.height >= 22 ? 'large' : node.width >= 14 && node.height >= 10 ? 'medium' : node.width >= 6 && node.height >= 4 ? 'small' : 'micro';
   return <section className="portfolio-panel allocation-panel"><div className="section-line"><div><h3>توزيع المحفظة</h3><p>مساحة كل مستطيل تساوي وزن الشركة من القيمة الحالية.</p></div><span>{positions.length} مراكز</span></div>
-    {nodes.length ? <><div className="portfolio-treemap" role="group" aria-label="خريطة توزيع مراكز المحفظة">{nodes.map(node => <button className="treemap-node" key={node.symbol} style={{ insetInlineStart: `${node.x}%`, top: `${node.y}%`, width: `${node.width}%`, height: `${node.height}%`, '--node-color': node.color } as React.CSSProperties} onClick={() => onOpen(node)} aria-label={`${node.nameAr || node.name}، ${node.symbol}، وزن ${weightPct(node.weight)}`} title={`${node.symbol} · ${weightPct(node.weight)} · ${usd(node.marketValue)}`}>
+    {nodes.length ? <><div className="portfolio-treemap" role="group" aria-label="خريطة توزيع مراكز المحفظة">{nodes.map(node => <button className="treemap-node" data-density={density(node)} key={node.symbol} style={{ left: `${node.x}%`, top: `${node.y}%`, width: `${node.width}%`, height: `${node.height}%`, '--node-color': node.color } as React.CSSProperties} onClick={() => onOpen(node)} aria-label={`${node.nameAr || node.name}، ${node.symbol}، وزن ${weightPct(node.weight)}`} title={`${node.symbol} · ${node.nameAr || node.name} · ${weightPct(node.weight)} · ${usd(node.marketValue)}`}>
       <span className="treemap-node-logo"><CompanyLogo symbol={node.symbol} size={44} eager/></span><span className="treemap-node-copy"><b dir="ltr">{node.symbol}</b><span dir="ltr">{weightPct(node.weight)}</span><small>{usd(node.marketValue)}</small><em className="treemap-node-company" dir="auto">{node.nameAr || node.name}</em></span>
     </button>)}</div><div className="allocation-legend" role="list" aria-label="نسب شركات المحفظة">{nodes.map(node => <button role="listitem" key={node.symbol} onClick={() => onOpen(node)} aria-label={`فتح ${node.nameAr || node.name}، وزن ${weightPct(node.weight)}`}><CompanyLogo symbol={node.symbol} size={36} eager/><span><b dir="ltr">{node.symbol}</b><small dir="auto">{node.nameAr || node.name}</small></span><strong dir="ltr">{weightPct(node.weight)}</strong></button>)}</div></> : <div className="portfolio-chart-empty">لا يمكن رسم التوزيع حتى يتوفر سعر موثوق لمركز واحد على الأقل.</div>}
   </section>;
@@ -173,17 +176,23 @@ export default function PortfolioView({ onOpenCompany, onCountChange }: { onOpen
   }, []);
   const refresh = useCallback(async (forceRefresh = false) => {
     setLoading(true);
-    try { const value = await apiJson<PortfolioData>(forceRefresh ? '/api/portfolio?refresh=1' : '/api/portfolio'); setData(value); onCountChange?.(value.positions.length); setError(''); void loadHistory(); }
+    try { const value = await apiJson<PortfolioData>(forceRefresh ? '/api/portfolio?refresh=1' : '/api/portfolio'); setData(value); onCountChange?.(value.positions.length); setError(''); if (value.transactions.length) void loadHistory(); else setHistory({ points: [], unavailable: [], incompleteSymbols: [], sources: [], asOf: value.asOf }); }
     catch (error) { setError(error instanceof Error ? error.message : 'تعذّر تحميل المحفظة.'); }
     finally { setLoading(false); }
   }, [loadHistory, onCountChange]);
   useEffect(() => { queueMicrotask(() => void refresh()); return () => companyRequest.current?.abort(); }, [refresh]);
   useEffect(() => {
-    const refreshWhenVisible = () => { if (document.visibilityState === 'visible' && !busy) void refresh(); };
-    const timer = window.setInterval(refreshWhenVisible, 5 * 60_000);
-    window.addEventListener('focus', refreshWhenVisible);
-    document.addEventListener('visibilitychange', refreshWhenVisible);
-    return () => { window.clearInterval(timer); window.removeEventListener('focus', refreshWhenVisible); document.removeEventListener('visibilitychange', refreshWhenVisible); };
+    const hiddenAt = { value: null as number | null };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState !== 'visible' || busy) return;
+      if (hiddenAt.value != null && Date.now() - hiddenAt.value < 60_000) return;
+      hiddenAt.value = null;
+      void refresh();
+    };
+    const onVisibility = () => { if (document.visibilityState === 'hidden') hiddenAt.value = Date.now(); else refreshWhenVisible(); };
+    const timer = window.setInterval(refreshWhenVisible, 10 * 60_000);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', onVisibility); };
   }, [busy, refresh]);
   useEffect(() => {
     if (query.trim().length < 1) return;

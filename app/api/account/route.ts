@@ -2,6 +2,8 @@ import { db, ensureSchema } from '@/lib/storage';
 import { accountOwner, accountUsernamePattern, createSession, digest, hashPassword, mergeOwnerData, sessionCookie, verifyPassword } from '@/lib/account';
 import { body, json, sameOrigin, statusOf } from '@/lib/http';
 import { resolveVisitor } from '@/lib/visitor';
+import { invalidatePortfolioCache } from '@/lib/portfolio-storage';
+import { invalidateStateCache } from '@/lib/storage';
 
 const cookieExpired = (request: Request) => sessionCookie('', request, 0);
 
@@ -55,6 +57,9 @@ export async function POST(request: Request) {
 
     const owner = accountOwner(String(account.id));
     await mergeOwnerData(identity.owner, owner);
+    invalidatePortfolioCache(identity.owner);
+    invalidatePortfolioCache(owner);
+    invalidateStateCache();
     const session = await createSession(String(account.id), request);
     const response = json({ account: { username: String(account.username) } });
     const cookies = [session.cookie];

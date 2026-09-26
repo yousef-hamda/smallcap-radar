@@ -134,10 +134,12 @@ test('portfolio allocation keeps every company logo and percentage in a readable
  assert.doesNotMatch(source,/treemap-node-watermark/);
  assert.match(source,/className="treemap-node-copy"/);
  assert.match(source,/className="treemap-node-company"/);
+ assert.match(source,/data-density=\{density\(node\)\}/);
+ assert.match(source,/left: `\$\{node\.x\}%`/);
  assert.match(source,/treemapSquarify\.ratio\(1\)/);
  assert.match(source,/loading=\{eager \? 'eager' : 'lazy'\}/);
  assert.match(css,/@container allocation-tile \(max-width:90px\)/);
- assert.doesNotMatch(css,/\.treemap-node-logo\{display:none/);
+ assert.doesNotMatch(css,/\.portfolio-treemap \.treemap-node-logo\{display:none/);
  assert.match(css,/\.treemap-node-logo \.company-logo\{width:16px;height:16px/);
  assert.match(css,/@media\(max-width:600px\)\{\.allocation-legend\{grid-template-columns:1fr\}/);
  assert.match(css,/\.portfolio-visual-grid\{grid-template-columns:minmax\(0,1\.2fr\) minmax\(280px,\.8fr\);gap:16px\}/);
@@ -146,6 +148,9 @@ test('portfolio allocation keeps every company logo and percentage in a readable
  assert.match(css,/\.sector-bars>div\{grid-template-columns:minmax\(160px,1\.4fr\) minmax\(220px,2\.2fr\) 72px;gap:10px\}/);
  assert.match(css,/\.portfolio-treemap \.treemap-node-logo \.company-logo\{width:44px;height:44px;margin:0;padding:2px;border:2px solid #fff;border-radius:12px;background:#f7f7f8;box-shadow:none\}/);
  assert.match(css,/@container allocation-tile \(min-width:180px\) and \(min-height:120px\)/);
+ assert.match(css,/\.portfolio-treemap>\.treemap-node\{box-sizing:border-box;right:auto;bottom:auto/);
+ assert.match(css,/\.portfolio-treemap>\.treemap-node\[data-density=micro\] \.treemap-node-copy>span/);
+ assert.match(css,/\.allocation-legend\{direction:ltr;grid-auto-flow:row\}/);
 });
 
 test('portfolio company picker keeps results in a large readable dialog row',async()=>{
@@ -168,6 +173,7 @@ test('portfolio allocation uses proportional squarified geometry inside the fram
  ];
  const nodes=squarifiedTreemap(positions),area=node=>node.width*node.height;
  assert.equal(nodes.length,3);assert(nodes.every(node=>node.x>=0&&node.y>=0&&node.x+node.width<=100.0001&&node.y+node.height<=100.0001));
+ assert.deepEqual(nodes.map(node=>node.symbol),['AAA','BBB','CCC']);
  assert(area(nodes[0])>area(nodes[1]));assert(area(nodes[1])>area(nodes[2]));
  const visibleArea=nodes.reduce((sum,node)=>sum+area(node),0);
  assert(visibleArea<10000&&visibleArea>9000,'padding should leave only a small, bounded gutter around the treemap');
@@ -178,6 +184,15 @@ test('portfolio allocation uses proportional squarified geometry inside the fram
    assert(overlapWidth*overlapHeight<0.01,`treemap nodes overlap: ${nodes[left].symbol}/${nodes[right].symbol}`);
   }
  }
+});
+
+test('portfolio allocation keeps tiny holdings inside the frame and preserves descending order',async()=>{
+ const {squarifiedTreemap}=await vite.ssrLoadModule('/app/portfolio-view.tsx');
+ const base={quantity:1,averageCost:100,costBasis:100,currentPrice:100,unrealizedPnl:0,unrealizedPct:0,realizedPnl:0,dailyPnl:0,weight:null,quoteAsOf:null};
+ const nodes=squarifiedTreemap([{...base,symbol:'LARGE',name:'Large',marketValue:720},{...base,symbol:'MID',name:'Mid',marketValue:195},{...base,symbol:'SMALL',name:'Small',marketValue:68},{...base,symbol:'TINY',name:'Tiny',marketValue:16}]);
+ assert.deepEqual(nodes.map(node=>node.symbol),['LARGE','MID','SMALL','TINY']);
+ assert(nodes.every(node=>node.x>=0&&node.y>=0&&node.x+node.width<=100.0001&&node.y+node.height<=100.0001));
+ assert(nodes[0].width*nodes[0].height>nodes[1].width*nodes[1].height);
 });
 
 test('portfolio allocation colors tiles by the sourced daily move',async()=>{
@@ -201,6 +216,16 @@ test('portfolio exposes daily quote percentages and a force-refresh control',asy
 test('radar favorites send the displayed verified snapshot when saving',async()=>{
  const source=await readFile(path.join(root,'app/page.tsx'),'utf8');
  assert.match(source,/action:'favorite',symbol:s\.symbol,saved,\.\.\.\(saved\?\{snapshot:s\}:\{\}\)/);
+});
+
+test('screen refresh work is bounded while manual refresh remains available',async()=>{
+ const [radar,portfolio]=await Promise.all([readFile(path.join(root,'app/page.tsx'),'utf8'),readFile(path.join(root,'app/portfolio-view.tsx'),'utf8')]);
+ assert.match(radar,/if\(view==='portfolio'\)return/);
+ assert.match(radar,/10\*60_000/);
+ assert.match(radar,/aria-label="تحديث القائمة"/);
+ assert.doesNotMatch(radar,/window\.addEventListener\('focus'/);
+ assert.match(portfolio,/10 \* 60_000/);
+ assert.doesNotMatch(portfolio,/window\.addEventListener\('focus'/);
 });
 
 test('Arabic enrichment preserves sourced fields and translates company news',async()=>{

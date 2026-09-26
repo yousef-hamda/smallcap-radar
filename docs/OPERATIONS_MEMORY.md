@@ -1,6 +1,6 @@
 # Operations memory — Railway
 
-Last verified: 2026-09-21. Keep this file free of credentials and private recovery links.
+Last verified: 2026-09-26. Keep this file free of credentials and private recovery links.
 
 ## Live configuration
 
@@ -9,6 +9,7 @@ Last verified: 2026-09-21. Keep this file free of credentials and private recove
 - Persistent Railway web-service volume: `smallcap-radar-volume`, mounted at `/app/data`. The Vite Cloudflare plugin stores local D1/Miniflare state under `${RAILWAY_VOLUME_MOUNT_PATH}/state` (currently `/app/data/state`). The Railway Postgres service is separate and unused by the app.
 - Never mount the volume at `/app/.wrangler`: it hides the build's `.wrangler/deploy/config.json` and causes startup `ENOENT`/502. This was the deployment incident fixed on 2026-09-21.
 - `npm run build` uses the Linux verified Vinext build script; `npm start` runs Vite preview on Railway's `PORT`. `npm run typecheck`, `npm run lint`, `npm run test:engine`, `npm run test:runtime`, and `node --test tests/*.test.mjs` are the relevant checks.
+- Railway production currently has one active replica, no cron schedule, and the latest deployment is commit `a39d304` plus the current resource and heatmap optimization changes. The detailed cost plan is `docs/RESOURCE_COST_AND_PORTFOLIO_LAYOUT_PLAN_2026_09_26.md`.
 
 ## Safe checks
 
@@ -17,9 +18,9 @@ Last verified: 2026-09-21. Keep this file free of credentials and private recove
 3. Check `GET /api/radar?strategy=bounce&limit=1&offset=0` and the homepage return 200. The live route should still identify `recovered backup` as its data run until a newer validated scan replaces it.
 4. After any storage or runtime change, redeploy and repeat the count check. Do not delete/recreate the volume to fix a deployment.
 5. Configure automated Railway volume backups and perform a restore drill. Persistence across redeploy is not a backup.
-6. After the current GitHub push, production still returned the older company/logo behavior. Redeploy the latest `master` commit after restoring Railway CLI/project authentication, then repeat the company Arabic-field and PNG logo smoke checks.
+6. After every GitHub push, verify Railway adopts the latest `master` commit, then repeat the company Arabic-field and PNG logo smoke checks.
 7. After deploying the Core financing-risk fix, start a new full-market scan. The old zero-result snapshot may be re-evaluated from saved fundamentals, but only a new scan supplies current quotes and actual 20-session liquidity.
-8. The production smoke check on 2026-09-21 still returned Core spec `2.6.0-draft.1-category-alignment`; this proves the latest GitHub commits have not been adopted by Railway yet. Do not use run `a68789e7-f053-49d9-9033-95cecd4b2537` as validation of the new Core logic.
+8. Historical smoke checks that returned Core spec `2.6.0-draft.1-category-alignment` are obsolete deployment evidence. Do not use run `a68789e7-f053-49d9-9033-95cecd4b2537` as validation of the current Core logic.
 
 ## Recovery and security
 
@@ -37,4 +38,5 @@ If moving to Postgres, first take and verify a volume backup. Inventory all D1 t
 - Translation uses a bounded, in-memory 24-hour cache, in-flight dedupe, a three-request concurrency limit, and a four-second request timeout. It is enrichment only; no sourced financial value, date, or link is translated or altered.
 - Portfolio logo requests are same-origin and cacheable for one day with stale-while-revalidate for seven days. The resolver deduplicates concurrent symbol requests, tries FMP, Clearbit, Parqet, CompaniesMarketCap, and FMP's newer endpoint, and follows only validated provider redirects; initials fallback entries expire after ten minutes and `retry=1` bypasses the in-process cache.
 - The allocation layout is squarified and clamped to the 0–100 frame. If a browser does not support `color-mix`, the tile still keeps its proportional geometry and readable legend.
+- Radar reads reuse current stored evaluations and a five-second bounded response cache. Portfolio reconstruction is cached for fifteen seconds, logo bytes are bounded to 48 entries and 8 MB, and visible-screen polling is ten minutes with hidden-tab suppression. Manual portfolio quote refresh remains available.
 - The full second-cycle scope, test matrix, acceptance gates, and deferred operations work are in `docs/DEEP_IMPROVEMENT_PLAN_2026_09_21_V2_AR.md`.

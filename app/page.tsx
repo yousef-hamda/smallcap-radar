@@ -70,11 +70,18 @@ export default function RadarApp(){
  useEffect(()=>{if('serviceWorker'in navigator)void navigator.serviceWorker.register('/sw.js').catch(()=>{});return()=>selection.current?.abort()},[]);
  useEffect(()=>{void request<{account:AccountSession|null}>('/api/account').then(value=>setAccount(value.account)).catch(()=>undefined)},[]);
  useEffect(()=>{
-  const refreshWhenVisible=()=>{if(document.visibilityState==='visible'&&!loadingRequest.current)void refresh()};
-  const timer=window.setInterval(refreshWhenVisible,5*60_000);
-  window.addEventListener('focus',refreshWhenVisible);document.addEventListener('visibilitychange',refreshWhenVisible);
-  return()=>{window.clearInterval(timer);window.removeEventListener('focus',refreshWhenVisible);document.removeEventListener('visibilitychange',refreshWhenVisible)};
- },[refresh]);
+  if(view==='portfolio')return;
+  const hiddenAt={value:null as number|null};
+  const refreshWhenVisible=()=>{
+   if(document.visibilityState!=='visible'||loadingRequest.current)return;
+   if(hiddenAt.value!=null&&Date.now()-hiddenAt.value<60_000)return;
+   hiddenAt.value=null;void refresh();
+  };
+  const onVisibility=()=>{if(document.visibilityState==='hidden')hiddenAt.value=Date.now();else refreshWhenVisible()};
+  const timer=window.setInterval(refreshWhenVisible,10*60_000);
+  document.addEventListener('visibilitychange',onVisibility);
+  return()=>{window.clearInterval(timer);document.removeEventListener('visibilitychange',onVisibility)};
+ },[refresh,view]);
 
  async function scan(mode:'quick'|'full'='full'){
   setBusy(true);setError('');
@@ -157,7 +164,7 @@ export default function RadarApp(){
     <details><summary>كيف تُقرأ الدرجة والأهلية؟</summary><p>القائمة تعرض فقط الشركات التي اجتازت كل بوابات الفئة، ثم ترتبها بالدرجة من الأعلى إلى الأقل. FAIL أو UNKNOWN لا يمكن أن تنقذه درجة عالية؛ ويبقى في تقرير الجولة مع سبب استبعاده. البيانات الناقصة لا تصبح صفرًا أو PASS.</p><p>حالة النموذج الحالية <b>تشخيصية</b>. لا تُفعّل أوزان تنبؤية أو احتمالات قبل dataset تاريخي Point-in-Time يشمل الشركات المشطوبة واختبار نهائي مغلق.</p></details>
     </>}
    </section>
-   <div className="utility-row"><span>{loading?'جارٍ تحميل القائمة…':`${evaluated.length} نتيجة معروضة${search?` · ${search}`:''}`}</span><div><button onClick={exportData} aria-label="تصدير النتائج"><Download size={17}/></button><button onClick={()=>setSettings(true)} aria-label="الإشعارات ومركز البيانات"><Bell size={17}/><Database size={17}/></button></div></div>
+   <div className="utility-row"><span>{loading?'جارٍ تحميل القائمة…':`${evaluated.length} نتيجة معروضة${search?` · ${search}`:''}`}</span><div><button onClick={()=>void refresh()} disabled={loading} aria-label="تحديث القائمة"><RefreshCw size={17} className={loading?'spin':''}/></button><button onClick={exportData} aria-label="تصدير النتائج"><Download size={17}/></button><button onClick={()=>setSettings(true)} aria-label="الإشعارات ومركز البيانات"><Bell size={17}/><Database size={17}/></button></div></div>
    {data?.dataRunId&&data.run?.id!==data.dataRunId&&<p className="muted">نعرض آخر نتيجة محفوظة حتى ينتهي الفحص الجديد؛ لن تُستبدل بنتيجة لا تزال قيد المعالجة.</p>}
    {loading?<div className="list-loading" role="status"><RefreshCw className="spin"/> جارٍ تحميل البيانات المحفوظة…</div>:evaluated.length?<ul className="stock-list">{evaluated.map(({s,e},index)=><li className={`stock-card ${strategy} ${favorites.includes(s.symbol)?'saved':''}`} key={s.symbol}>
     <button className="card-open" aria-label={`فتح ملف ${s.symbol}`} onClick={()=>openCompany(s,e)}/>

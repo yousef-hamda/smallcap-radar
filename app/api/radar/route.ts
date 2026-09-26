@@ -1,4 +1,4 @@
-import {readState,db,createRun,insertSnapshot,ensureSchema,currentHash} from '@/lib/storage';
+import {readState,db,createRun,insertSnapshot,ensureSchema,currentHash,invalidateStateCache} from '@/lib/storage';
 import {sameOrigin,sameSecret,json,body,statusOf} from '@/lib/http';
 import {completeSnapshotSchema,importSchema} from '@/lib/validation';
 import {resolveVisitor} from '@/lib/visitor';
@@ -45,6 +45,7 @@ export async function POST(req:Request){
     delete snapshot.history;
     await db().prepare('INSERT INTO personal_watchlist(owner,symbol,created_at,payload) VALUES(?,?,?,?) ON CONFLICT(owner,symbol) DO UPDATE SET payload=excluded.payload').bind(identity.owner,b.symbol,new Date().toISOString(),JSON.stringify(snapshot)).run();
    }
+   invalidateStateCache();
    const response=json({favorites:(await db().prepare('SELECT symbol FROM personal_watchlist WHERE owner=? ORDER BY created_at DESC').bind(identity.owner).all()).results.map((row:any)=>row.symbol)});
    if(identity.cookie)response.headers.set('Set-Cookie',identity.cookie);
    return response;

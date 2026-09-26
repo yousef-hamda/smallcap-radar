@@ -8,6 +8,8 @@ const logoCache = new Map<string, { expiresAt: number; asset: LogoAsset }>();
 const logoInFlight = new Map<string, Promise<LogoAsset>>();
 const LOGO_TTL = 24 * 60 * 60_000;
 const FALLBACK_TTL = 10 * 60_000;
+const LOGO_CACHE_LIMIT = 48;
+const LOGO_CACHE_BYTES = 8_000_000;
 
 // First party favicons cover the companies most often used in the portfolio.
 // Ticker based providers remain the primary source for the rest of the stock universe.
@@ -98,6 +100,14 @@ async function resolveLogo(symbol: string, website: string | null, forceRefresh 
     // visible CMC asset, then the verified company favicon, before using FMP.
     const asset = marketCapLogo || companyLogo || parqetLogo || financialLogo || faviconLogo || await safeImage(`https://images.financialmodelingprep.com/symbol/${encodeURIComponent(symbol)}.png`) || fallback(symbol);
     logoCache.set(key, { expiresAt: Date.now() + (asset.fallback ? FALLBACK_TTL : LOGO_TTL), asset });
+    let bytes=[...logoCache.values()].reduce((total,row)=>total+row.asset.bytes.byteLength,0);
+    while(logoCache.size>LOGO_CACHE_LIMIT||bytes>LOGO_CACHE_BYTES){
+      const oldest=logoCache.keys().next().value;
+      if(!oldest)break;
+      const removed=logoCache.get(oldest);
+      logoCache.delete(oldest);
+      bytes-=removed?.asset.bytes.byteLength||0;
+    }
     return asset;
   })();
   logoInFlight.set(key, request);

@@ -3,6 +3,15 @@ import {evaluateStrategy,specHash,type Snapshot} from './engine';
 import {applyFinancingRisk} from './financing-risk';
 export const db=()=>{const d=(env as any).DB;if(!d)throw Error('قاعدة البيانات غير متاحة');return d;};
 let schemaPromise:Promise<void>|null=null;
+type StateCacheEntry={expiresAt:number;value:any};
+const stateCache=new Map<string,StateCacheEntry>();
+const STATE_CACHE_TTL=5_000;
+const STATE_CACHE_LIMIT=64;
+export function invalidateStateCache(){stateCache.clear();}
+function rememberState(key:string,value:any){
+ if(stateCache.size>=STATE_CACHE_LIMIT)stateCache.delete(stateCache.keys().next().value!);
+ stateCache.set(key,{expiresAt:Date.now()+STATE_CACHE_TTL,value});
+}
 export async function ensureSchema(){
  if(schemaPromise)return schemaPromise;
  schemaPromise=(async()=>{const d=db();await d.batch([
@@ -47,7 +56,7 @@ export async function ensureSchema(){
  return schemaPromise;
 }
 export const currentHash=()=>`${specHash('core')}:${specHash('bounce')}`;
-export async function readState(options:{strategy?:'core'|'bounce'|'favorites';limit?:number;offset?:number;owner?:string;query?:string}={}){await ensureSchema();const d=db();const active=await d.prepare("SELECT * FROM strategy_runs WHERE strategy_hash=? ORDER BY created_at DESC LIMIT 1").bind(currentHash()).first();
+export async function readState(options:{strategy?:'core'|'bounce'|'favorites';limit?:number;offset?:number;owner?:string;query?:string}={}){await ensureSchema();const d=db();const cacheKey=JSON.stringify([currentHash(),options.strategy||'bounce',options.owner||'',options.query||'',options.limit??150,options.offset??0]);const cached=stateCache.get(cacheKey);if(cached&&cached.expiresAt>Date.now())return cached.value;if(cached)stateCache.delete(cacheKey);const active=await d.prepare("SELECT * FROM strategy_runs WHERE strategy_hash=? ORDER BY created_at DESC LIMIT 1").bind(currentHash()).first();
  // A quick sample may be newer than a full scan. It must not silently replace
  // the user's main result set; prefer the newest full-market snapshot whenever
  // one has produced rows, then fall back to the newest available run.
@@ -71,9 +80,16 @@ export async function readState(options:{strategy?:'core'|'bounce'|'favorites';l
  // Re-evaluate every row with the current engine before ranking. Durable rows
  // can predate a scoring-version change; sorting the persisted evaluation would
  // otherwise leave old null scores and stale weights in front of the user.
- const query=latest&&strategy!=='favorites'?`SELECT payload FROM fundamental_snapshots WHERE run_id=? AND (?='' OR instr(lower(symbol),?)>0 OR instr(lower(json_extract(payload,'$.name')),?)>0)`:null;
+ const query=latest&&strategy!=='favorites'?`SELECT payload,evaluation FROM fundamental_snapshots WHERE run_id=? AND (?='' OR instr(lower(symbol),?)>0 OR instr(lower(json_extract(payload,'$.name')),?)>0)`:null;
  const params=latest?[latest.id,search,search,search]:[];
- let rows:any[]=query?(await d.prepare(query).bind(...params).all()).results.map((r:any)=>{const s=applyFinancingRisk(JSON.parse(r.payload));return {payload:JSON.stringify(s),evaluation:JSON.stringify({core:evaluateStrategy('core',s),bounce:evaluateStrategy('bounce',s)})}}):[];
+ let rows:any[]=query?(await d.prepare(query).bind(...params).all()).results.map((r:any)=>{
+  // A current run already stores the evaluation produced by this exact
+  // strategy hash. Reusing it avoids parsing and scoring every company on
+  // every page refresh; stale runs still take the conservative re-evaluation
+  // path below.
+  if(currentData&&typeof r.evaluation==='string')return {payload:r.payload,evaluation:r.evaluation};
+  const s=applyFinancingRisk(JSON.parse(r.payload));return {payload:JSON.stringify(s),evaluation:JSON.stringify({core:evaluateStrategy('core',s),bounce:evaluateStrategy('bounce',s)})}
+ }):[];
  // A strategy-version change must not make the product look empty. Re-evaluate
  // the last completed snapshot with the current engine and label it stale until
  // a new scan replaces it. The prior data timestamp and run remain visible.
@@ -112,8 +128,9 @@ export async function readState(options:{strategy?:'core'|'bounce'|'favorites';l
  if(strategy!=='favorites')rows=rows.slice(offset,offset+limit+1);
  const compact=(payload:string)=>{const parsed=JSON.parse(payload);delete parsed.history;return parsed};
  const pageRows=rows.slice(0,limit);
- return {run:active?{...active,universe:undefined,retry_queue:undefined,retryPending:JSON.parse(active.retry_queue||'[]').length,stale:!currentData}:null,dataRunId:latest?.id,dataRun:latest?{...latest,universe:undefined,retry_queue:undefined,stale:!currentData}:null,snapshots:pageRows.map((r:any)=>compact(r.payload)),storedEvaluations:pageRows.map((r:any)=>JSON.parse(r.evaluation)),favorites:fav.map((r:any)=>r.symbol),portfolioCount,coverage,summary:{total:Number(summaryRow?.total||0),coreQualified:Number(summaryRow?.coreQualified||0),bounceQualified:Number(summaryRow?.bounceQualified||0),coreRanked:Number(summaryRow?.coreRanked||0),bounceRanked:Number(summaryRow?.bounceRanked||0),coreUnknown:Number(summaryRow?.coreUnknown||0),bounceUnknown:Number(summaryRow?.bounceUnknown||0),coreFailed:Number(summaryRow?.coreFailed||0),bounceFailed:Number(summaryRow?.bounceFailed||0),stale:!currentData},page:{strategy,limit,offset,hasMore:rows.length>limit}};}
+ const value={run:active?{...active,universe:undefined,retry_queue:undefined,retryPending:JSON.parse(active.retry_queue||'[]').length,stale:!currentData}:null,dataRunId:latest?.id,dataRun:latest?{...latest,universe:undefined,retry_queue:undefined,stale:!currentData}:null,snapshots:pageRows.map((r:any)=>compact(r.payload)),storedEvaluations:pageRows.map((r:any)=>JSON.parse(r.evaluation)),favorites:fav.map((r:any)=>r.symbol),portfolioCount,coverage,summary:{total:Number(summaryRow?.total||0),coreQualified:Number(summaryRow?.coreQualified||0),bounceQualified:Number(summaryRow?.bounceQualified||0),coreRanked:Number(summaryRow?.coreRanked||0),bounceRanked:Number(summaryRow?.bounceRanked||0),coreUnknown:Number(summaryRow?.coreUnknown||0),bounceUnknown:Number(summaryRow?.bounceUnknown||0),coreFailed:Number(summaryRow?.coreFailed||0),bounceFailed:Number(summaryRow?.bounceFailed||0),stale:!currentData},page:{strategy,limit,offset,hasMore:rows.length>limit}};
+ rememberState(cacheKey,value);return value;}
 export async function readAudit(){await ensureSchema();const d=db();const latest=await d.prepare("SELECT * FROM strategy_runs WHERE status IN ('complete','partial') ORDER BY created_at DESC LIMIT 1").first() as any;const logs=latest?(await d.prepare('SELECT stage,created_at,message FROM diag WHERE run_id=? ORDER BY created_at DESC LIMIT 500').bind(latest.id).all()).results:[];const state=await readState({strategy:'bounce',limit:1});return {strategyHash:currentHash(),run:state.run,dataRun:state.dataRun,summary:state.summary,favorites:state.favorites,logs};}
-export function insertSnapshot(runId:string,s:Snapshot){const reviewed=applyFinancingRisk(s);return db().prepare('INSERT OR REPLACE INTO fundamental_snapshots(id,run_id,symbol,as_of,payload,evaluation) VALUES (?,?,?,?,?,?)').bind(`${runId}:${s.symbol}`,runId,s.symbol,reviewed.asOf,JSON.stringify(reviewed),JSON.stringify({core:evaluateStrategy('core',reviewed),bounce:evaluateStrategy('bounce',reviewed)}));}
-export async function createRun(source:string,total=0,universe:any[]=[],status='running'){await ensureSchema();const id=crypto.randomUUID(),now=new Date().toISOString();await db().prepare('INSERT INTO strategy_runs (id,created_at,updated_at,status,source,total,universe,strategy_hash) VALUES(?,?,?,?,?,?,?,?)').bind(id,now,now,status,source,total,JSON.stringify(universe),currentHash()).run();return id;}
+export function insertSnapshot(runId:string,s:Snapshot){invalidateStateCache();const reviewed=applyFinancingRisk(s);return db().prepare('INSERT OR REPLACE INTO fundamental_snapshots(id,run_id,symbol,as_of,payload,evaluation) VALUES (?,?,?,?,?,?)').bind(`${runId}:${s.symbol}`,runId,s.symbol,reviewed.asOf,JSON.stringify(reviewed),JSON.stringify({core:evaluateStrategy('core',reviewed),bounce:evaluateStrategy('bounce',reviewed)}));}
+export async function createRun(source:string,total=0,universe:any[]=[],status='running'){await ensureSchema();invalidateStateCache();const id=crypto.randomUUID(),now=new Date().toISOString();await db().prepare('INSERT INTO strategy_runs (id,created_at,updated_at,status,source,total,universe,strategy_hash) VALUES(?,?,?,?,?,?,?,?)').bind(id,now,now,status,source,total,JSON.stringify(universe),currentHash()).run();return id;}
 export async function log(runId:string,stage:string,message:string){await db().prepare('INSERT INTO diag(id,run_id,stage,created_at,message) VALUES(?,?,?,?,?)').bind(crypto.randomUUID(),runId,stage,new Date().toISOString(),message).run()}

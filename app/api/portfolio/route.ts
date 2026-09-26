@@ -3,7 +3,7 @@ import { db, ensureSchema } from '@/lib/storage';
 import { body as readBody, json, sameOrigin, statusOf } from '@/lib/http';
 import { resolveVisitor, type VisitorIdentity } from '@/lib/visitor';
 import { searchCompanies } from '@/lib/providers';
-import { canonicalPortfolioAsset, readPortfolio, readPortfolioTransactions } from '@/lib/portfolio-storage';
+import { canonicalPortfolioAsset, invalidatePortfolioCache, readPortfolio, readPortfolioTransactions } from '@/lib/portfolio-storage';
 import { validateLedger, type PortfolioSide, type PortfolioTransaction } from '@/lib/portfolio';
 
 const inputSchema = z.object({
@@ -78,6 +78,7 @@ export async function POST(request: Request) {
     const saved=await commitAtRevision(identity.owner,revision,db().prepare('INSERT INTO portfolio_transactions(id,owner,symbol,company_name,side,quantity,price,fees,trade_date,note,metadata,created_at,updated_at) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM portfolio_revisions WHERE owner=? AND revision=?)')
       .bind(id, identity.owner, asset.symbol, asset.name, parsed.data.side, parsed.data.quantity, parsed.data.price, parsed.data.fees, parsed.data.tradeDate, parsed.data.note, JSON.stringify(asset.metadata), now, now,identity.owner,revision));
     if(!saved)return json({error:'تغيّرت المحفظة أثناء الحفظ؛ أعد المحاولة.'},409);
+    invalidatePortfolioCache(identity.owner);
     return await respond(request, identity);
   } catch (error: any) { return json({ error: error.message || 'تعذّر حفظ العملية.' }, statusOf(error,503)); }
 }
@@ -101,6 +102,7 @@ export async function PUT(request: Request) {
     const saved=await commitAtRevision(identity.owner,revision,db().prepare('UPDATE portfolio_transactions SET symbol=?,company_name=?,side=?,quantity=?,price=?,fees=?,trade_date=?,note=?,metadata=?,updated_at=? WHERE id=? AND owner=? AND EXISTS(SELECT 1 FROM portfolio_revisions WHERE owner=? AND revision=?)')
       .bind(asset.symbol, asset.name, parsed.data.side, parsed.data.quantity, parsed.data.price, parsed.data.fees, parsed.data.tradeDate, parsed.data.note, JSON.stringify(asset.metadata), now, parsed.data.id, identity.owner,identity.owner,revision));
     if(!saved)return json({error:'تغيّرت المحفظة أثناء التعديل؛ أعد المحاولة.'},409);
+    invalidatePortfolioCache(identity.owner);
     return await respond(request, identity);
   } catch (error: any) { return json({ error: error.message || 'تعذّر تعديل العملية.' }, statusOf(error,503)); }
 }
@@ -118,6 +120,7 @@ export async function DELETE(request: Request) {
     catch { return json({ error: 'لا يمكن حذف هذه العملية لأنها ستجعل عملية بيع لاحقة بلا رصيد كافٍ.' }, 409); }
     const saved=await commitAtRevision(identity.owner,revision,db().prepare('DELETE FROM portfolio_transactions WHERE id=? AND owner=? AND EXISTS(SELECT 1 FROM portfolio_revisions WHERE owner=? AND revision=?)').bind(id, identity.owner,identity.owner,revision));
     if(!saved)return json({error:'تغيّرت المحفظة أثناء الحذف؛ حدّث الصفحة وأعد المحاولة.'},409);
+    invalidatePortfolioCache(identity.owner);
     return await respond(request, identity);
   } catch (error: any) { return json({ error: error.message || 'تعذّر حذف العملية.' }, statusOf(error,503)); }
 }
