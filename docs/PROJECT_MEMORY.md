@@ -41,3 +41,9 @@ Last verified: 2026-09-26. This is the repository-owned memory for future mainta
 - Core zero-result investigation is documented in `docs/CORE_ZERO_RESULT_INVESTIGATION_2026_09_21_AR.md`. The full scan previously left every bulk row at `deathSpiral=unknown`; the new financing-risk review derives a transparent risk level from dated SEC cash, debt, profitability, FCF, and reviewed dilution evidence. Financial freshness now separates filing availability from reporting-period age. A fresh full scan is still required to measure real market counts with actual 20-session liquidity.
 
 See `docs/OPERATIONS_MEMORY.md` for deployment/storage details and `HANDOFF.md` for the immediate continuation checklist.
+
+## 2026-09-29 free profile coverage work
+
+- The deep profile now has independent Yahoo query1/query2 chart recovery and a no-key Cboe delayed-history fallback, followed by Nasdaq history and the bundled dated cache.
+- Standard SEC cost-of-revenue tags now derive gross margin; standard remaining-performance-obligation and contract-liability tags now populate contracted backlog when disclosed. SEC filing metadata fills the news/event list when Yahoo RSS is empty.
+- The complete source matrix, limitations, and acceptance gates are in `docs/FREE_DATA_COVERAGE_AND_PROVIDER_PLAN_2026_09_29.md`.

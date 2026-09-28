@@ -13,11 +13,15 @@ import { applyFinancingRisk } from './financing-risk';
 export type Company = { cik: number; name: string; ticker: string; exchange: string; price?: number; dailyChange?: number; marketCap?: number; volume?: number; averageVolume10d?: number; return52w?: number; low52w?: number; high52w?: number; ma50d?: number; ma200d?: number; sector?: string; industry?: string; quoteSource?: string; quoteAvailableAt?: string; priceSource?:string; priceAvailableAt?:string; marketCapSource?:string; marketCapAvailableAt?:string };
 type NasdaqRow = { symbol: string; name?: string; lastsale?: string; marketCap?: string; volume?: string; sector?: string; industry?: string };
 type CachedQuick = { history: NonNullable<Snapshot['history']>; financials: Record<string, number>; provenance: Record<string, Provenance>; issues: string[] };
+type MarketBar = NonNullable<Snapshot['history']>[number];
+type HistoricalResult = { url:string; history:MarketBar[]; splits:{date:string;factor:number}[]|null; source:string; retrievedAt:string; availableAt:string; meta?:any };
 
 const NASDAQ_SCREENER = 'https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=10000&download=true';
 const NASDAQ_LISTED='https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt';
 const OTHER_LISTED='https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt';
 const SEC_TICKERS='https://www.sec.gov/files/company_tickers.json';
+const CBOE_BASE='https://cdn.cboe.com/api/global/delayed_quotes';
+const YAHOO_HOSTS=['query1.finance.yahoo.com','query2.finance.yahoo.com'] as const;
 export const quickSymbols = Object.keys(quickCache.symbols);
 const browserAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124 Safari/537.36';
 // SEC asks clients to identify themselves with a descriptive product name and
@@ -192,6 +196,16 @@ async function loadYahooAuth() {
 /** Yahoo represents US share-class dots with dashes (for example BRK.B). */
 export const yahooSymbol = (symbol: string) => symbol.trim().toUpperCase().replaceAll('.', '-');
 
+async function yahooChartPayload(symbol:string,query:string,timeoutMs=3_000){
+ let last:unknown;
+ for(const host of YAHOO_HOSTS){
+  const url=`https://${host}/v8/finance/chart/${encodeURIComponent(yahooSymbol(symbol))}?${query}`;
+  try{return {payload:await fetchJson(url,timeoutMs,86_400_000,1),url};}
+  catch(error){last=error;recordProviderIssue(`${symbol}: Yahoo chart ${host} failed: ${error instanceof Error?error.message:'provider request failed'}`);}
+ }
+ throw last instanceof Error?last:Error(`${symbol}: Yahoo chart unavailable`);
+}
+
 async function yahooCompanyProfile(symbol: string) {
   try {
     const auth = await yahooAuth();
@@ -294,6 +308,21 @@ function isoDate(date: string) { const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exe
 function dateOffset(iso: string, days: number) { const date = new Date(iso); date.setUTCDate(date.getUTCDate() + days); return date.toISOString().slice(0, 10) }
 function commonSecurity(name: string) { return !NON_TRADABLE_NAME.test(name) }
 
+type RecentSecSubmission={form:string;accession:string;document:string;filed:string;reportDate?:string};
+function recentSubmissions(payload:any):RecentSecSubmission[]{
+ const recent=payload?.filings?.recent;
+ if(!recent?.form||!recent.accessionNumber||!recent.primaryDocument)return [];
+ return recent.form.map((form:string,index:number):RecentSecSubmission=>({form,accession:recent.accessionNumber[index],document:recent.primaryDocument[index],filed:recent.filingDate?.[index]??'',reportDate:recent.reportDate?.[index]})).filter((row:RecentSecSubmission)=>row.accession&&row.document&&row.filed);
+}
+
+/** Convert the official SEC submissions index into dated filing items when a
+ * third-party news feed is empty. Filing metadata is not presented as news
+ * sentiment; it is a sourced company event that keeps the profile useful. */
+export function parseSecFilingNews(payload:any,cik:number,asOf:string){
+ const base=`https://www.sec.gov/Archives/edgar/data/${cik}`;
+ return recentSubmissions(payload).filter(row=>['8-K','10-K','10-K/A','10-Q','10-Q/A','6-K','20-F','20-F/A','40-F','40-F/A'].includes(row.form)&&Date.parse(row.filed+'T23:59:59Z')<=Date.parse(asOf)).slice(0,12).map(row=>({title:`SEC filing: ${row.form} filed ${row.filed}`,link:`${base}/${row.accession.replaceAll('-','')}/${row.document}`,publishedAt:`${row.filed}T23:59:59Z`,source:'SEC EDGAR filings'}));
+}
+
 export function parseYahooDaily(payload:any,asOf=new Date().toISOString()){
  const result=payload?.chart?.result?.[0];
  const timestamps=Array.isArray(result?.timestamp)?result.timestamp:[];
@@ -331,18 +360,30 @@ export function parseYahooDaily(payload:any,asOf=new Date().toISOString()){
  return {history,splits:validEvents?splits.sort((a,b)=>a.date.localeCompare(b.date)):null};
 }
 
-export async function historicalMarketData(symbol: string, asOf = new Date().toISOString(), days = 1900) {
+export function parseCboeDaily(payload:any,from:string,to:string):MarketBar[]{
+ const rows:Array<{date:string;close:number|null;open?:number;high?:number;low?:number;volume?:number}>=(Array.isArray(payload?.data)?payload.data:[]).map((row:any)=>({date:String(row.date??''),close:numeric(row.close),open:numeric(row.open)??undefined,high:numeric(row.high)??undefined,low:numeric(row.low)??undefined,volume:numeric(row.volume)??undefined}));
+ return rows.filter((row):row is {date:string;close:number;open?:number;high?:number;low?:number;volume?:number}=>/^\d{4}-\d{2}-\d{2}$/.test(row.date)&&row.date>=from&&row.date<=to&&row.close!=null&&row.close>0).sort((a,b)=>a.date.localeCompare(b.date));
+}
+
+export async function historicalMarketData(symbol: string, asOf = new Date().toISOString(), days = 1900):Promise<HistoricalResult> {
   const cached = (quickCache.symbols as Record<string, CachedQuick>)[symbol];
   const to = asOf.slice(0, 10), from = dateOffset(asOf, -days);
   const period1=Math.floor(Date.parse(`${from}T00:00:00Z`)/1000),period2=Math.floor(Date.parse(`${to}T00:00:00Z`)/1000)+86400;
-  const yahooUrl=`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol(symbol))}?period1=${period1}&period2=${period2}&interval=1d&events=div%2Csplits&includeAdjustedClose=true`;
+  const yahooQuery=`period1=${period1}&period2=${period2}&interval=1d&events=div%2Csplits&includeAdjustedClose=true`;
   try{
-   const parsed=parseYahooDaily(await fetchJson(yahooUrl,3000,86_400_000,1),asOf);
+   const result=await yahooChartPayload(symbol,yahooQuery),parsed=parseYahooDaily(result.payload,asOf);
    if(parsed.history.length){
     const retrievedAt=new Date().toISOString(),lastDate=parsed.history.at(-1)!.date;
-    return {url:yahooUrl,...parsed,source:'Yahoo Finance chart API · split-adjusted daily history and split events',retrievedAt,availableAt:`${lastDate}T21:00:00.000Z`};
+    return {url:result.url,...parsed,meta:result.payload?.chart?.result?.[0]?.meta,source:'Yahoo Finance chart API · split-adjusted daily history and split events',retrievedAt,availableAt:`${lastDate}T21:00:00.000Z`};
    }
   }catch(error){recordProviderIssue(`${symbol}: Yahoo daily history unavailable: ${error instanceof Error?error.message:String(error)}; trying Nasdaq`);}
+  const cboeUrl=`${CBOE_BASE}/charts/historical/${encodeURIComponent(symbol.toUpperCase())}.json`;
+  try {
+   const payload=await fetchJson(cboeUrl,5_000,86_400_000,2) as {data?:Array<Record<string,unknown>>};
+   const history=parseCboeDaily(payload,from,to);
+   if(history.length){const retrievedAt=new Date().toISOString();return {url:cboeUrl,history,splits:null,source:'Cboe delayed historical API · independent no-key fallback',retrievedAt,availableAt:`${history.at(-1)!.date}T21:00:00.000Z`};}
+   throw Error('Cboe returned no usable sessions');
+  } catch(error) { recordProviderIssue(`${symbol}: Cboe historical unavailable: ${error instanceof Error?error.message:'provider request failed'}; trying Nasdaq`); }
   const url = `https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/historical?assetclass=stocks&fromdate=${from}&todate=${to}&limit=5000`;
   let payload: { data?: { tradesTable?: { rows?: Array<Record<string, string>> } } };
   try { payload = await fetchJson(url,3000,300_000,1) as typeof payload; }
@@ -354,15 +395,14 @@ export async function historicalMarketData(symbol: string, asOf = new Date().toI
   const history = (payload.data?.tradesTable?.rows ?? []).map((row) => ({ date: isoDate(row.date), close: numeric(row.close), open: numeric(row.open), high: numeric(row.high), low: numeric(row.low), volume: numeric(row.volume) }))
     .filter((row) => row.date && row.date<=to && row.date>=from && row.close != null && row.close > 0 && row.low != null && row.low > 0).sort((a, b) => a.date.localeCompare(b.date));
   if(!history.length)throw Error(`${symbol}: no historical sessions returned`);
-  return { url, history, splits:null,source:'Nasdaq historical API · corporate actions unavailable',retrievedAt:new Date().toISOString(),availableAt:`${history.at(-1)!.date}T21:00:00.000Z` };
+  return { url, history:history as MarketBar[], splits:null,source:'Nasdaq historical API · corporate actions unavailable',retrievedAt:new Date().toISOString(),availableAt:`${history.at(-1)!.date}T21:00:00.000Z` };
 }
 
 export async function intradayMarketData(symbol:string,asOf=new Date().toISOString()):Promise<ChartPayload>{
- const url=`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol(symbol))}?range=1d&interval=5m&includePrePost=false&events=div%2Csplits`;
- const payload=await fetchJson(url,6000,60_000);
- const result=parseYahooIntraday(payload,asOf);
- if(result.points.length<2)throw Error(`${symbol}: لا تتوفر نقطتان لحظيتان موثقتان لهذه الجلسة`);
- return result;
+ const response=await yahooChartPayload(symbol,'range=1d&interval=5m&includePrePost=false&events=div%2Csplits',6000);
+ const parsed=parseYahooIntraday(response.payload,asOf);
+ if(parsed.points.length<2)throw Error(`${symbol}: لا تتوفر نقطتان لحظيتان موثقتان لهذه الجلسة`);
+ return parsed;
 }
 
 async function fetchInsiderPurchases(cik: number) {
@@ -408,10 +448,12 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
   const profilePromise=yahooCompanyProfile(symbol);
   const summaryPromise = fetchJson(`https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/summary?assetclass=stocks`, 8_000).catch(error => {issues.push(`Nasdaq summary: ${error.message}`);return null;}) as Promise<any>;
   const newsPromise = fetch(`https://feeds.finance.yahoo.com/rss/2.0/headline?s=${encodeURIComponent(yahooSymbol(symbol))}&region=US&lang=en-US`, { headers: { 'User-Agent': browserAgent, Accept: 'application/rss+xml,text/xml' }, signal: AbortSignal.timeout(8_000) }).then(r => {if(!r.ok)throw Error(`HTTP ${r.status}`);return r.text();}).catch(error => {issues.push(`Yahoo news: ${error.message}`);return '';});
+  const googleNewsPromise = fetch(`https://news.google.com/rss/search?q=${encodeURIComponent(`\"${symbol}\" stock`)}&hl=en-US&gl=US&ceid=US:en`, { headers: { 'User-Agent': browserAgent, Accept: 'application/rss+xml,text/xml' }, signal: AbortSignal.timeout(8_000) }).then(r => {if(!r.ok)throw Error(`HTTP ${r.status}`);return r.text();}).catch(error => {issues.push(`Google News RSS: ${error.message}`);return '';});
+  const filingsPromise = fetchJson(submissionsUrlFor(company.cik),8_000).catch(error => {issues.push(`SEC submissions: ${error instanceof Error?error.message:'provider request failed'}`);return null;});
   const insiderPromise = fetchInsiderPurchases(company.cik);
-  let history: NonNullable<Snapshot['history']> = [], historyUrl = NASDAQ_SCREENER,historySource='Nasdaq screener · bundled dated fallback',historyRetrievedAt=bundledUniverse.generatedAt;
+  let history: NonNullable<Snapshot['history']> = [], historyUrl = NASDAQ_SCREENER,historySource='Nasdaq screener · bundled dated fallback',historyRetrievedAt=bundledUniverse.generatedAt,chartMeta:any=null;
   try {
-    const result = await historicalMarketData(symbol, now); historyUrl = result.url;historySource=result.source;historyRetrievedAt=result.retrievedAt;
+    const result = await historicalMarketData(symbol, now); historyUrl = result.url;historySource=result.source;historyRetrievedAt=result.retrievedAt;chartMeta=(result as any).meta??null;
     history = result.history.map((row) => ({ date: row.date, close: row.close!, open: row.open ?? undefined, high: row.high ?? undefined, low: row.low ?? undefined, volume: row.volume ?? undefined }));
   } catch (error) { issues.push(`تعذّر تحميل تاريخ Nasdaq: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`) }
 
@@ -420,11 +462,21 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
   const price = last?.close ?? company.price ?? null;
   const snapshot: Snapshot = { symbol, name: company.name, cik: company.cik, description: 'الوصف غير متاح من مصدر موثق لهذه اللقطة.', asOf: now, exchange: company.exchange, sector: company.sector, industry: company.industry, securityType: commonSecurity(company.name) ? 'common' : 'unknown', price, marketCap: company.marketCap ?? null, confidence: 'C', deathSpiral: 'unknown', provenance: {}, history, dataIssues: issues, research: { financials: false, valuation: false, analysts: false, sector: !!company.sector } };
 
+  // Yahoo chart metadata is available without a crumb and supplies a useful
+  // identity/quote fallback even when quoteSummary is blocked.
+  if (chartMeta?.longName && !snapshot.name) snapshot.name=String(chartMeta.longName);
+  if (!snapshot.exchange && chartMeta?.exchangeName) snapshot.exchange=String(chartMeta.exchangeName);
+  const chartPrice=numeric(chartMeta?.regularMarketPrice);
+  if (snapshot.price==null && chartPrice!=null && chartPrice>0) {
+    snapshot.price=chartPrice;
+    snapshot.provenance.price={source:'Yahoo Finance chart metadata',url:historyUrl,periodEnd:quoteDate,availableAt:quoteAvailableAt,retrievedAt:historyRetrievedAt,currency:'USD',confidence:'medium'};
+  }
+
   if (price != null) snapshot.provenance.price = quoteEvidence;
   if(history.length>1&&history.at(-2)!.close>0){snapshot.dailyChange=history.at(-1)!.close/history.at(-2)!.close-1;snapshot.provenance.dailyChange={...quoteEvidence,tag:'last close / previous close - 1'};}
   if(history.length)snapshot.provenance.history=quoteEvidence;
   if (snapshot.marketCap != null) {const availableAt=company.marketCapAvailableAt||company.quoteAvailableAt||bundledUniverse.generatedAt,source=company.marketCapSource||company.quoteSource||'Nasdaq stock screener';snapshot.provenance.marketCap = { source, url: NASDAQ_SCREENER, periodEnd: availableAt.slice(0, 10), availableAt, retrievedAt: now, currency: 'USD', confidence: source.includes('bundled') ? 'low' : 'medium' };}
-  const [summaryResult, newsResult, insiderPurchases] = await Promise.all([summaryPromise, newsPromise, insiderPromise]);
+  const [summaryResult, newsResult, googleNewsResult, insiderPurchases, filingsResult] = await Promise.all([summaryPromise, newsPromise, googleNewsPromise, insiderPromise, filingsPromise]);
   const summary = summaryResult?.data?.summaryData ?? {};
   const summaryValue = (key: string) => String(summary[key]?.value ?? '').trim();
   const summaryEvidence:Provenance={source:'Nasdaq quote summary · observed',url:`https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/summary?assetclass=stocks`,periodEnd:now.slice(0,10),availableAt:now,retrievedAt:now,confidence:'medium'};
@@ -437,7 +489,11 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
   const summarySector = summaryValue('Sector'), summaryIndustry = summaryValue('Industry');
   if (summarySector) snapshot.sector = summarySector;
   if (summaryIndustry) snapshot.industry = summaryIndustry;
-  snapshot.news = parseNews(newsResult,now);
+  const rssNews=parseNews(newsResult,now,'Yahoo Finance RSS');
+  const fallbackNews=rssNews.length?[]:parseNews(googleNewsResult,now,'Google News RSS');
+  const filingNews=parseSecFilingNews(filingsResult,company.cik,now);
+  snapshot.news=[...rssNews,...fallbackNews,...filingNews].filter((item,index,array)=>array.findIndex(other=>other.link===item.link)===index).sort((a,b)=>(b.publishedAt??'').localeCompare(a.publishedAt??'')).slice(0,8);
+  if(snapshot.news.length){const newsSource=rssNews.length?'Yahoo Finance RSS':fallbackNews.length?'Google News RSS':'SEC EDGAR filing index';snapshot.provenance.news={source:`${newsSource}${filingNews.length?' + SEC EDGAR filing index':''}`,url:rssNews.length?'https://feeds.finance.yahoo.com/':fallbackNews.length?'https://news.google.com/rss/':'https://www.sec.gov/edgar/searchedgar/companysearch',periodEnd:snapshot.news[0].publishedAt?.slice(0,10)||now.slice(0,10),availableAt:snapshot.news[0].publishedAt||now,retrievedAt:now,confidence:rssNews.length?'medium':fallbackNews.length?'low':'high'};}
   snapshot.insiderPurchases = insiderPurchases;
   snapshot.insiderBuyValue = insiderPurchases.reduce((total, purchase) => total + purchase.value, 0) || null;
   if (snapshot.insiderBuyValue != null) snapshot.provenance.insiderBuyValue = { source: 'SEC Form 4 open-market purchases (code P)', url: submissionsUrlFor(cik), periodEnd: insiderPurchases[0]?.date ?? now.slice(0, 10), availableAt: now, retrievedAt: now, currency: 'USD', confidence: 'high' };
@@ -511,13 +567,13 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
   return translateSnapshotContent(applyFinancingRisk(enrichFinancials(snapshot,facts,factsUrl)));
 }
 
-export function parseNews(xml:string,asOf:string) {
+export function parseNews(xml:string,asOf:string,defaultSource='Yahoo Finance RSS') {
   const strip=(value:string)=>value.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g,'$1').replace(/<[^>]+>/g,' ').replace(/&amp;/g,'&').replace(/&#39;/g,"'").replace(/&quot;/g,'"').replace(/\s+/g,' ').trim();
   const seen=new Set<string>();
   return [...xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)].map(match=>{
     const read=(tag:string)=>strip(match[1].match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`,'i'))?.[1]??'');
     const date=Date.parse(read('pubDate'));
-    return {title:read('title'),link:read('link'),publishedAt:Number.isFinite(date)?new Date(date).toISOString():'',source:'Yahoo Finance RSS'};
+    return {title:read('title'),link:read('link'),publishedAt:Number.isFinite(date)?new Date(date).toISOString():'',source:read('source')||defaultSource};
   }).filter(item=>{
     if(!item.title||!item.publishedAt||Date.parse(item.publishedAt)>Date.parse(asOf)||seen.has(item.link))return false;
     try{if(!['https:','http:'].includes(new URL(item.link).protocol))return false;}catch{return false;}

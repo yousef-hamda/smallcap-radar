@@ -2,7 +2,7 @@ import type { Company } from './providers';
 import { fetchJson } from './providers';
 import type { Provenance, Snapshot } from './engine';
 import bundledFrames from './sec-frames.generated.json';
-import {REVENUE_TAGS, observations, latestInstant, trailingAnnual} from './sec';
+import {REVENUE_TAGS, observations, latestInstant, trailingAnnual, COST_OF_REVENUE_TAGS, BACKLOG_TAGS} from './sec';
 import {derivedEvidence,usableEvidence} from './evidence';
 import {NON_TRADABLE_NAME, SEC_FRAME_DATASET_COUNT} from './strategy-spec';
 import {applyFinancingRisk} from './financing-risk';
@@ -19,6 +19,8 @@ export type BulkFundamentals = {
   cash?: StoredFact;
   debtCurrent?: StoredFact;
   debtNoncurrent?: StoredFact;
+  costOfRevenue?: StoredFact;
+  backlog?: StoredFact;
   conflicts?: string[];
 };
 type FundamentalKey = Exclude<keyof BulkFundamentals, 'conflicts'>;
@@ -50,6 +52,8 @@ const COMPANY_FACTS_TAGS = {
   // LongTermDebt and Borrowings may be totals. Adding either to a current
   // component can double count debt, so only noncurrent concepts are used.
   debtNoncurrent: ['LongTermDebtNoncurrent', 'BorrowingsNoncurrent'],
+  costOfRevenue: COST_OF_REVENUE_TAGS,
+  backlog: BACKLOG_TAGS,
 } as const;
 
 function companyFactsUrl(cik: number) {
@@ -90,6 +94,9 @@ export function parseCompanyFacts(cik: number, payload: any, asOf = new Date()):
   pickAnnual('netIncome', COMPANY_FACTS_TAGS.netIncome);
   pickAnnual('ocf', COMPANY_FACTS_TAGS.ocf);
   pickAnnual('capex', COMPANY_FACTS_TAGS.capex);
+  pickAnnual('costOfRevenue', COMPANY_FACTS_TAGS.costOfRevenue);
+  const backlog=latestInstant(observationsFromPayload(facts, COMPANY_FACTS_TAGS.backlog), asOf.toISOString()) ?? trailingAnnual(observationsFromPayload(facts, COMPANY_FACTS_TAGS.backlog), asOf.toISOString());
+  if (backlog && usableCompanyFact(backlog, asOf)) result.backlog=toStoredFact(backlog,cik,'backlog',url,0);
   for (const [key, tags] of Object.entries({ cash: COMPANY_FACTS_TAGS.cash, debtCurrent: COMPANY_FACTS_TAGS.debtCurrent, debtNoncurrent: COMPANY_FACTS_TAGS.debtNoncurrent }) as [FundamentalKey, readonly string[]][]) {
     const instant = latestInstant(observationsFromPayload(facts, tags), asOf.toISOString());
     if (instant && usableCompanyFact(instant, asOf)) result[key] = toStoredFact(instant, cik, key, url, 0);
@@ -113,7 +120,7 @@ export function needsCompanyFacts(facts: BulkFundamentals | undefined) {
 function mergeCompanyFacts(existing: BulkFundamentals | undefined, fallback: BulkFundamentals) {
   const merged: BulkFundamentals = { ...(existing || {}) };
   const conflicts = [...(merged.conflicts || [])];
-  for (const key of ['revenue', 'netIncome', 'ocf', 'capex', 'shares', 'priorShares', 'cash', 'debtCurrent', 'debtNoncurrent'] as const) {
+  for (const key of ['revenue', 'netIncome', 'ocf', 'capex', 'shares', 'priorShares', 'cash', 'debtCurrent', 'debtNoncurrent','costOfRevenue','backlog'] as const) {
     const candidate = fallback[key], current = merged[key];
     if (!candidate) continue;
     if (current && current.end === candidate.end && current.val !== candidate.val) conflicts.push(`${key}: ${current.val} (${current.kind || 'frames'}) مقابل ${candidate.val} (Company Facts) في ${candidate.end}`);
@@ -308,7 +315,7 @@ export function preliminarySnapshot(company: Company, facts: BulkFundamentals | 
   snapshot.dataIssues?.push('وسيط السيولة لـ20 يومًا لا يُستنتج من متوسط 10 أيام؛ يحتاج تاريخًا فعليًا قبل PASS.');
 
   const cleanFacts: BulkFundamentals = { conflicts: facts.conflicts };
-  for (const key of ['revenue', 'netIncome', 'ocf', 'capex', 'shares', 'priorShares', 'cash', 'debtCurrent', 'debtNoncurrent'] as FundamentalKey[]) {
+  for (const key of ['revenue', 'netIncome', 'ocf', 'capex', 'shares', 'priorShares', 'cash', 'debtCurrent', 'debtNoncurrent','costOfRevenue','backlog'] as FundamentalKey[]) {
     const fact = facts[key];
     if (fact && Number.isFinite(fact.val) && usableEvidence(frameProvenance(fact, retrievedAt), retrievedAt)) cleanFacts[key] = fact;
   }
@@ -317,6 +324,11 @@ export function preliminarySnapshot(company: Company, facts: BulkFundamentals | 
     snapshot[key] = facts[key]!.val;
     snapshot.provenance[key] = frameProvenance(facts[key]!, retrievedAt);
   }
+  if(facts.costOfRevenue&&facts.revenue&&facts.costOfRevenue.end===facts.revenue.end&&facts.revenue.val>0){
+    snapshot.grossMargin=1-facts.costOfRevenue.val/facts.revenue.val;
+    snapshot.provenance.grossMargin=derivedEvidence('Derived SEC revenue and cost of revenue',[frameProvenance(facts.revenue,retrievedAt),frameProvenance(facts.costOfRevenue,retrievedAt)],retrievedAt,'1 − cost of revenue / revenue')!;
+  }
+  if(facts.backlog){snapshot.backlog={amount:facts.backlog.val,currency:'USD',asOf:facts.backlog.end,source:facts.backlog.url};snapshot.provenance.backlog=frameProvenance(facts.backlog,retrievedAt);}
   if (facts.ocf && facts.capex && facts.ocf.end === facts.capex.end && facts.ocf.start===facts.capex.start) {
     snapshot.fcf = facts.ocf.val - Math.abs(facts.capex.val);
     snapshot.provenance.fcf = derivedEvidence('Derived SEC cash flows',[frameProvenance(facts.ocf,retrievedAt),frameProvenance(facts.capex,retrievedAt)],retrievedAt,`${facts.ocf.tag} − ${facts.capex.tag}`)!;

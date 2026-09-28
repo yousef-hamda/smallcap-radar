@@ -1,5 +1,7 @@
 import type {Provenance} from './engine';
 export const REVENUE_TAGS=['RevenueFromContractWithCustomerExcludingAssessedTax','RevenueFromContractWithCustomerIncludingAssessedTax','Revenues','SalesRevenueNet','SalesRevenueGoodsNet'];
+export const COST_OF_REVENUE_TAGS=['CostOfRevenue','CostOfGoodsAndServicesSold','CostOfGoodsAndServicesSoldDirect','CostOfGoodsAndServicesSoldIncludingDAndA'];
+export const BACKLOG_TAGS=['RemainingPerformanceObligation','RevenueRemainingPerformanceObligation','ContractWithCustomerLiability','ContractWithCustomerLiabilityCurrent','ContractWithCustomerLiabilityNoncurrent'];
 export type Fact={start?:string;end:string;val:number;filed:string;form:string;accn?:string;fy?:number;fp?:string;tag?:string};
 const annualForms=['10-K','10-K/A','20-F','20-F/A','40-F','40-F/A'];
 export function observations(facts:any,tags:string[],unit='USD'):Fact[]{return tags.flatMap(tag=>{

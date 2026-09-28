@@ -4,7 +4,7 @@ import {fixtures} from '../../.test-build/fixtures.mjs';
 import {simulateExit,expiryDate,pointInTime,firmHoldout,firmBootstrap,bonferroni,splitAdjustedDilution,ma30Weeks,bounceHistoryMetrics} from '../../.test-build/research.mjs';
 import {trailingAnnual,insiderPurchases,latestInstant} from '../../.test-build/sec.mjs';
 import {preliminarySnapshot,parseCompanyFacts,needsCompanyFacts,fetchCompanyFactsFallback,fetchBulkFundamentals} from '../../.test-build/bulk.mjs';
-import {yahooPercentAsRatio,parseYahooDaily,yahooSymbol,yahooBulkQuotes} from '../../.test-build/providers.mjs';
+import {yahooPercentAsRatio,parseYahooDaily,parseCboeDaily,yahooSymbol,yahooBulkQuotes,parseSecFilingNews} from '../../.test-build/providers.mjs';
 import {reviewShareSplits} from '../../.test-build/research.mjs';
 import {enrichFinancials} from '../../.test-build/financials.mjs';
 import {derivedEvidence} from '../../.test-build/evidence.mjs';
@@ -191,6 +191,25 @@ test('deep financial enrichment derives cash debt EV/S without treating missing 
  const s=enrichFinancials(base,facts,'https://data.sec.gov/test');assert.equal(s.cash,20e6);assert.equal(s.debt,10e6);assert.equal(s.evSales,(base.marketCap-10e6)/base.revenue);
  const missing=structuredClone(facts);delete missing['us-gaap'].LongTermDebtCurrent;
  const partial=enrichFinancials({...base,evSales:undefined},missing,'https://data.sec.gov/test');assert.equal(partial.debt,undefined);assert.equal(partial.evSales,undefined);
+});
+test('deep financial enrichment derives gross margin and contracted backlog from standard SEC facts',()=>{
+ const facts={
+  'us-gaap':{
+   Revenues:{units:{USD:[{start:'2025-01-01',end:'2025-12-31',val:100,filed:'2026-02-01',form:'10-K'}]}},
+   CostOfGoodsAndServicesSold:{units:{USD:[{start:'2025-01-01',end:'2025-12-31',val:40,filed:'2026-02-01',form:'10-K'}]}},
+   ContractWithCustomerLiability:{units:{USD:[{end:'2025-12-31',val:25,filed:'2026-02-01',form:'10-K'}]}}
+  }
+ };
+ const s=enrichFinancials({...base,asOf:'2026-09-01T00:00:00Z'},facts,'https://data.sec.gov/test');
+ assert.equal(s.grossMargin,.6);assert.equal(s.backlog.amount,25);assert.equal(s.provenance.grossMargin.source,'SEC revenue and cost of revenue');assert.equal(s.provenance.backlog.source,'SEC EDGAR');
+});
+test('Cboe fallback parser keeps only bounded positive dated OHLCV rows',()=>{
+ const rows=parseCboeDaily({data:[{date:'2026-01-02',close:12,open:11,high:13,low:10,volume:100},{date:'2025-12-31',close:9},{date:'2026-02-01',close:0},{date:'bad',close:20}]},'2026-01-01','2026-01-31');
+ assert.deepEqual(rows.map(row=>row.date),['2026-01-02']);assert.equal(rows[0].volume,100);
+});
+test('SEC filing index becomes profile events when RSS is unavailable',()=>{
+ const news=parseSecFilingNews({filings:{recent:{form:['8-K','4','10-Q'],accessionNumber:['0000000000-26-000001','0000000000-26-000002','0000000000-26-000003'],primaryDocument:['current.htm','form4.xml','quarter.htm'],filingDate:['2026-08-01','2026-08-02','2026-07-01']}}},123,'2026-09-01T00:00:00Z');
+ assert.equal(news.length,2);assert.match(news[0].link,/Archives\/edgar\/data\/123\/000000000026000001\/current.htm/);assert.equal(news[1].source,'SEC EDGAR filings');
 });
 test('intraday parser removes null, duplicate and future points and uses previous close baseline',()=>{
  const asOf='2026-09-08T15:00:00Z',cut=Math.floor(Date.parse(asOf)/1000);

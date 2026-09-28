@@ -29,6 +29,12 @@ Last verified: 2026-09-26. Keep this file free of credentials and private recove
 - The portfolio logo UI requests real images directly from Financial Modeling Prep's public image endpoint and falls back to the same-origin logo route. The fallback route may show ticker initials when the Worker cannot reach an external logo host.
 - The app is backed by D1-style local state on a Railway volume; `DATABASE_URL` is not read by the current runtime. Do not describe the 2,914 records as being in Railway Postgres.
 
+### Provider coverage verification (2026-09-29)
+
+- Free profile recovery uses SEC EDGAR, Nasdaq, Yahoo query1/query2, Cboe delayed history, and the bundled dated datasets. No paid API key or hosted MCP service is required.
+- The Cboe endpoint is independently reachable without authentication and is used only after Yahoo chart failure for profile history. It is delayed and does not replace SEC filing evidence.
+- Run `npm run typecheck`, `npm run test:engine`, `npm run test:runtime`, `npm run lint`, and `npm run build` before deployment. The coverage-specific test cases are in `tests/engine/strategy.test.mjs`.
+
 ## Migration guardrails
 
 If moving to Postgres, first take and verify a volume backup. Inventory all D1 tables, including runs, snapshots, watchlists, portfolios, cache, and recovery metadata. Preserve private owner keys and transaction order. Import into Postgres, compare counts and selected payloads, run app-level read/write tests, then cut over with a rollback plan. Never point `DATABASE_URL` at Postgres and assume the existing D1 data moved.

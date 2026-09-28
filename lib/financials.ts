@@ -1,5 +1,5 @@
 import type {Snapshot} from './engine';
-import {observations,latestInstant,trailingAnnual,provenance,REVENUE_TAGS} from './sec';
+import {observations,latestInstant,trailingAnnual,provenance,REVENUE_TAGS,COST_OF_REVENUE_TAGS,BACKLOG_TAGS} from './sec';
 import {derivedEvidence,usableEvidence} from './evidence';
 
 /** Independent of providers: calculations use only observations available at asOf. */
@@ -19,6 +19,11 @@ export function enrichFinancials(snapshot:Snapshot,facts:unknown,url:string):Sna
  }
  const currentRevenue=trailingAnnual(observations(facts,REVENUE_TAGS),now);
  if(currentRevenue){
+  const cost=trailingAnnual(observations(facts,COST_OF_REVENUE_TAGS),now);
+  if(cost&&cost.end===currentRevenue.end&&currentRevenue.val>0&&cost.val>=0){
+   s.grossMargin=1-cost.val/currentRevenue.val;
+   s.provenance.grossMargin=derivedEvidence('SEC revenue and cost of revenue',[provenance(currentRevenue,url,now),provenance(cost,url,now)],now,'1 − cost of revenue / revenue')!;
+  }
   const yearAgo=new Date(now);yearAgo.setUTCFullYear(yearAgo.getUTCFullYear()-1);
   const priorRevenue=trailingAnnual(observations(facts,REVENUE_TAGS),yearAgo.toISOString());
   if(priorRevenue&&priorRevenue.val>0&&Math.abs((Date.parse(currentRevenue.end)-Date.parse(priorRevenue.end))/864e5-365)<=8){
@@ -30,6 +35,12 @@ export function enrichFinancials(snapshot:Snapshot,facts:unknown,url:string):Sna
     s.provenance.operatingMarginTrend=derivedEvidence('SEC operating margin comparison',[provenance(op,url,now),provenance(priorOp,url,now),s.provenance.revenueGrowth],now,'current margin − prior margin')!;
    }
   }
+ }
+ const backlogRows=observations(facts,BACKLOG_TAGS).filter(row=>row.end&&(!row.start||row.tag==='RemainingPerformanceObligation'||row.tag==='RevenueRemainingPerformanceObligation'));
+ const backlog=latestInstant(backlogRows,now)??trailingAnnual(backlogRows,now);
+ if(backlog&&backlog.val>=0){
+  s.backlog={amount:backlog.val,currency:'USD',asOf:backlog.end,source:url};
+  s.provenance.backlog=provenance(backlog,url,now);
  }
  if(s.fcf!=null&&s.marketCap!=null&&s.marketCap>0&&usableEvidence(s.provenance.fcf,now)&&usableEvidence(s.provenance.marketCap,now)){
   s.fcfYield=s.fcf/s.marketCap;s.provenance.fcfYield=derivedEvidence('SEC FCF / market cap',[s.provenance.fcf,s.provenance.marketCap],now,'FCF / market cap')!;
