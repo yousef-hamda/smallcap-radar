@@ -33,6 +33,7 @@ Last verified: 2026-09-26. Keep this file free of credentials and private recove
 
 - Free profile recovery uses SEC EDGAR, Nasdaq, Yahoo query1/query2, Cboe delayed history, and the bundled dated datasets. No paid API key or hosted MCP service is required.
 - The Cboe endpoint is independently reachable without authentication and is used only after Yahoo chart failure for profile history. It is delayed and does not replace SEC filing evidence.
+- A live SEC 403 is recoverable for covered scan issuers through the bundled official SEC Frames release; the profile records both the live failure and the dated fallback source.
 - Run `npm run typecheck`, `npm run test:engine`, `npm run test:runtime`, `npm run lint`, and `npm run build` before deployment. The coverage-specific test cases are in `tests/engine/strategy.test.mjs`.
 
 ## Migration guardrails

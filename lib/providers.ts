@@ -4,11 +4,13 @@ import { ma30Weeks } from './research';
 import { observations, latestInstant, trailingAnnual, provenance, REVENUE_TAGS } from './sec';
 import bundledUniverse from './universe.generated.json';
 import quickCache from './quick-cache.generated.json';
+import bundledFrames from './sec-frames.generated.json';
 import {enrichFinancials} from './financials';
 import {parseYahooIntraday,type ChartPayload} from './chart-data';
 import {parseOfficialDirectory} from './directory';
 import { translateSnapshotContent } from './translation';
 import { applyFinancingRisk } from './financing-risk';
+import { derivedEvidence } from './evidence';
 
 export type Company = { cik: number; name: string; ticker: string; exchange: string; price?: number; dailyChange?: number; marketCap?: number; volume?: number; averageVolume10d?: number; return52w?: number; low52w?: number; high52w?: number; ma50d?: number; ma200d?: number; sector?: string; industry?: string; quoteSource?: string; quoteAvailableAt?: string; priceSource?:string; priceAvailableAt?:string; marketCapSource?:string; marketCapAvailableAt?:string };
 type NasdaqRow = { symbol: string; name?: string; lastsale?: string; marketCap?: string; volume?: string; sector?: string; industry?: string };
@@ -308,6 +310,22 @@ function isoDate(date: string) { const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exe
 function dateOffset(iso: string, days: number) { const date = new Date(iso); date.setUTCDate(date.getUTCDate() + days); return date.toISOString().slice(0, 10) }
 function commonSecurity(name: string) { return !NON_TRADABLE_NAME.test(name) }
 
+function applyBundledFundamentals(snapshot:Snapshot,cik:number,now:string){
+ const facts=(bundledFrames as any).fundamentals?.[String(cik)];
+ if(!facts)return false;
+ const url=(fact:any)=>fact?.url||'https://data.sec.gov/api/xbrl/frames';
+ const evidence=(fact:any,key:string):Provenance=>({source:'SEC EDGAR Frames · bundled official dated snapshot',url:url(fact),periodStart:fact?.start,periodEnd:fact?.end||now.slice(0,10),availableAt:(bundledFrames as any).generatedAt,retrievedAt:now,currency:'USD',tag:fact?.tag||key,confidence:'low'});
+ const assign=(key:keyof Snapshot,fact:any)=>{if(fact&&Number.isFinite(fact.val)){(snapshot as any)[key]=fact.val;snapshot.provenance[String(key)]=evidence(fact,String(key));}};
+ assign('revenue',facts.revenue);assign('netIncome',facts.netIncome);assign('cash',facts.cash);
+ if(facts.debtCurrent&&facts.debtNoncurrent&&facts.debtCurrent.end===facts.debtNoncurrent.end){snapshot.debt=facts.debtCurrent.val+facts.debtNoncurrent.val;snapshot.provenance.debt=derivedEvidence('SEC Frames bundled debt components',[evidence(facts.debtCurrent,'debtCurrent'),evidence(facts.debtNoncurrent,'debtNoncurrent')],now,'current + noncurrent debt')!;}
+ if(facts.ocf&&facts.capex&&facts.ocf.end===facts.capex.end&&facts.ocf.start===facts.capex.start){snapshot.fcf=facts.ocf.val-Math.abs(facts.capex.val);snapshot.provenance.fcf=derivedEvidence('SEC Frames bundled cash flows',[evidence(facts.ocf,'ocf'),evidence(facts.capex,'capex')],now,'operating cash flow − capital expenditure')!;}
+ if(snapshot.marketCap!=null&&snapshot.revenue!=null&&snapshot.revenue>0){snapshot.ps=snapshot.marketCap/snapshot.revenue;snapshot.provenance.ps=derivedEvidence('SEC Frames bundled revenue + live market cap',[snapshot.provenance.revenue,snapshot.provenance.marketCap],now,'market cap / revenue')!;}
+ if(snapshot.marketCap!=null&&snapshot.revenue!=null&&snapshot.revenue>0&&snapshot.debt!=null&&snapshot.cash!=null){snapshot.evSales=(snapshot.marketCap+snapshot.debt-snapshot.cash)/snapshot.revenue;snapshot.provenance.evSales=derivedEvidence('SEC Frames bundled revenue, cash, debt + live market cap',[snapshot.provenance.revenue,snapshot.provenance.cash,snapshot.provenance.debt,snapshot.provenance.marketCap],now,'(market cap + debt − cash) / revenue')!;}
+ if(facts.shares&&facts.priorShares&&facts.priorShares.val>0){snapshot.shareCountRatio=facts.shares.val/facts.priorShares.val;snapshot.dilution=snapshot.shareCountRatio-1;snapshot.splitAdjusted=false;snapshot.provenance.dilution=derivedEvidence('SEC Frames bundled share count comparison',[evidence(facts.shares,'shares'),evidence(facts.priorShares,'priorShares')],now,'current / prior − 1')!;snapshot.provenance.shareCountRatio=snapshot.provenance.dilution;}
+ snapshot.dataIssues?.push('SEC Company Facts المباشر غير متاح؛ استُخدمت لقطة SEC Frames الرسمية المؤرخة من الإصدار.');
+ return true;
+}
+
 type RecentSecSubmission={form:string;accession:string;document:string;filed:string;reportDate?:string};
 function recentSubmissions(payload:any):RecentSecSubmission[]{
  const recent=payload?.filings?.recent;
@@ -529,8 +547,9 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
     // SEC failure must not short-circuit independent deep-profile sources.
     // Keep missing financials as UNKNOWN while still attempting profile,
     // earnings and analyst data on demand.
+    const bundledRecovered=applyBundledFundamentals(snapshot,company.cik,now);
     await enrichWithYahooProfile(snapshot, symbol, now, profilePromise);
-    snapshot.research = { financials: false, valuation: snapshot.evSales != null || snapshot.ps != null, analysts: snapshot.analystTarget != null, sector: !!snapshot.sector };
+    snapshot.research = { financials: bundledRecovered||!!snapshot.revenue, valuation: snapshot.evSales != null || snapshot.ps != null, analysts: snapshot.analystTarget != null, sector: !!snapshot.sector };
     return translateSnapshotContent(applyFinancingRisk(snapshot));
   }
 

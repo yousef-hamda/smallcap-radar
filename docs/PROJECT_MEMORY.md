@@ -46,4 +46,5 @@ See `docs/OPERATIONS_MEMORY.md` for deployment/storage details and `HANDOFF.md` 
 
 - The deep profile now has independent Yahoo query1/query2 chart recovery and a no-key Cboe delayed-history fallback, followed by Nasdaq history and the bundled dated cache.
 - Standard SEC cost-of-revenue tags now derive gross margin; standard remaining-performance-obligation and contract-liability tags now populate contracted backlog when disclosed. SEC filing metadata fills the news/event list when Yahoo RSS is empty.
+- When live SEC Company Facts is rejected, the deep profile now recovers covered issuers from the bundled official SEC Frames release with low-confidence dated provenance instead of leaving all financial fields blank.
 - The complete source matrix, limitations, and acceptance gates are in `docs/FREE_DATA_COVERAGE_AND_PROVIDER_PLAN_2026_09_29.md`.

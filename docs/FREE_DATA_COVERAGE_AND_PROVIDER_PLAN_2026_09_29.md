@@ -30,6 +30,7 @@ The company profile must attempt every recoverable field independently, retain s
 - Added independent Cboe daily history recovery at `cdn.cboe.com/api/global/delayed_quotes/charts/historical/{SYMBOL}.json`.
 - Added Yahoo `query2` recovery for chart history and intraday data.
 - Preserved Yahoo chart metadata as a no-crumb identity and quote fallback.
+- Added the bundled official SEC Frames snapshot to the deep-profile financial fallback, so an SEC live 403 can still return dated revenue, net income, cash, debt, FCF, shares, and valuation for covered scan issuers.
 - Added standard SEC tags for cost of revenue and backlog/contracted liabilities.
 - Added derived gross margin with dated evidence.
 - Added derived backlog with source URL and reporting date.
@@ -40,7 +41,7 @@ The company profile must attempt every recoverable field independently, retain s
 
 ## Failure behavior
 
-The profile fetch runs independent work in parallel: history, SEC facts, Yahoo profile, Nasdaq summary, RSS, SEC submissions, and Form 4 documents. A rejection is recorded against that source and does not cancel the other branches. The profile may therefore be partially covered, but the UI keeps the missing fields explicit and the strategy engine keeps incomplete evidence `UNKNOWN`.
+The profile fetch runs independent work in parallel: history, SEC facts, Yahoo profile, Nasdaq summary, RSS, SEC submissions, and Form 4 documents. A rejection is recorded against that source and does not cancel the other branches. When live SEC facts fail, the dated official SEC Frames release is used for the fields it contains and marked low confidence. The profile may therefore still be partially covered, but the UI keeps the missing fields explicit and the strategy engine keeps incomplete evidence `UNKNOWN`.
 
 The provider cache is bounded and keyed by full URL. In-flight requests are shared inside the Worker isolate. SEC requests remain serialized with headroom under the SEC fair-use rate. Yahoo and Cboe results have separate cache keys, so a Yahoo cooldown cannot suppress the Cboe fallback.
 
