@@ -51,7 +51,7 @@ async function snapshotMap(symbols: string[]) {
   for (const row of latestRows) {
     try { snapshots.set(String(row.symbol), JSON.parse(String(row.payload))); } catch { /* corrupted cache is ignored */ }
   }
-  const keys = symbols.flatMap(symbol => [`deep:v8:${symbol}`, `deep:v7:${symbol}`, `deep:v6:${symbol}`, `deep:v5:${symbol}`, `deep:v4:${symbol}`]);
+  const keys = symbols.flatMap(symbol => [`deep:v9:${symbol}`, `deep:v8:${symbol}`, `deep:v7:${symbol}`, `deep:v6:${symbol}`, `deep:v5:${symbol}`, `deep:v4:${symbol}`]);
   const deepRows = (await db().prepare(`SELECT key,payload,retrieved_at FROM raw_cache WHERE key IN (${placeholders(keys.length)}) ORDER BY retrieved_at ASC`).bind(...keys).all()).results as any[];
   for (const row of deepRows) {
     try {
@@ -111,7 +111,7 @@ export async function readPortfolioQuotes(symbols: string[], options: { forceRef
       name: snapshot?.name || company?.name || symbol,
       nameAr: snapshot?.nameAr,
       price,
-      dailyChange: live?.dailyChange ?? snapshot?.dailyChange ?? company?.dailyChange ?? null,
+      dailyChange: live?.intradayChange ?? live?.dailyChange ?? snapshot?.dailyChange ?? company?.dailyChange ?? null,
       asOf: live?.quoteAvailableAt || snapshot?.provenance?.price?.availableAt || snapshot?.asOf || company?.quoteAvailableAt || null,
       source: live?.quoteSource || snapshot?.provenance?.price?.source || company?.quoteSource,
       sector: live?.sector || snapshot?.sector || company?.sector,

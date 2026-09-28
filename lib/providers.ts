@@ -1,6 +1,6 @@
 import type { Snapshot, Provenance, InsiderPurchase } from './engine';
 import { NON_TRADABLE_NAME } from './strategy-spec';
-import { ma30Weeks } from './research';
+import { completedSessionQuote, ma30Weeks } from './research';
 import { observations, latestInstant, trailingAnnual, provenance, REVENUE_TAGS } from './sec';
 import bundledUniverse from './universe.generated.json';
 import quickCache from './quick-cache.generated.json';
@@ -12,7 +12,7 @@ import { translateSnapshotContent } from './translation';
 import { applyFinancingRisk } from './financing-risk';
 import { derivedEvidence } from './evidence';
 
-export type Company = { cik: number; name: string; ticker: string; exchange: string; price?: number; dailyChange?: number; marketCap?: number; volume?: number; averageVolume10d?: number; return52w?: number; low52w?: number; high52w?: number; ma50d?: number; ma200d?: number; sector?: string; industry?: string; quoteSource?: string; quoteAvailableAt?: string; priceSource?:string; priceAvailableAt?:string; marketCapSource?:string; marketCapAvailableAt?:string };
+export type Company = { cik: number; name: string; ticker: string; exchange: string; price?: number; dailyChange?: number; intradayChange?: number; marketCap?: number; volume?: number; averageVolume10d?: number; return52w?: number; low52w?: number; high52w?: number; ma50d?: number; ma200d?: number; sector?: string; industry?: string; quoteSource?: string; quoteAvailableAt?: string; priceSource?:string; priceAvailableAt?:string; marketCapSource?:string; marketCapAvailableAt?:string };
 type NasdaqRow = { symbol: string; name?: string; lastsale?: string; marketCap?: string; volume?: string; sector?: string; industry?: string };
 type CachedQuick = { history: NonNullable<Snapshot['history']>; financials: Record<string, number>; provenance: Record<string, Provenance>; issues: string[] };
 type MarketBar = NonNullable<Snapshot['history']>[number];
@@ -285,7 +285,10 @@ export async function yahooBulkQuotes(companies: Company[]): Promise<Company[]> 
         priceSource:'Yahoo bulk quote live',
         priceAvailableAt:new Date(marketTime*1000).toISOString(),
         price: quote.regularMarketPrice,
-        dailyChange:Number.isFinite(quote.regularMarketChangePercent)&&quote.regularMarketChangePercent>-100?quote.regularMarketChangePercent/100:undefined,
+        // This is a live/session-to-date move. It must not populate the
+        // Snapshot.dailyChange field, whose contract is the last completed
+        // close-to-close session used by radar cards and company profiles.
+        intradayChange:Number.isFinite(quote.regularMarketChangePercent)&&quote.regularMarketChangePercent>-100?quote.regularMarketChangePercent/100:undefined,
         ...(Number.isFinite(quote.marketCap)&&quote.marketCap>0 ? { marketCap: quote.marketCap,marketCapSource:'Yahoo bulk quote live',marketCapAvailableAt:new Date(marketTime*1000).toISOString() } : {}),
         volume:Number.isFinite(quote.regularMarketVolume)&&quote.regularMarketVolume>=0?quote.regularMarketVolume:undefined,
         averageVolume10d:Number.isFinite(quote.averageDailyVolume10Day)&&quote.averageDailyVolume10Day>=0?quote.averageDailyVolume10Day:undefined,
@@ -490,8 +493,9 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
     snapshot.provenance.price={source:'Yahoo Finance chart metadata',url:historyUrl,periodEnd:quoteDate,availableAt:quoteAvailableAt,retrievedAt:historyRetrievedAt,currency:'USD',confidence:'medium'};
   }
 
-  if (price != null) snapshot.provenance.price = quoteEvidence;
-  if(history.length>1&&history.at(-2)!.close>0){snapshot.dailyChange=history.at(-1)!.close/history.at(-2)!.close-1;snapshot.provenance.dailyChange={...quoteEvidence,tag:'last close / previous close - 1'};}
+  const session=completedSessionQuote(history);
+  if (price != null) snapshot.provenance.price = {...quoteEvidence,tag:'last completed session close'};
+  if(session){snapshot.price=session.price;snapshot.dailyChange=session.dailyChange;snapshot.provenance.price={...quoteEvidence,periodEnd:session.periodEnd,tag:'last completed session close'};snapshot.provenance.dailyChange={...quoteEvidence,periodEnd:session.periodEnd,tag:'last completed close / previous completed close - 1'};}
   if(history.length)snapshot.provenance.history=quoteEvidence;
   if (snapshot.marketCap != null) {const availableAt=company.marketCapAvailableAt||company.quoteAvailableAt||bundledUniverse.generatedAt,source=company.marketCapSource||company.quoteSource||'Nasdaq stock screener';snapshot.provenance.marketCap = { source, url: NASDAQ_SCREENER, periodEnd: availableAt.slice(0, 10), availableAt, retrievedAt: now, currency: 'USD', confidence: source.includes('bundled') ? 'low' : 'medium' };}
   const [summaryResult, newsResult, googleNewsResult, insiderPurchases, filingsResult] = await Promise.all([summaryPromise, newsPromise, googleNewsPromise, insiderPromise, filingsPromise]);

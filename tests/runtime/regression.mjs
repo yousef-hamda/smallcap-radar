@@ -102,8 +102,8 @@ test('stage9 persists rows and hands every in-range category row to history scor
  await db().prepare('INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,strategy_hash) VALUES(?,?,?,?,?,?,?,?,?)').bind('scan-test','2026-09-08T00:00:00Z','2026-09-08T00:00:00Z','running','Bulk Quotes/SEC Frames v7 · full',1,JSON.stringify([{ticker:'TEST',name:'Synthetic test only',cik:99,exchange:'Nasdaq',marketCap:1e9,price:10}]),9,currentHash()).run();
  const result=await processScanBatch('scan-test');assert.equal(result.done,false);assert.equal(result.run.stage,10);assert.equal(result.run.offset,0);assert.equal(result.run.total,1);assert.equal(result.run.processed,1);assert.equal(result.run.status,'running');
  assert.equal((await db().prepare("SELECT COUNT(*) AS n FROM fundamental_snapshots WHERE run_id='scan-test'").first()).n,1);
- const now=new Date().toISOString();setHistoryResult({history:[{date:now.slice(0,10),open:10,high:10,low:10,close:10,volume:1000}],splits:[],source:'TEST_ONLY',url:'https://example.test',availableAt:now,retrievedAt:now});
- try { const final=await processScanBatch('scan-test');assert.equal(final.done,true);assert.equal(final.run.stage,13);assert.equal(final.run.processed,1);assert.equal(final.run.status,'complete'); }
+ const now=new Date().toISOString(),today=now.slice(0,10),previous=new Date(Date.parse(now)-86400000).toISOString().slice(0,10);setHistoryResult({history:[{date:previous,open:10,high:10,low:10,close:10,volume:1000},{date:today,open:11,high:11,low:11,close:11,volume:1000}],splits:[],source:'TEST_ONLY',url:'https://example.test',availableAt:now,retrievedAt:now});
+ try { const final=await processScanBatch('scan-test');assert.equal(final.done,true);assert.equal(final.run.stage,13);assert.equal(final.run.processed,1);assert.equal(final.run.status,'complete');const stored=JSON.parse((await db().prepare("SELECT payload FROM fundamental_snapshots WHERE run_id='scan-test'").first()).payload);assert.equal(stored.price,11);assert.ok(Math.abs(stored.dailyChange-.1)<1e-12);assert.match(stored.provenance.dailyChange.tag,/completed close/); }
  finally { setHistoryResult(null); }
 });
 test('Company Facts recovery stage advances when the durable Frames row is already complete',async()=>{
@@ -133,6 +133,12 @@ test('API personal favorites start at zero, writes are idempotent and isolated',
 test('API rejects cross-origin and malformed favorite writes',async()=>{
  const cross=await POST(new Request('https://radar.test/api/radar',{method:'POST',headers:{origin:'https://other.test'},body:'{}'}));assert.equal(cross.status,403);
  const invalid=await POST(new Request('https://radar.test/api/radar',{method:'POST',headers:{origin:'https://radar.test'},body:JSON.stringify({action:'favorite',symbol:'BAD!',saved:true})}));assert.equal(invalid.status,400);
+});
+test('radar cards reuse the canonical completed-session value from a refreshed profile',async()=>{
+ const owner='overlay-owner',now=new Date().toISOString(),snapshot={...base,symbol:'CANONICAL',price:5,dailyChange:-.02,provenance:{...base.provenance,price:{...base.provenance.price,tag:'Yahoo bulk quote live'},dailyChange:{...base.provenance.price,tag:'Yahoo bulk quote live'}}},deep={...snapshot,asOf:now,price:12,dailyChange:.25,provenance:{...snapshot.provenance,price:{...base.provenance.price,tag:'last completed session close'},dailyChange:{...base.provenance.price,tag:'last completed close / previous completed close - 1'}}};
+ await db().prepare('INSERT INTO personal_watchlist(owner,symbol,created_at,payload) VALUES(?,?,?,?)').bind(owner,'CANONICAL',now,JSON.stringify(snapshot)).run();
+ await db().prepare('INSERT INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind('deep:v9:CANONICAL','test',now,JSON.stringify(deep)).run();
+ const result=await readState({strategy:'favorites',owner});assert.equal(result.snapshots[0].price,12);assert.equal(result.snapshots[0].dailyChange,.25);assert.match(result.snapshots[0].provenance.dailyChange.tag,/completed close/);
 });
 test('portfolio API persists isolated trades, validates balances and supports update/delete',async()=>{
  const initial=await portfolioGET(new Request('https://radar.test/api/portfolio'));assert.equal(initial.status,200);const cookie=initial.headers.get('set-cookie').split(';')[0];assert.deepEqual((await initial.json()).transactions,[]);

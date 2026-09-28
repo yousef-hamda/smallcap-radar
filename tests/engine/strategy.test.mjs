@@ -1,7 +1,7 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import {SPECS,evaluateStrategy,specHash} from '../../.test-build/engine.mjs';
 import {fixtures} from '../../.test-build/fixtures.mjs';
-import {simulateExit,expiryDate,pointInTime,firmHoldout,firmBootstrap,bonferroni,splitAdjustedDilution,ma30Weeks,bounceHistoryMetrics} from '../../.test-build/research.mjs';
+import {simulateExit,expiryDate,pointInTime,firmHoldout,firmBootstrap,bonferroni,splitAdjustedDilution,ma30Weeks,bounceHistoryMetrics,completedSessionQuote} from '../../.test-build/research.mjs';
 import {trailingAnnual,insiderPurchases,latestInstant} from '../../.test-build/sec.mjs';
 import {preliminarySnapshot,parseCompanyFacts,needsCompanyFacts,fetchCompanyFactsFallback,fetchBulkFundamentals} from '../../.test-build/bulk.mjs';
 import {yahooPercentAsRatio,parseYahooDaily,parseCboeDaily,yahooSymbol,yahooBulkQuotes,parseSecFilingNews} from '../../.test-build/providers.mjs';
@@ -57,6 +57,11 @@ test('daily history keeps a valid close but rejects impossible or zero OHLC fiel
  const [bar]=parseYahooDaily({chart:{result:[{timestamp:[t],indicators:{quote:[{close:[10],open:[9],high:[8],low:[0],volume:[100]}]}}]}},'2026-08-29T00:00:00Z').history;
  assert.deepEqual(bar,{date:'2026-08-28',close:10,open:undefined,high:undefined,low:undefined,volume:100});
 });
+test('last session is always the same completed close pair',()=>{
+ const result=completedSessionQuote([{date:'2026-01-05',close:12},{date:'2026-01-03',close:10},{date:'2026-01-04',close:11}]);
+ assert.deepEqual(result,{price:12,dailyChange:12/11-1,periodEnd:'2026-01-05'});
+ assert.equal(completedSessionQuote([{date:'2026-01-05',close:12}]),null);
+});
 test('split review is evidence-based, interval-bound and idempotent',()=>{
  const p={...base.provenance.dilution,periodStart:'2025-06-30',periodEnd:'2026-06-30'};
  const s={...base,splitAdjusted:false,shareCountRatio:2.2,dilution:1.2,provenance:{...base.provenance,dilution:p,shareCountRatio:p}};
@@ -109,10 +114,10 @@ test('Yahoo percentage points are normalized exactly once',()=>{assert.equal(yah
 test('Yahoo share-class symbols use the provider punctuation convention',()=>{assert.equal(yahooSymbol('brk.b'),'BRK-B');assert.equal(yahooSymbol('ACME'),'ACME')});
 test('Yahoo bulk quotes require a valid provider market timestamp before replacing fallback data',async()=>{
  const original=globalThis.fetch,now=Math.floor(Date.now()/1000);let call=0;
- globalThis.fetch=async()=>{call++;if(call===1)return new Response('',{headers:{'set-cookie':'A=1; Path=/'}});if(call===2)return new Response('crumb');return Response.json({quoteResponse:{result:[{symbol:'DOT-A',regularMarketPrice:12,regularMarketTime:now},{symbol:'STALE',regularMarketPrice:99}]}})};
+  globalThis.fetch=async()=>{call++;if(call===1)return new Response('',{headers:{'set-cookie':'A=1; Path=/'}});if(call===2)return new Response('crumb');return Response.json({quoteResponse:{result:[{symbol:'DOT-A',regularMarketPrice:12,regularMarketChangePercent:4.2,regularMarketTime:now},{symbol:'STALE',regularMarketPrice:99}]}})};
  try{
   const rows=await yahooBulkQuotes([{cik:1,ticker:'DOT.A',name:'Dot',exchange:'NYSE',price:8,marketCap:80e6,quoteSource:'bundled official dated snapshot',quoteAvailableAt:'2026-01-01T00:00:00Z',priceSource:'bundled official dated snapshot',priceAvailableAt:'2026-01-01T00:00:00Z',marketCapSource:'bundled official dated snapshot',marketCapAvailableAt:'2026-01-01T00:00:00Z'},{cik:2,ticker:'STALE',name:'Stale',exchange:'NYSE',price:7,quoteAvailableAt:'2026-01-01T00:00:00Z'}]);
-  assert.equal(rows[0].price,12);assert.equal(rows[0].quoteSource,'Yahoo bulk quote live');assert.equal(rows[0].marketCap,80e6);assert.equal(rows[0].marketCapAvailableAt,'2026-01-01T00:00:00Z');assert.notEqual(rows[0].priceAvailableAt,rows[0].marketCapAvailableAt);
+  assert.equal(rows[0].price,12);assert.equal(rows[0].intradayChange,.042);assert.equal(rows[0].dailyChange,undefined);assert.equal(rows[0].quoteSource,'Yahoo bulk quote live');assert.equal(rows[0].marketCap,80e6);assert.equal(rows[0].marketCapAvailableAt,'2026-01-01T00:00:00Z');assert.notEqual(rows[0].priceAvailableAt,rows[0].marketCapAvailableAt);
   const snapshot=preliminarySnapshot(rows[0],undefined,new Date().toISOString());assert.equal(snapshot.provenance.price.source,'Yahoo bulk quote live');assert.equal(snapshot.provenance.marketCap.source,'bundled official dated snapshot');
   assert.equal(rows[1].price,7);assert.equal(rows[1].quoteSource,undefined);
  }finally{globalThis.fetch=original;}

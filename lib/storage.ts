@@ -126,8 +126,19 @@ export async function readState(options:{strategy?:'core'|'bounce'|'favorites';l
   rows=rows.slice(offset,offset+limit+1);
  }
  if(strategy!=='favorites')rows=rows.slice(offset,offset+limit+1);
- const compact=(payload:string)=>{const parsed=JSON.parse(payload);delete parsed.history;return parsed};
  const pageRows=rows.slice(0,limit);
+ // A profile may have been refreshed after the durable scan row was written.
+ // Use its canonical completed-session pair for the card response so an old
+ // scan's live quote percentage cannot disagree with the profile the user just
+ // opened. This is a read-time bridge; the next full scan persists the same
+ // values in the durable row.
+ const deepKeys=pageRows.flatMap((row:any)=>{try{const symbol=String(JSON.parse(row.payload).symbol);return [`deep:v9:${symbol}`,`deep:v8:${symbol}`]}catch{return []}});
+ const deepSessionBySymbol=new Map<string,any>();
+ if(deepKeys.length){
+  const deepRows=(await d.prepare(`SELECT key,payload FROM raw_cache WHERE key IN (${deepKeys.map(()=>'?').join(',')}) ORDER BY key ASC`).bind(...deepKeys).all()).results as any[];
+  for(const row of deepRows){try{const snapshot=JSON.parse(String(row.payload));const tag=String(snapshot?.provenance?.dailyChange?.tag||'');if(snapshot?.symbol&&Number.isFinite(snapshot.dailyChange)&&(tag.includes('previous close')||tag.includes('previous completed close'))){const existing=deepSessionBySymbol.get(snapshot.symbol);if(!existing||String(row.key).startsWith('deep:v9:'))deepSessionBySymbol.set(snapshot.symbol,snapshot)}}catch{/* ignore malformed optional cache */}}
+ }
+ const compact=(payload:string)=>{const parsed=JSON.parse(payload);const deep=deepSessionBySymbol.get(parsed.symbol);if(deep&&Number.isFinite(deep.dailyChange)&&deep.provenance?.dailyChange){parsed.dailyChange=deep.dailyChange;if(Number.isFinite(deep.price))parsed.price=deep.price;parsed.provenance={...parsed.provenance,price:deep.provenance.price??parsed.provenance?.price,dailyChange:deep.provenance.dailyChange};}delete parsed.history;return parsed};
  const value={run:active?{...active,universe:undefined,retry_queue:undefined,retryPending:JSON.parse(active.retry_queue||'[]').length,stale:!currentData}:null,dataRunId:latest?.id,dataRun:latest?{...latest,universe:undefined,retry_queue:undefined,stale:!currentData}:null,snapshots:pageRows.map((r:any)=>compact(r.payload)),storedEvaluations:pageRows.map((r:any)=>JSON.parse(r.evaluation)),favorites:fav.map((r:any)=>r.symbol),portfolioCount,coverage,summary:{total:Number(summaryRow?.total||0),coreQualified:Number(summaryRow?.coreQualified||0),bounceQualified:Number(summaryRow?.bounceQualified||0),coreRanked:Number(summaryRow?.coreRanked||0),bounceRanked:Number(summaryRow?.bounceRanked||0),coreUnknown:Number(summaryRow?.coreUnknown||0),bounceUnknown:Number(summaryRow?.bounceUnknown||0),coreFailed:Number(summaryRow?.coreFailed||0),bounceFailed:Number(summaryRow?.bounceFailed||0),stale:!currentData},page:{strategy,limit,offset,hasMore:rows.length>limit}};
  rememberState(cacheKey,value);return value;}
 export async function readAudit(){await ensureSchema();const d=db();const latest=await d.prepare("SELECT * FROM strategy_runs WHERE status IN ('complete','partial') ORDER BY created_at DESC LIMIT 1").first() as any;const logs=latest?(await d.prepare('SELECT stage,created_at,message FROM diag WHERE run_id=? ORDER BY created_at DESC LIMIT 500').bind(latest.id).all()).results:[];const state=await readState({strategy:'bounce',limit:1});return {strategyHash:currentHash(),run:state.run,dataRun:state.dataRun,summary:state.summary,favorites:state.favorites,logs};}

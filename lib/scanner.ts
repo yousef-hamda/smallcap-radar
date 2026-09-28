@@ -1,7 +1,7 @@
 import { currentHash, db, ensureSchema, insertSnapshot, log } from './storage';
 import { companySnapshot, consumeProviderIssues, historicalMarketData, quickSymbols, universe,yahooBulkQuotes } from './providers';
 import { fetchBulkFundamentals, fetchCompanyFactsFallback, needsCompanyFacts, preliminarySnapshot, type BulkFundamentals } from './bulk';
-import { bounceHistoryMetrics, reviewShareSplits } from './research';
+import { bounceHistoryMetrics, completedSessionQuote, reviewShareSplits } from './research';
 import { NON_TRADABLE_NAME, SPECS } from './strategy-spec';
 import { applyFinancingRisk } from './financing-risk';
 
@@ -259,6 +259,13 @@ export async function processScanBatch(runId: string) {
         snapshot.asOf = now;
         const last = history.at(-1);
         const historyEvidence={source:historical.source,url:historical.url,retrievedAt:historical.retrievedAt,availableAt:historical.availableAt,periodEnd:last?.date??now.slice(0,10),confidence:'medium' as const};
+        const session=completedSessionQuote(history);
+        if(session){
+          snapshot.price=session.price;
+          snapshot.dailyChange=session.dailyChange;
+          snapshot.provenance.price={...historyEvidence,periodEnd:session.periodEnd,tag:'last completed session close'};
+          snapshot.provenance.dailyChange={...historyEvidence,periodEnd:session.periodEnd,tag:'last completed close / previous completed close - 1'};
+        }
         snapshot=reviewShareSplits(snapshot,historical.splits,history[0]?.date??'',last?.date??'',historyEvidence);
         snapshot=applyFinancingRisk(snapshot);
         if (metrics.return12m != null) {

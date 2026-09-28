@@ -31,7 +31,7 @@ export async function POST(req:Request){
    else {
     const row=await db().prepare('SELECT payload FROM fundamental_snapshots WHERE symbol=? ORDER BY as_of DESC LIMIT 1').bind(b.symbol).first() as any;
     let cached=row;
-    for(const version of ['v7','v6','v5','v4']){
+    for(const version of ['v9','v8','v7','v6','v5','v4']){
      if(cached)break;
      cached=await db().prepare('SELECT payload FROM raw_cache WHERE key=?').bind(`deep:${version}:${b.symbol}`).first() as any;
     }

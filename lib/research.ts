@@ -27,6 +27,18 @@ export function reviewShareSplits(snapshot:Snapshot,events:{date:string;factor:n
  return {...snapshot,shareCountRatio:ratio,dilution:ratio-1,splitAdjusted:true,provenance:{...snapshot.provenance,dilution:adjusted,shareCountRatio:adjusted},dataIssues:snapshot.dataIssues?.filter(issue=>!issue.includes('corporate actions'))};
 }
 export type Bar={date:string;open:number;high:number;low:number;close:number};
+export type CompletedSessionQuote={price:number;dailyChange:number;periodEnd:string};
+/**
+ * Return the last fully observed close and its close-to-close change.
+ * Radar cards call this value "last session", so it must never be derived
+ * from a live/intraday quote. Providers may return bars in either order.
+ */
+export function completedSessionQuote(rows:{date:string;close:number}[]):CompletedSessionQuote|null{
+ const valid=rows.filter(row=>typeof row.date==='string'&&Number.isFinite(Date.parse(row.date))&&Number.isFinite(row.close)&&row.close>0).sort((a,b)=>a.date.localeCompare(b.date));
+ const current=valid.at(-1),previous=valid.at(-2);
+ if(!current||!previous||!(previous.close>0))return null;
+ return {price:current.close,dailyChange:current.close/previous.close-1,periodEnd:current.date};
+}
 export function expiryDate(entry:string,months=SPECS.bounce.exit.months){const d=new Date(entry+'T00:00:00Z');const day=d.getUTCDate();d.setUTCDate(1);d.setUTCMonth(d.getUTCMonth()+months);const last=new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth()+1,0)).getUTCDate();d.setUTCDate(Math.min(day,last));return d.toISOString().slice(0,10)}
 export function simulateExit(entry:number,entryDate:string,bars:Bar[],cost={slippageBps:0,commission:0,shares:1}){
  if(!(entry>0)||!Number.isFinite(entry)||cost.slippageBps<0||cost.slippageBps>=10000||cost.commission<0||!(cost.shares>0))throw Error('Invalid entry or costs');
