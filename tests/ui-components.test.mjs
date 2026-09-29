@@ -220,6 +220,13 @@ test('radar favorites send the displayed verified snapshot when saving',async()=
  assert.match(source,/action:'favorite',symbol:s\.symbol,saved,\.\.\.\(saved\?\{snapshot:s\}:\{\}\)/);
 });
 
+test('radar category rendering keeps rejected and unknown rows out of the visible list',async()=>{
+ const source=await readFile(path.join(root,'app/page.tsx'),'utf8');
+ assert.match(source,/const visibleEvaluated=useMemo\(\(\)=>view==='favorites'\?evaluated:evaluated\.filter\(\(\{e\}\)=>e\.screeningQualified\)/);
+ assert.match(source,/visibleEvaluated\.map\(\(\{s,e\},index\)=>/);
+ assert.match(source,/visibleEvaluated\.length\} نتيجة معروضة/);
+});
+
 test('screen refresh work is bounded while manual refresh remains available',async()=>{
  const [radar,portfolio]=await Promise.all([readFile(path.join(root,'app/page.tsx'),'utf8'),readFile(path.join(root,'app/portfolio-view.tsx'),'utf8')]);
  assert.match(radar,/if\(view==='portfolio'\)return/);
