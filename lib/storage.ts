@@ -73,6 +73,20 @@ export async function readState(options:{strategy?:'core'|'bounce'|'favorites';l
  const limit=Math.max(1,Math.min(250,Math.floor(options.limit??150)));
  const offset=Math.max(0,Math.floor(options.offset??0));
  const fav=options.owner?(await d.prepare(strategy==='favorites'?'SELECT symbol,payload FROM personal_watchlist WHERE owner=? ORDER BY created_at DESC':'SELECT symbol FROM personal_watchlist WHERE owner=? ORDER BY created_at DESC').bind(options.owner).all()).results as any[]:[];
+ // A favorite is durable user state, but its saved payload may predate the
+ // latest market scan. Refresh the card quote from the selected full scan in
+ // one bounded lookup so favorites and the strategy cards use the same
+ // completed-session value without opening a deep profile for every favorite.
+ const favoriteScanBySymbol=new Map<string,any>();
+ const isCompletedPrice=(value:any)=>typeof value?.tag==='string'&&(/completed session close|last close/i.test(value.tag));
+ const isCompletedChange=(value:any)=>typeof value?.tag==='string'&&/previous (completed )?close/i.test(value.tag);
+ if(strategy==='favorites'&&latest&&fav.length){
+  const symbols=[...new Set(fav.map(row=>String(row.symbol)).filter(Boolean))];
+  for(let start=0;start<symbols.length;start+=80){
+   const chunk=symbols.slice(start,start+80),result=await d.prepare(`SELECT symbol,payload FROM fundamental_snapshots WHERE run_id=? AND symbol IN (${chunk.map(()=>'?').join(',')})`).bind(latest.id,...chunk).all();
+   for(const row of result.results as any[]){try{favoriteScanBySymbol.set(String(row.symbol),JSON.parse(String(row.payload)))}catch{/* ignore one corrupted optional row */}}
+  }
+ }
  const portfolioCount=options.owner?Number((await d.prepare("SELECT COUNT(*) AS count FROM (SELECT symbol FROM portfolio_transactions WHERE owner=? GROUP BY symbol HAVING SUM(CASE side WHEN 'buy' THEN quantity ELSE -quantity END)>0.00000001)").bind(options.owner).first() as any)?.count||0):0;
  const qualifiedSql=(key:'core'|'bounce')=>`SUM(CASE WHEN json_extract(evaluation, '$.${key}.screeningQualified') = 1 THEN 1 ELSE 0 END)`;
  let summaryRow=currentData?await d.prepare(`SELECT COUNT(*) AS total, ${qualifiedSql('core')} AS coreQualified, ${qualifiedSql('bounce')} AS bounceQualified, ${qualifiedSql('core')} AS coreRanked, ${qualifiedSql('bounce')} AS bounceRanked, SUM(CASE WHEN json_extract(evaluation, '$.core.status')='UNKNOWN' THEN 1 ELSE 0 END) AS coreUnknown, SUM(CASE WHEN json_extract(evaluation, '$.bounce.status')='UNKNOWN' THEN 1 ELSE 0 END) AS bounceUnknown, SUM(CASE WHEN json_extract(evaluation, '$.core.status')='FAIL' THEN 1 ELSE 0 END) AS coreFailed, SUM(CASE WHEN json_extract(evaluation, '$.bounce.status')='FAIL' THEN 1 ELSE 0 END) AS bounceFailed FROM fundamental_snapshots WHERE run_id=?`).bind(latest.id).first() as any: null;
@@ -121,7 +135,15 @@ export async function readState(options:{strategy?:'core'|'bounce'|'favorites';l
   rows.sort((a:any,b:any)=>{const ae=JSON.parse(a.evaluation)[strategy],be=JSON.parse(b.evaluation)[strategy];const score=(e:any)=>e.score==null?Number.NEGATIVE_INFINITY:e.score;return score(be)-score(ae)||(be.scoreCoverage??0)-(ae.scoreCoverage??0)||JSON.parse(a.payload).symbol.localeCompare(JSON.parse(b.payload).symbol)});
  }
  if(strategy==='favorites'){
-  rows=fav.filter(r=>!search||`${r.symbol} ${JSON.parse(r.payload).name}`.toLowerCase().includes(search)).map(r=>{const s=applyFinancingRisk(JSON.parse(r.payload));return {payload:JSON.stringify(s),evaluation:JSON.stringify({core:evaluateStrategy('core',s),bounce:evaluateStrategy('bounce',s)})}});
+  rows=fav.filter(r=>!search||`${r.symbol} ${JSON.parse(r.payload).name}`.toLowerCase().includes(search)).map(r=>{
+   const saved=JSON.parse(r.payload),scanned=favoriteScanBySymbol.get(String(r.symbol)),savedPrice=saved.provenance?.price,scanPrice=scanned?.provenance?.price,scanChange=scanned?.provenance?.dailyChange;
+   const refreshed={...saved,
+    ...(scanned?.name?{name:scanned.name}:{}),...(scanned?.exchange?{exchange:scanned.exchange}:{}),...(Number.isFinite(scanned?.marketCap)?{marketCap:scanned.marketCap}:{}),
+    ...(Number.isFinite(scanned?.price)&&isCompletedPrice(scanPrice)?{price:scanned.price,provenance:{...saved.provenance,price:scanPrice}}:{}),
+    ...(Number.isFinite(scanned?.dailyChange)&&isCompletedChange(scanChange)?{dailyChange:scanned.dailyChange,provenance:{...saved.provenance,price:scanPrice??savedPrice,dailyChange:scanChange}}:{})
+   };
+   const s=applyFinancingRisk(refreshed);return {payload:JSON.stringify(s),evaluation:JSON.stringify({core:evaluateStrategy('core',s),bounce:evaluateStrategy('bounce',s)})}
+  });
   rows.sort((a:any,b:any)=>{const ae=JSON.parse(a.evaluation).bounce,be=JSON.parse(b.evaluation).bounce;const score=(e:any)=>e.score==null?Number.NEGATIVE_INFINITY:e.score;return score(be)-score(ae)||(be.scoreCoverage??0)-(ae.scoreCoverage??0)||JSON.parse(a.payload).symbol.localeCompare(JSON.parse(b.payload).symbol)});
   rows=rows.slice(offset,offset+limit+1);
  }

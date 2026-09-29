@@ -14,6 +14,7 @@ import {processScanBatch,startScan,bounceHistoryCandidate,historyCandidate} from
 import {GET,POST} from '../../.test-build/radar-api.mjs';
 import {GET as recoverGET} from '../../.test-build/recover-api.mjs';
 import {GET as reportGET} from '../../.test-build/scan-report-api.mjs';
+import {GET as favoriteQuotesGET} from '../../.test-build/favorite-quotes-api.mjs';
 import {GET as chartGET} from '../../.test-build/chart-api.mjs';
 import worker from '../../.test-build/worker.mjs';
 import {validPushSubscription} from '../../.test-build/push-validation.mjs';
@@ -139,6 +140,11 @@ test('radar cards reuse the canonical completed-session value from a refreshed p
  await db().prepare('INSERT INTO personal_watchlist(owner,symbol,created_at,payload) VALUES(?,?,?,?)').bind(owner,'CANONICAL',now,JSON.stringify(snapshot)).run();
  await db().prepare('INSERT INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind('deep:v9:CANONICAL','test',now,JSON.stringify(deep)).run();
  const result=await readState({strategy:'favorites',owner});assert.equal(result.snapshots[0].price,12);assert.equal(result.snapshots[0].dailyChange,.25);assert.match(result.snapshots[0].provenance.dailyChange.tag,/completed close/);
+});
+test('favorite quote refresh returns the cached completed-session pair used by profile cards',async()=>{
+ const now=new Date().toISOString(),quote={symbol:'FAVQUOTE',price:22,dailyChange:.1,periodEnd:'2026-09-28',provenance:{price:{source:'test',periodEnd:'2026-09-28',tag:'last completed session close'},dailyChange:{source:'test',periodEnd:'2026-09-28',tag:'last completed close / previous completed close - 1'}}};
+ await db().prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind('favorite-quote:v1:FAVQUOTE','test',now,JSON.stringify(quote)).run();
+ const response=await favoriteQuotesGET(new Request('https://radar.test/api/favorite-quotes?symbols=FAVQUOTE'));assert.equal(response.status,200);const payload=await response.json();assert.equal(payload.quotes.FAVQUOTE.price,22);assert.equal(payload.quotes.FAVQUOTE.dailyChange,.1);assert.equal(payload.errors.length,0);
 });
 test('portfolio API persists isolated trades, validates balances and supports update/delete',async()=>{
  const initial=await portfolioGET(new Request('https://radar.test/api/portfolio'));assert.equal(initial.status,200);const cookie=initial.headers.get('set-cookie').split(';')[0];assert.deepEqual((await initial.json()).transactions,[]);

@@ -35,14 +35,21 @@ export default function RadarApp(){
  const selection=useRef<AbortController|null>(null),lastView=useRef({view,search}),listRequest=useRef<AbortController|null>(null);
  const cursor=useRef(0),loadingRequest=useRef(false),favoriteVersion=useRef(0),favoritePending=useRef(false),lastResume=useRef(0);
  const progress=scanProgress(data?.run),strategy=view==='core'?'core':'bounce';
+ function mergeCardQuotes(current:Snapshot[],quotes:Record<string,{price?:number;dailyChange?:number;provenance?:Snapshot['provenance']}>) {
+  return current.map(row=>{const quote=quotes[row.symbol];if(!quote)return row;return {...row,...(Number.isFinite(quote.price)?{price:quote.price}:{}),...(Number.isFinite(quote.dailyChange)?{dailyChange:quote.dailyChange}:{}),provenance:{...row.provenance,...(quote.provenance?.price?{price:quote.provenance.price}:{}),...(quote.provenance?.dailyChange?{dailyChange:quote.provenance.dailyChange}:{})}}});
+ }
  const refresh=useCallback(async(append=false)=>{
   listRequest.current?.abort();const controller=new AbortController();listRequest.current=controller;loadingRequest.current=true;
   const {view,search}=lastView.current,offset=append?cursor.current:0,version=favoriteVersion.current;
   try{
    const payload=await request<RadarData>(`/api/radar?strategy=${view}&q=${encodeURIComponent(search)}&limit=40&offset=${offset}`,{signal:controller.signal});
    if(controller.signal.aborted)return;
-   setData(payload);if(version===favoriteVersion.current&&!favoritePending.current)setFavorites(payload.favorites);setPortfolioCount(payload.portfolioCount??0);setHasMore(payload.page.hasMore);cursor.current=offset+payload.snapshots.length;setError('');
-   setRows(old=>append?[...old,...payload.snapshots.filter(s=>!old.some(p=>p.symbol===s.symbol))]:payload.snapshots);
+   let snapshots=payload.snapshots;
+   if(view==='favorites'&&snapshots.length){
+    try{const quotePayload=await request<{quotes:Record<string,{price?:number;dailyChange?:number;provenance?:Snapshot['provenance']}>}>(`/api/favorite-quotes?symbols=${encodeURIComponent(snapshots.map(s=>s.symbol).join(','))}`,{signal:controller.signal});snapshots=mergeCardQuotes(snapshots,quotePayload.quotes)}catch(error){if(controller.signal.aborted)return;setNotice(error instanceof Error?error.message:'تعذّر تحديث أسعار المفضلة؛ عُرضت آخر لقطة محفوظة.');}
+   }
+   setData(payload);if(version===favoriteVersion.current&&!favoritePending.current)setFavorites(payload.favorites);setPortfolioCount(payload.portfolioCount??0);setHasMore(payload.page.hasMore);cursor.current=offset+snapshots.length;setError('');
+   setRows(old=>append?[...old,...snapshots.filter(s=>!old.some(p=>p.symbol===s.symbol))]:snapshots);
    void saveOffline({savedAt:new Date().toISOString(),run:payload.dataRun,snapshots:payload.snapshots}).catch(()=>{});
   }catch(e){if(!controller.signal.aborted)setError(e instanceof Error?e.message:'تعذّر تحميل البيانات');}
   finally{if(!controller.signal.aborted){setLoading(false);loadingRequest.current=false;}}
