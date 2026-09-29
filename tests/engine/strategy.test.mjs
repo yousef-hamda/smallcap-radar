@@ -30,6 +30,12 @@ test('financial freshness uses filing availability while bounding the reporting 
  const ancientPeriod={...recentFiling,periodEnd:'2024-01-01'};
  assert.equal(gate({...base,provenance:{...base.provenance,revenue:ancientPeriod}},'filingFreshness'),'UNKNOWN');
 });
+test('price freshness counts market weekdays instead of weekend calendar days',()=>{
+ const friday={...base.provenance.price,availableAt:'2026-09-25T21:00:00Z'};
+ assert.equal(gate({...base,asOf:'2026-09-29T00:00:00Z',provenance:{...base.provenance,price:friday}},'freshness'),'PASS');
+ const prior={...friday,availableAt:'2026-09-21T21:00:00Z'};
+ assert.equal(gate({...base,asOf:'2026-09-29T00:00:00Z',provenance:{...base.provenance,price:prior}},'freshness'),'UNKNOWN');
+});
 test('Core thesis conditions are gates and score cannot rescue a failure',()=>{const r=evaluateStrategy('core',{...base,confidence:'B',revenue:0});assert.equal(r.checks.find(c=>c.id==='revenue').role,'eligibility');assert.equal(r.checks.find(c=>c.id==='revenue').status,'FAIL');assert.equal(r.factorStatus,'FAIL');assert.equal(r.qualified,false);assert.equal(r.status,'FAIL');assert(r.score>=0&&r.score<=100);assert.equal(r.screeningQualified,false);assert.equal(r.finalRanked,false)});
 test('declared cap and liquidity universe limits are eligibility gates',()=>{
  const core=evaluateStrategy('core',{...base,marketCap:2e9+1});assert.equal(core.checks.find(c=>c.id==='cap').role,'eligibility');assert.equal(core.status,'FAIL');assert.equal(core.qualified,false);

@@ -10,6 +10,20 @@ export type CheckRole='eligibility'|'factor'|'evidence';
 export type Check={id:string;label:string;status:Status;role:CheckRole;explanation:string};
 export type Factor={id:string;label:string;maxPoints:number;points:number;available:boolean;availableWeight?:number;rawValue:number|null;explanation:string};
 const finite=(n:unknown):n is number=>typeof n==='number'&&Number.isFinite(n);
+function marketWeekdayAge(availableAt:string,asOf:string){
+ const start=Date.parse(availableAt),end=Date.parse(asOf);
+ if(!Number.isFinite(start)||!Number.isFinite(end)||end<start)return Number.POSITIVE_INFINITY;
+ const from=new Date(start),to=new Date(end);
+ let cursor=new Date(Date.UTC(from.getUTCFullYear(),from.getUTCMonth(),from.getUTCDate()));
+ const final=Date.UTC(to.getUTCFullYear(),to.getUTCMonth(),to.getUTCDate());
+ let age=0;
+ while(cursor.getTime()<final){
+  cursor=new Date(cursor.getTime()+86_400_000);
+  const day=cursor.getUTCDay();
+  if(day!==0&&day!==6)age++;
+ }
+ return age;
+}
 const clamp=(n:number,min=0,max=1)=>Math.max(min,Math.min(max,n));
 const scale=(value:number|null|undefined,min:number,max:number)=>finite(value)?clamp((value-min)/(max-min)):null;
 function coreFactors(s:Snapshot):Factor[]{
@@ -108,7 +122,7 @@ export function evaluateStrategy(strategy:keyof typeof SPECS,s:Snapshot){
  const criticalValues:Record<string,unknown>={price:s.price,marketCap:s.marketCap,medianDollarVolume20d:s.medianDollarVolume20d};
  const criticalReady=critical.every(k=>finite(criticalValues[k])&&Number(criticalValues[k])>0&&usableEvidence(s.provenance[k],s.asOf));
  add('criticalData','أدلة الأهلية الحرجة',criticalReady?true:null,'السعر والقيمة السوقية والسيولة تحتاج قيمًا موجبة ومصادر مؤرخة صالحة قبل إدخال السهم في الكون القابل للتصنيف.');
- const quote=s.provenance.price;add('freshness','حداثة بيانات السعر',usableEvidence(quote,s.asOf)&&Date.parse(s.asOf)-Date.parse(quote.availableAt)<=SPECS.core.freshnessDays*864e5?true:null,`السعر الأقدم من ${SPECS.core.freshnessDays} أيام يحتاج تحديثًا؛ حد تشغيلي محافظ غير مختبر.`);
+ const quote=s.provenance.price;add('freshness','حداثة بيانات السعر',usableEvidence(quote,s.asOf)&&marketWeekdayAge(quote.availableAt,s.asOf)<=SPECS.core.freshnessDays?true:null,`السعر الأقدم من ${SPECS.core.freshnessDays} جلسات تداول يحتاج تحديثًا؛ عطلات نهاية الأسبوع لا تُحسب كجلسات.`);
  const financial=s.provenance.revenue;
  if(strategy!=='bounce'){
   const availableAge=financial&&Number.isFinite(Date.parse(financial.availableAt))?Date.parse(s.asOf)-Date.parse(financial.availableAt):Number.POSITIVE_INFINITY;
