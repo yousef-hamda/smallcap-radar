@@ -1,6 +1,6 @@
 # Project memory — Small-Cap Radar
 
-Last verified: 2026-09-26. This is the repository-owned memory for future maintainers; historical research notes in `docs/` may describe older releases. The deep audit and changes from this date are in `docs/DEEP_IMPROVEMENT_PLAN_2026_09_21_AR.md`, `docs/DEEP_IMPROVEMENT_PLAN_2026_09_21_V2_AR.md`, and `docs/RESOURCE_COST_AND_PORTFOLIO_LAYOUT_PLAN_2026_09_26.md`.
+Last verified: 2026-09-29. This is the repository-owned memory for future maintainers; historical research notes in `docs/` may describe older releases. The deep audit and changes from this date are in `docs/DEEP_IMPROVEMENT_PLAN_2026_09_21_AR.md`, `docs/DEEP_IMPROVEMENT_PLAN_2026_09_21_V2_AR.md`, and `docs/RESOURCE_COST_AND_PORTFOLIO_LAYOUT_PLAN_2026_09_26.md`.
 
 ## Product and source of truth
 
@@ -49,3 +49,10 @@ See `docs/OPERATIONS_MEMORY.md` for deployment/storage details and `HANDOFF.md` 
 - Standard SEC cost-of-revenue tags now derive gross margin; standard remaining-performance-obligation and contract-liability tags now populate contracted backlog when disclosed. SEC filing metadata fills the news/event list when Yahoo RSS is empty.
 - When live SEC Company Facts is rejected, the deep profile now recovers covered issuers from the bundled official SEC Frames release with low-confidence dated provenance instead of leaving all financial fields blank.
 - The complete source matrix, limitations, and acceptance gates are in `docs/FREE_DATA_COVERAGE_AND_PROVIDER_PLAN_2026_09_29.md`.
+
+## 2026-09-29 favorite card quote consistency
+
+- Favorite cards no longer rely only on the payload captured when a symbol was saved. The UI refreshes visible favorites through `/api/favorite-quotes`, and `lib/storage.ts` also reconciles favorites with the newest completed scan row when one exists.
+- The quote refresh uses the same `completedSessionQuote` calculation as the deep company profile: last completed close divided by the previous completed close minus one. It never uses Yahoo's live session movement for the card's “last session” field.
+- Opening a profile synchronizes its completed-session quote back into the visible card immediately. Category rendering has a defensive client filter so rejected or unknown rows cannot reappear in Core or Bounce from stale state.
+- Verified deployment: Railway `ce2c602a-a12c-4470-8403-60e1ca3a381c`, commit `7ec7106`. Production returned completed-session provenance for ADBE, GRAB, ASO, ALGN, PGY, and AMSC; category pages returned zero non-qualified rows.

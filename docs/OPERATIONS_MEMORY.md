@@ -1,6 +1,6 @@
 # Operations memory — Railway
 
-Last verified: 2026-09-26. Keep this file free of credentials and private recovery links.
+Last verified: 2026-09-29. Keep this file free of credentials and private recovery links.
 
 ## Live configuration
 
@@ -9,7 +9,7 @@ Last verified: 2026-09-26. Keep this file free of credentials and private recove
 - Persistent Railway web-service volume: `smallcap-radar-volume`, mounted at `/app/data`. The Vite Cloudflare plugin stores local D1/Miniflare state under `${RAILWAY_VOLUME_MOUNT_PATH}/state` (currently `/app/data/state`). The Railway Postgres service is separate and unused by the app.
 - Never mount the volume at `/app/.wrangler`: it hides the build's `.wrangler/deploy/config.json` and causes startup `ENOENT`/502. This was the deployment incident fixed on 2026-09-21.
 - `npm run build` uses the Linux verified Vinext build script; `npm start` runs Vite preview on Railway's `PORT`. `npm run typecheck`, `npm run lint`, `npm run test:engine`, `npm run test:runtime`, and `node --test tests/*.test.mjs` are the relevant checks.
-- Railway production currently has one active replica, no cron schedule, and the latest deployment is commit `9a7ecbb`, which includes the resource optimization and flat heatmap rewrite. The detailed cost plan is `docs/RESOURCE_COST_AND_PORTFOLIO_LAYOUT_PLAN_2026_09_26.md`.
+- Railway production currently has one active replica, no cron schedule, and the latest verified deployment is `ce2c602a-a12c-4470-8403-60e1ca3a381c` from commit `7ec7106`. The detailed cost plan is `docs/RESOURCE_COST_AND_PORTFOLIO_LAYOUT_PLAN_2026_09_26.md`.
 
 ## Safe checks
 
@@ -35,6 +35,13 @@ Last verified: 2026-09-26. Keep this file free of credentials and private recove
 - The Cboe endpoint is independently reachable without authentication and is used only after Yahoo chart failure for profile history. It is delayed and does not replace SEC filing evidence.
 - A live SEC 403 is recoverable for covered scan issuers through the bundled official SEC Frames release; the profile records both the live failure and the dated fallback source.
 - Run `npm run typecheck`, `npm run test:engine`, `npm run test:runtime`, `npm run lint`, and `npm run build` before deployment. The coverage-specific test cases are in `tests/engine/strategy.test.mjs`.
+
+### Favorite quote verification (2026-09-29)
+
+- Favorites can contain companies outside the small-cap scan universe. Their cards use `/api/favorite-quotes`, which refreshes the last two completed daily closes through the same `completedSessionQuote` contract used by `/api/company`.
+- Favorite quote responses are cached in `raw_cache` for five minutes and fetched in groups of six symbols, keeping refresh work bounded while preventing old saved favorite payloads from being presented as current.
+- Production smoke verification returned completed-session tags for ADBE, GRAB, ASO, ALGN, PGY, and AMSC. The same deployment returned only PASS/screening-qualified rows from both Bounce and Core category endpoints.
+- GitHub push alone did not trigger Railway in this environment. The verified release was deployed directly with Railway CLI; always check `railway deployment list` and the public endpoints after pushing.
 
 ## Migration guardrails
 
