@@ -104,10 +104,17 @@ export default function RadarApp(){
   setAccountBusy(true);setError('');
   try{await request('/api/account',post({action:'logout'}));setAccount(null);setAccountRevision(version=>version+1);await refresh();setNotice('تم تسجيل الخروج.')}catch(error){setError(error instanceof Error?error.message:'تعذّر تسجيل الخروج.')}finally{setAccountBusy(false)}
  }
+ function syncCardQuote(profile:Snapshot){
+  setRows(current=>current.map(row=>row.symbol!==profile.symbol?row:{...row,
+   ...(Number.isFinite(profile.price)?{price:profile.price}:{}),
+   ...(Number.isFinite(profile.dailyChange)?{dailyChange:profile.dailyChange}:{}),
+   provenance:{...row.provenance,...(profile.provenance.price?{price:profile.provenance.price}:{}),...(profile.provenance.dailyChange?{dailyChange:profile.provenance.dailyChange}:{})}
+  }));
+ }
  async function openCompany(s:Snapshot,baseline:ReturnType<typeof evaluateStrategy>|null=evaluateStrategy(strategy,s)){
   selection.current?.abort();const controller=new AbortController();selection.current=controller;
   setSelected(s);setSelectedEvaluation(baseline);setDetailLoading(true);setDetailError('');
-  try{const p=await request<{snapshot:Snapshot}>(`/api/company?symbol=${encodeURIComponent(s.symbol)}`,{signal:controller.signal});if(!controller.signal.aborted)setSelected(p.snapshot)}
+  try{const p=await request<{snapshot:Snapshot}>(`/api/company?symbol=${encodeURIComponent(s.symbol)}`,{signal:controller.signal});if(!controller.signal.aborted){syncCardQuote(p.snapshot);setSelected(p.snapshot)}}
   catch(e){if(!controller.signal.aborted)setDetailError(e instanceof Error?e.message:'تعذّر تحديث الملف')}
   finally{if(!controller.signal.aborted)setDetailLoading(false)}
  }
@@ -119,7 +126,7 @@ export default function RadarApp(){
   const found=rows.find(s=>s.symbol===query.trim().toUpperCase());if(found){await openCompany(found);return;}
   selection.current?.abort();const controller=new AbortController();selection.current=controller;
   setBusy(true);setError('');
-  try{const p=await request<{snapshot:Snapshot}>(`/api/company?symbol=${encodeURIComponent(query.trim().toUpperCase())}`,{signal:controller.signal});if(!controller.signal.aborted){setSelected(p.snapshot);setDetailError('');setDetailLoading(false);}}
+  try{const p=await request<{snapshot:Snapshot}>(`/api/company?symbol=${encodeURIComponent(query.trim().toUpperCase())}`,{signal:controller.signal});if(!controller.signal.aborted){syncCardQuote(p.snapshot);setSelected(p.snapshot);setDetailError('');setDetailLoading(false);}}
   catch(e){if(!controller.signal.aborted)setError(e instanceof Error?e.message:'لا توجد بيانات لهذا الرمز')}finally{setBusy(false)}
  }
  async function notifications(testOnly=false){

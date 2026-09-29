@@ -227,6 +227,12 @@ test('radar category rendering keeps rejected and unknown rows out of the visibl
  assert.match(source,/visibleEvaluated\.length\} نتيجة معروضة/);
 });
 
+test('opening a profile synchronizes its completed-session quote back into the visible card',async()=>{
+ const source=await readFile(path.join(root,'app/page.tsx'),'utf8');
+ assert.match(source,/function syncCardQuote\(profile:Snapshot\)/);
+ assert.match(source,/syncCardQuote\(p\.snapshot\);setSelected\(p\.snapshot\)/);
+});
+
 test('screen refresh work is bounded while manual refresh remains available',async()=>{
  const [radar,portfolio]=await Promise.all([readFile(path.join(root,'app/page.tsx'),'utf8'),readFile(path.join(root,'app/portfolio-view.tsx'),'utf8')]);
  assert.match(radar,/if\(view==='portfolio'\)return/);
