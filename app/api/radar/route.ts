@@ -26,7 +26,14 @@ export async function GET(req:Request){
   const response=json(await readState({strategy:activeStrategy,opportunityState,owner:identity.owner,query:url.searchParams.get('q')||'',limit:Number.isFinite(limit)?limit:40,offset:Number.isFinite(offset)?offset:0}));
   if(identity.cookie)response.headers.set('Set-Cookie',identity.cookie);
   return response;
- }catch{return json({error:'تعذّر قراءة قاعدة البيانات'},503)}
+ }catch(error){
+  // Keep the public error generic while leaving a bounded, data-free reason in
+  // Railway logs. This distinguishes a database outage from query/schema
+  // regression without logging request parameters or stored portfolio data.
+  const detail=error instanceof Error?{name:error.name,message:error.message.slice(0,240)}:{name:'UnknownError',message:'Non-Error exception'};
+  console.error('[radar:read] request failed',detail);
+  return json({error:'تعذّر قراءة قاعدة البيانات'},503);
+ }
 }
 export async function POST(req:Request){
  try {
