@@ -486,3 +486,13 @@ test('unified opportunity pages keep incomplete companies in research and never 
  const all=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:10});assert.equal(all.snapshots.length,3);assert(all.snapshots.some(s=>s.symbol==='RANK-FAIL'));
  assert.deepEqual([...first.snapshots,...second.snapshots].map(s=>s.symbol),all.snapshots.map(s=>s.symbol));
 });
+
+test('radar pages refresh cached completed-session quotes without exceeding D1 bind limits',async()=>{
+ const now='2101-01-01T00:00:00.000Z',symbols=Array.from({length:20},(_,index)=>`PAGE${index}`);
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES('large-radar-page',? ,?,'complete','Bulk Quotes/SEC Frames v10 · full',20,20,13,?)").bind(now,now,currentHash()).run();
+ for(const symbol of symbols)await insertSnapshot('large-radar-page',{...base,symbol,name:`Synthetic ${symbol}`}).run();
+ const quote={price:17,dailyChange:.125,provenance:{price:{source:'test',periodEnd:'2026-09-30',tag:'last completed session close'},dailyChange:{source:'test',periodEnd:'2026-09-30',tag:'previous completed close'}}};
+ await db().prepare('INSERT INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind('deep:v11:PAGE0','test',now,JSON.stringify({...quote,symbol:'PAGE0'})).run();
+ const result=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:20});
+ assert.equal(result.snapshots.length,20);assert.equal(result.snapshots.find(snapshot=>snapshot.symbol==='PAGE0').dailyChange,.125);assert.equal(result.snapshots.find(snapshot=>snapshot.symbol==='PAGE0').price,17);
+});

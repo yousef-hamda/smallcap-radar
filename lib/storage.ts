@@ -160,10 +160,14 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
  // scan's live quote percentage cannot disagree with the profile the user just
  // opened. This is a read-time bridge; the next full scan persists the same
  // values in the durable row.
- const deepKeys=pageRows.flatMap((row:any)=>{try{const symbol=String(JSON.parse(row.payload).symbol);return [`deep:${secUserAgentCacheVersion()}:${symbol}`,`deep:v21:${symbol}`,`deep:v20:${symbol}`,`deep:v19:${symbol}`,`deep:v18:${symbol}`,`deep:v17:${symbol}`,`deep:v16:${symbol}`,`deep:v15:${symbol}`,`deep:v14:${symbol}`,`deep:v13:${symbol}`,`deep:v12:${symbol}`,`deep:v11:${symbol}`,`deep:v10:${symbol}`,`deep:v9:${symbol}`,`deep:v8:${symbol}`]}catch{return []}});
+ const deepSymbols=[...new Set(pageRows.flatMap((row:any)=>{try{return [String(JSON.parse(row.payload).symbol)]}catch{return []}}))];
  const deepSessionBySymbol=new Map<string,any>();
- if(deepKeys.length){
-  const deepRows=(await d.prepare(`SELECT key,payload FROM raw_cache WHERE key IN (${deepKeys.map(()=>'?').join(',')}) ORDER BY key ASC`).bind(...deepKeys).all()).results as any[];
+ if(deepSymbols.length){
+  // Use one JSON parameter instead of one SQL bind per cache generation and
+  // symbol. The old 15 * page-size IN list exceeded D1's variable limit on
+  // ordinary 10+ row pages. Keep the suffix delimiter check so e.g. ABC
+  // cannot match a cached symbol ABCD.
+  const deepRows=(await d.prepare(`SELECT key,payload FROM raw_cache WHERE key LIKE 'deep:%' AND EXISTS (SELECT 1 FROM json_each(?) AS requested WHERE substr(raw_cache.key,length(raw_cache.key)-length(requested.value)+1)=requested.value AND substr(raw_cache.key,length(raw_cache.key)-length(requested.value),1)=':') ORDER BY key ASC`).bind(JSON.stringify(deepSymbols)).all()).results as any[];
   for(const row of deepRows){try{const snapshot=JSON.parse(String(row.payload));const tag=String(snapshot?.provenance?.dailyChange?.tag||'');if(snapshot?.symbol&&Number.isFinite(snapshot.dailyChange)&&(tag.includes('previous close')||tag.includes('previous completed close'))){const existing=deepSessionBySymbol.get(snapshot.symbol);const priority=(key:string)=>key.startsWith(`deep:${secUserAgentCacheVersion()}:`)?15:key.startsWith('deep:v21:')?14:key.startsWith('deep:v20:')?13:key.startsWith('deep:v19:')?12:key.startsWith('deep:v18:')?11:key.startsWith('deep:v17:')?10:key.startsWith('deep:v16:')?9:key.startsWith('deep:v15:')?8:key.startsWith('deep:v14:')?7:key.startsWith('deep:v13:')?6:key.startsWith('deep:v12:')?5:key.startsWith('deep:v11:')?4:key.startsWith('deep:v10:')?3:key.startsWith('deep:v9:')?2:1;if(!existing||priority(String(row.key))>priority(existing.key))deepSessionBySymbol.set(snapshot.symbol,{snapshot,key:String(row.key)})}}catch{/* ignore malformed optional cache */}}
  }
  const compact=(payload:string)=>{const parsed=JSON.parse(payload);const deep=deepSessionBySymbol.get(parsed.symbol)?.snapshot;if(deep&&Number.isFinite(deep.dailyChange)&&deep.provenance?.dailyChange){parsed.dailyChange=deep.dailyChange;if(Number.isFinite(deep.price))parsed.price=deep.price;parsed.provenance={...parsed.provenance,price:deep.provenance.price??parsed.provenance?.price,dailyChange:deep.provenance.dailyChange};}delete parsed.history;return parsed};
