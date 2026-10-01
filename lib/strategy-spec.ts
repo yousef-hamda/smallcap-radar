@@ -113,8 +113,6 @@ export const INVESTABLE_EXCHANGES = [
   'Nasdaq', 'NYSE', 'NYSE American', 'NASDAQ', 'NMS', 'NGM', 'NCM', 'NYQ', 'ASE',
 ] as const;
 
-export const NON_TRADABLE_NAME = /\b(etf|fund|trust|warrant|right|unit|preferred|depositary|senior note|bond|debenture|limited partnership)\b|(?:,\s*)?L\.?P\.?\b/i;
-
 export const specHash = (strategy: StrategyKey) => {
   let hash = 2166136261;
   for (const character of JSON.stringify(SPECS[strategy])) {

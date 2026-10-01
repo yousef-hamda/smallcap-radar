@@ -1,7 +1,8 @@
 import { db, ensureSchema } from './storage';
 import { companyBySymbol, yahooBulkQuotes, type Company } from './providers';
-import { evaluateStrategy, type Snapshot } from './engine';
+import { type Snapshot } from './engine';
 import { calculatePortfolio, type PortfolioQuote, type PortfolioTransaction } from './portfolio';
+import { secUserAgentCacheVersion } from './sec-user-agent';
 
 type PortfolioResult={transactions:PortfolioTransaction[];quotes:Record<string,PortfolioQuote>;[key:string]:unknown};
 const portfolioCache=new Map<string,{expiresAt:number;value:PortfolioResult}>();
@@ -51,7 +52,7 @@ async function snapshotMap(symbols: string[]) {
   for (const row of latestRows) {
     try { snapshots.set(String(row.symbol), JSON.parse(String(row.payload))); } catch { /* corrupted cache is ignored */ }
   }
-  const keys = symbols.flatMap(symbol => [`deep:v9:${symbol}`, `deep:v8:${symbol}`, `deep:v7:${symbol}`, `deep:v6:${symbol}`, `deep:v5:${symbol}`, `deep:v4:${symbol}`]);
+  const keys = symbols.flatMap(symbol => [`deep:${secUserAgentCacheVersion()}:${symbol}`, `deep:v21:${symbol}`, `deep:v20:${symbol}`, `deep:v19:${symbol}`, `deep:v18:${symbol}`, `deep:v17:${symbol}`, `deep:v16:${symbol}`, `deep:v15:${symbol}`, `deep:v14:${symbol}`, `deep:v13:${symbol}`, `deep:v12:${symbol}`, `deep:v11:${symbol}`, `deep:v10:${symbol}`, `deep:v9:${symbol}`, `deep:v8:${symbol}`, `deep:v7:${symbol}`, `deep:v6:${symbol}`, `deep:v5:${symbol}`, `deep:v4:${symbol}`]);
   const deepRows = (await db().prepare(`SELECT key,payload,retrieved_at FROM raw_cache WHERE key IN (${placeholders(keys.length)}) ORDER BY retrieved_at ASC`).bind(...keys).all()).results as any[];
   for (const row of deepRows) {
     try {
@@ -99,8 +100,6 @@ export async function readPortfolioQuotes(symbols: string[], options: { forceRef
     const company = companyBySymbol(symbol);
     const live = liveQuotes.get(symbol);
     const snapshot = snapshots.get(symbol);
-    const core = snapshot ? evaluateStrategy('core', snapshot) : null;
-    const bounce = snapshot ? evaluateStrategy('bounce', snapshot) : null;
     const price = live?.price != null && Number.isFinite(live.price) && live.price > 0
       ? live.price
       : snapshot?.price != null && Number.isFinite(snapshot.price) && snapshot.price > 0
@@ -117,10 +116,6 @@ export async function readPortfolioQuotes(symbols: string[], options: { forceRef
       sector: live?.sector || snapshot?.sector || company?.sector,
       industry: live?.industry || snapshot?.industry || company?.industry,
       exchange: snapshot?.exchange || company?.exchange,
-      coreScore: core?.score ?? null,
-      coreCoverage: core?.scoreCoverage ?? null,
-      bounceScore: bounce?.score ?? null,
-      bounceCoverage: bounce?.scoreCoverage ?? null,
       snapshot,
     };
   }

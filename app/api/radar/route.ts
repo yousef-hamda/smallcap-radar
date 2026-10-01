@@ -3,6 +3,7 @@ import {sameOrigin,sameSecret,json,body,statusOf} from '@/lib/http';
 import {completeSnapshotSchema,importSchema} from '@/lib/validation';
 import {resolveVisitor} from '@/lib/visitor';
 import {env} from 'cloudflare:workers';
+import {secUserAgentCacheVersion} from '@/lib/sec-user-agent';
 
 const tokenPattern=/^[a-f0-9]{48}$/;
 async function tokenHash(token:string){const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(token));return [...new Uint8Array(bytes)].map(value=>value.toString(16).padStart(2,'0')).join('');}
@@ -16,7 +17,13 @@ export async function GET(req:Request){
    return json({run:row});
   }
   const strategy=url.searchParams.get('strategy'),limit=Number(url.searchParams.get('limit')||40),offset=Number(url.searchParams.get('offset')||0);
-  const response=json(await readState({strategy:strategy==='core'||strategy==='favorites'?strategy:'bounce',owner:identity.owner,query:url.searchParams.get('q')||'',limit:Number.isFinite(limit)?limit:40,offset:Number.isFinite(offset)?offset:0}));
+  const requestedState=url.searchParams.get('state');
+  const opportunityState=requestedState==='ranked'||requestedState==='needs-research'||requestedState==='excluded'||requestedState==='all'?requestedState:'ranked';
+  // Opportunity is the sole active scan category. Older clients that still
+  // send core/bounce are routed to the unified result set during migration;
+  // favorites remains a separate saved-items view.
+  const activeStrategy=strategy==='favorites'?'favorites':'opportunity';
+  const response=json(await readState({strategy:activeStrategy,opportunityState,owner:identity.owner,query:url.searchParams.get('q')||'',limit:Number.isFinite(limit)?limit:40,offset:Number.isFinite(offset)?offset:0}));
   if(identity.cookie)response.headers.set('Set-Cookie',identity.cookie);
   return response;
  }catch{return json({error:'تعذّر قراءة قاعدة البيانات'},503)}
@@ -31,7 +38,7 @@ export async function POST(req:Request){
    else {
     const row=await db().prepare('SELECT payload FROM fundamental_snapshots WHERE symbol=? ORDER BY as_of DESC LIMIT 1').bind(b.symbol).first() as any;
     let cached=row;
-    for(const version of ['v9','v8','v7','v6','v5','v4']){
+    for(const version of [secUserAgentCacheVersion(),'v21','v20','v19','v18','v17','v16','v15','v14','v13','v12','v11','v10','v9','v8','v7','v6','v5','v4']){
      if(cached)break;
      cached=await db().prepare('SELECT payload FROM raw_cache WHERE key=?').bind(`deep:${version}:${b.symbol}`).first() as any;
     }

@@ -1,8 +1,7 @@
 import { currentHash, db, ensureSchema, insertSnapshot, log } from './storage';
-import { companySnapshot, consumeProviderIssues, historicalMarketData, quickSymbols, universe,yahooBulkQuotes } from './providers';
+import { companySnapshot, consumeProviderIssues, enrichSnapshotsWithSecOpportunity, historicalMarketData, quickSymbols, universe,yahooBulkQuotes } from './providers';
 import { fetchBulkFundamentals, fetchCompanyFactsFallback, needsCompanyFacts, preliminarySnapshot, type BulkFundamentals } from './bulk';
-import { bounceHistoryMetrics, completedSessionQuote, reviewShareSplits } from './research';
-import { NON_TRADABLE_NAME, SPECS } from './strategy-spec';
+import { opportunityHistoryMetrics, completedSessionQuote, reviewShareSplits } from './research';
 import { applyFinancingRisk } from './financing-risk';
 
 const BATCH_SIZE = 1;
@@ -10,7 +9,8 @@ const HISTORY_BATCH_SIZE = 18;
 const PROVIDER_CONCURRENCY = 6;
 const SCORE_BATCH_SIZE = 200;
 const COMPANY_FACTS_BATCH_SIZE = 12;
-export const SCAN_SOURCE_VERSION = 'Bulk Quotes/SEC Frames + Company Facts v11';
+const OPPORTUNITY_BATCH_SIZE = 8;
+export const SCAN_SOURCE_VERSION = 'Bulk Quotes/SEC Frames + Opportunity SEC v12';
 const UNIVERSE_PAGE=1000;
 async function saveUniverse(runId:string,companies:any[],kind='candidates'){
  const statements=[];
@@ -21,36 +21,31 @@ async function universePage(runId:string,kind:string,index:number){const row=awa
 async function runCompanies(run:any){
  if(run.universe!=='paged-v1')return JSON.parse(run.universe||'[]');
  if(run.stage===4){const row=await db().prepare('SELECT payload FROM raw_cache WHERE key=?').bind(`universe:${run.id}:ciks`).first() as any;return JSON.parse(row?.payload||'[]').map((cik:number)=>({cik}));}
- const count=run.stage===9?SCORE_BATCH_SIZE:run.stage===5?COMPANY_FACTS_BATCH_SIZE:run.source.includes('quick')?BATCH_SIZE:HISTORY_BATCH_SIZE;
- const kind=run.stage===10?'history':'candidates';
+ const count=run.stage===9?SCORE_BATCH_SIZE:run.stage===5?COMPANY_FACTS_BATCH_SIZE:run.stage===11?OPPORTUNITY_BATCH_SIZE:run.source.includes('quick')?BATCH_SIZE:HISTORY_BATCH_SIZE;
+ const kind=run.stage===10?'history':run.stage===11?'opportunity':'candidates';
  const companies:any[]=[];
  const start=Math.floor(run.offset/UNIVERSE_PAGE),end=Math.floor(Math.min(run.total-1,run.offset+count-1)/UNIVERSE_PAGE);
  for(let index=start;index<=end;index++){const page=await universePage(run.id,kind,index);for(let j=0;j<page.length;j++)companies[index*UNIVERSE_PAGE+j]=page[j];}
  return companies;
 }
 
-function preliminaryCandidates(companies: any[]) {
+export function preliminaryCandidates(companies: any[]) {
   return companies.filter((company) => {
-    if (NON_TRADABLE_NAME.test(String(company.name || ''))) return false;
-    const marketCap = Number(company.marketCap);
-    const price = Number(company.price);
-    return Number.isFinite(marketCap) && marketCap >= SPECS.core.marketCap.min && marketCap <= SPECS.core.marketCap.max && Number.isFinite(price) && price > 0;
+    // Do not erase a listed issuer because the quote provider omitted a price
+    // or market cap. Keep it in the audit/research set; the Opportunity
+    // evaluator will leave its safety status UNKNOWN until verified evidence
+    // arrives. Identity, rather than a retired strategy's cap/price bands,
+    // defines scan inclusion.
+    return typeof company.ticker === 'string' && company.ticker.trim().length > 0
+      && Number.isInteger(Number(company.cik)) && Number(company.cik) > 0;
   });
 }
 
-export function bounceHistoryCandidate(snapshot: any) {
-  if (snapshot?.securityType !== 'common' || Number(snapshot.marketCap) < SPECS.bounce.marketCap.min || Number(snapshot.marketCap) > SPECS.bounce.marketCap.max || Number(snapshot.price) <= 0) return false;
-  // Return, low and MA30W are weighted factors, not rejection filters. Every
-  // in-range common share gets the historical evidence needed to score it.
-  return true;
-}
-
 export function historyCandidate(snapshot: any) {
-  if (bounceHistoryCandidate(snapshot)) return true;
-  if (snapshot?.securityType !== 'common' || Number(snapshot.marketCap) < SPECS.core.marketCap.min || Number(snapshot.marketCap) > SPECS.core.marketCap.max || Number(snapshot.price) <= 0) return false;
-  // Core entry economics are weighted. Fetch history for every in-range
-  // common share so the Entry Point factor and audit trail are comparable.
-  return true;
+  // Fetch history for every listed scan candidate, including rows whose exact
+  // security class is unresolved. Data acquisition must not silently narrow
+  // the universe; the evaluator controls eligibility after identity review.
+  return typeof snapshot?.symbol === 'string' && !!snapshot.symbol.trim();
 }
 
 export const publicRun = (run: any) => ({
@@ -212,7 +207,7 @@ export async function processScanBatch(runId: string) {
     const done = offset >= run.total;
     // A full run needs one additional, bounded history pass before it is
     // complete. The bulk snapshot intentionally does not pretend to contain
-    // MA30W, so Bounce is enriched from real historical bars afterwards.
+    // long-history indicators, so eligible common shares are enriched with bars.
     if(!done)writes.push(database.prepare("UPDATE strategy_runs SET offset=?,processed=?,stage=9,status='running',updated_at=?,lease_until=0 WHERE id=?").bind(offset,offset,now,run.id));
     for (let index = 0; index < writes.length; index += 75) await database.batch(writes.slice(index, index + 75));
     if(done){
@@ -252,7 +247,7 @@ export async function processScanBatch(runId: string) {
         const historical:Awaited<ReturnType<typeof historicalMarketData>>=cached&&Date.parse(now)-Date.parse(cached.retrieved_at)<24*60*60_000?JSON.parse(cached.payload):await historicalMarketData(company.ticker, now, 550);
         if(!cached||cached.retrieved_at!==historical.retrievedAt)await database.prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(cacheKey,historical.source,historical.retrievedAt,JSON.stringify(historical)).run();
         const history = historical.history.filter((bar): bar is typeof bar & { close: number } => Number.isFinite(bar.close));
-        const metrics = bounceHistoryMetrics(history, now);
+        const metrics = opportunityHistoryMetrics(history, now);
         // The historical observations were retrieved after the bulk row was
         // created; advance the snapshot timestamp so provenance/freshness do
         // not incorrectly label these newer facts as future data.
@@ -311,10 +306,87 @@ export async function processScanBatch(runId: string) {
     const offset = retrying?run.offset:run.offset + entries.length;
     const done = offset >= run.total && remaining.length===0;
     const totalFailed = retrying?Math.max(0,Number(run.failed||0)-(entries.length-historyFailed)):Number(run.failed||0)+historyFailed;
-    writes.push(database.prepare('UPDATE strategy_runs SET offset=?,processed=total,stage=?,status=?,failed=?,error=?,updated_at=?,lease_until=0,retry_queue=? WHERE id=?').bind(offset, done ? 13 : 10, done ? (totalFailed||run.sec_failed ? 'partial' : 'complete') : 'running', totalFailed, totalFailed ? `تعذّر جلب التاريخ لـ${totalFailed} شركة؛ محاولات متبقية ${remaining.length}` : run.sec_failed?run.error:null, now,JSON.stringify(remaining), run.id));
-    await database.batch(writes);
+    if(done){
+      await database.batch(writes);
+      const savedRows=(await database.prepare('SELECT symbol,payload FROM fundamental_snapshots WHERE run_id=?').bind(run.id).all()).results as any[];
+      const historyUniverse:any[]=[];
+      for(let page=0;page<Math.ceil(run.total/UNIVERSE_PAGE);page++)historyUniverse.push(...await universePage(run.id,'history',page));
+      const companyBySymbol = new Map<string, any>(historyUniverse.map((company:any)=>[company.ticker,company]));
+      const researchByCik = new Map<number, { cik: number; ticker: string; tickers: string[] }>();
+      let researchListingCount = 0;
+      for (const row of savedRows) {
+        const snapshot = JSON.parse(row.payload);
+        const company = companyBySymbol.get(row.symbol);
+        const issuerLinkedListing = Number.isSafeInteger(Number(snapshot.cik)) && Number(snapshot.cik) > 0;
+        // Attempt issuer-level financial acquisition before market-data safety
+        // screening. Missing quotes/capitalization and low liquidity should
+        // block ranking, not silently suppress filing research.
+        if (!issuerLinkedListing || !company) continue;
+        researchListingCount++;
+        const cik = Number(snapshot.cik);
+        const issuer: { cik: number; ticker: string; tickers: string[] } = researchByCik.get(cik) ?? { cik, ticker: company.ticker, tickers: [] };
+        issuer.tickers.push(company.ticker);
+        researchByCik.set(cik, issuer);
+      }
+      const researchQueue = [...researchByCik.values()]
+        .map(issuer => ({ cik: issuer.cik, tickers: issuer.tickers.sort() }))
+        .map(issuer => ({ ...issuer, ticker: issuer.tickers[0] }))
+        .sort((a, b) => a.cik - b.cik);
+      await saveUniverse(run.id,researchQueue,'opportunity');
+      await database.prepare("UPDATE strategy_runs SET total=?,offset=0,processed=0,failed=?,stage=11,status='running',error=NULL,updated_at=?,lease_until=0,retry_queue='[]' WHERE id=?").bind(researchQueue.length,totalFailed,now,run.id).run();
+      await log(run.id,'opportunity-sec',`SEC issuer-research queue: ${researchQueue.length} distinct CIKs covering ${researchListingCount} CIK-linked common-stock listings; market price, capitalization, and liquidity are evaluated separately and do not suppress financial-data acquisition.`);
+    }else{
+      writes.push(database.prepare("UPDATE strategy_runs SET offset=?,processed=total,stage=10,status='running',failed=?,error=?,updated_at=?,lease_until=0,retry_queue=? WHERE id=?").bind(offset,totalFailed,totalFailed?`تعذّر جلب التاريخ لـ${totalFailed} شركة؛ محاولات متبقية ${remaining.length}`:run.sec_failed?run.error:null,now,JSON.stringify(remaining),run.id));
+      await database.batch(writes);
+    }
     run = await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first();
-    return { run: publicRun(run), done };
+    return { run: publicRun(run), done: false };
+  }
+
+  if (!isQuick && run.stage === 11) {
+    const retrying = run.offset >= run.total;
+    const queue = JSON.parse(run.retry_queue || '[]');
+    const jobs = retrying ? queue.slice(0, OPPORTUNITY_BATCH_SIZE) : companies.slice(run.offset, run.offset + OPPORTUNITY_BATCH_SIZE).map((company:any) => ({company,attempt:0}));
+    const remaining = retrying ? queue.slice(OPPORTUNITY_BATCH_SIZE) : queue;
+    const tickers = [...new Set(jobs.flatMap((job:any)=>job.company.tickers ?? [job.company.ticker]))];
+    const rows = tickers.length ? (await database.prepare(`SELECT symbol,payload FROM fundamental_snapshots WHERE run_id=? AND symbol IN (${tickers.map(()=>'?').join(',')})`).bind(run.id,...tickers).all()).results as any[] : [];
+    const bySymbol = new Map<string,any>(rows.map((row:any)=>[row.symbol,row]));
+    const outcomes:any[]=[];
+    for(let start=0;start<jobs.length;start+=4)outcomes.push(...await Promise.all(jobs.slice(start,start+4).map(async(job:any)=>{
+      const issuerTickers=job.company.tickers ?? [job.company.ticker];
+      const missing=issuerTickers.filter((ticker:string)=>!bySymbol.has(ticker));
+      const snapshots=issuerTickers.map((ticker:string)=>bySymbol.get(ticker)).filter(Boolean).map((row:any)=>JSON.parse(row.payload));
+      if(missing.length||!snapshots.length)return {job,error:`durable scan snapshot is missing for ${missing.slice(0,4).join(', ')||job.company.ticker}`,retryable:false};
+      try{return {job,snapshots,result:await enrichSnapshotsWithSecOpportunity(snapshots)};}
+      catch(error){return {job,snapshots,error:error instanceof Error?error.message:'SEC enrichment failed',retryable:true};}
+    })));
+    const writes:any[]=[];let requests=0,success=0,failed=0,terminalFailed=0;
+    for(const outcome of outcomes){
+      requests+=Number.isFinite(outcome.result?.requests)?Math.max(0,Number(outcome.result.requests)):1;
+      if(outcome.snapshots?.length){
+        // Keep a malformed/mismatched-issuer payload in the saved research
+        // record for diagnosis, but never count it as a successful SEC fetch.
+        // Empty standard-taxonomy coverage is a valid response and is tracked
+        // as retrieval success while the factor itself remains unscored.
+        if(outcome.result?.providerStatus==='retrieved'||outcome.result?.providerStatus==='empty')success++;
+        else {failed++;terminalFailed++;}
+        for(const snapshot of outcome.snapshots)writes.push(insertSnapshot(run.id,snapshot));
+      }else {failed++;terminalFailed++;}
+      const retryable=outcome.result?.retryable===true||outcome.retryable===true;
+      const error=outcome.result?.error||outcome.error;
+      if(retryable&&outcome.job.attempt<2)remaining.push({...outcome.job,attempt:outcome.job.attempt+1});
+      else if(retryable&&outcome.job.attempt>=2)terminalFailed++;
+      if(error)await log(run.id,'opportunity-sec',`${outcome.job.company.ticker}: ${error}`);
+    }
+    const offset=retrying?run.offset:run.offset+jobs.length;
+    const done=offset>=run.total&&remaining.length===0;
+    const exhausted=outcomes.filter(outcome=>(outcome.result?.retryable===true||outcome.retryable===true)&&outcome.job.attempt>=2).length;
+    const totalFailed=Number(run.failed||0)+exhausted;
+    const nextError=done?(totalFailed?`تعذّر تحميل التاريخ لبعض الشركات (${totalFailed}).`:terminalFailed?`تعذّر استكمال بيانات SEC لبعض الشركات (${terminalFailed})؛ راجع تغطية كل شركة.`:null):run.error;
+    writes.push(database.prepare('UPDATE strategy_runs SET offset=?,processed=?,stage=?,status=?,failed=?,sec_requests=COALESCE(sec_requests,0)+?,sec_success=COALESCE(sec_success,0)+?,sec_failed=COALESCE(sec_failed,0)+?,error=?,updated_at=?,lease_until=0,retry_queue=? WHERE id=?').bind(offset,offset,done?13:11,done?(totalFailed||terminalFailed?'partial':'complete'):'running',totalFailed,requests,success,failed,nextError,new Date().toISOString(),JSON.stringify(remaining),run.id));
+    await database.batch(writes);
+    run=await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first();
+    return {run:publicRun(run),done};
   }
 
   const retrying = run.offset >= run.total;

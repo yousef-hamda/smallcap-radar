@@ -1,5 +1,4 @@
-import type { Snapshot, Provenance, InsiderPurchase } from './engine';
-import { NON_TRADABLE_NAME } from './strategy-spec';
+import type { Snapshot, Provenance, InsiderPurchase, SecFilingResearch } from './engine';
 import { completedSessionQuote, ma30Weeks } from './research';
 import { observations, latestInstant, trailingAnnual, provenance, REVENUE_TAGS } from './sec';
 import bundledUniverse from './universe.generated.json';
@@ -8,11 +7,16 @@ import bundledFrames from './sec-frames.generated.json';
 import {enrichFinancials} from './financials';
 import {parseYahooIntraday,type ChartPayload} from './chart-data';
 import {parseOfficialDirectory} from './directory';
+import type {DirectoryCompany} from './directory';
 import { translateSnapshotContent } from './translation';
 import { applyFinancingRisk } from './financing-risk';
 import { derivedEvidence } from './evidence';
+import { buildSecEarningsQualityAssessment, buildSecFinancialStrengthInputs, classifySecCompanyFacts, classifySecIssuerModel } from './sec-opportunity';
+import { buildTechnicalTimingResearch } from './opportunity-market';
+import { secUserAgent } from './sec-user-agent';
+import { convertEarningsPeriodsToUsd, convertFinancialMetricsToUsd, fetchEcbDailySeries, type EcbDailySeries } from './ecb-fx';
 
-export type Company = { cik: number; name: string; ticker: string; exchange: string; price?: number; dailyChange?: number; intradayChange?: number; marketCap?: number; volume?: number; averageVolume10d?: number; return52w?: number; low52w?: number; high52w?: number; ma50d?: number; ma200d?: number; sector?: string; industry?: string; quoteSource?: string; quoteAvailableAt?: string; priceSource?:string; priceAvailableAt?:string; marketCapSource?:string; marketCapAvailableAt?:string };
+export type Company = { cik: number; name: string; ticker: string; exchange: string; securityType?:import('./directory').ListedSecurityType; securityName?:string; directoryUrl?:string; directoryAvailableAt?:string; price?: number; dailyChange?: number; intradayChange?: number; marketCap?: number; volume?: number; averageVolume10d?: number; return52w?: number; low52w?: number; high52w?: number; ma50d?: number; ma200d?: number; sector?: string; industry?: string; quoteSource?: string; quoteAvailableAt?: string; priceSource?:string; priceAvailableAt?:string; marketCapSource?:string; marketCapAvailableAt?:string };
 type NasdaqRow = { symbol: string; name?: string; lastsale?: string; marketCap?: string; volume?: string; sector?: string; industry?: string };
 type CachedQuick = { history: NonNullable<Snapshot['history']>; financials: Record<string, number>; provenance: Record<string, Provenance>; issues: string[] };
 type MarketBar = NonNullable<Snapshot['history']>[number];
@@ -22,15 +26,12 @@ const NASDAQ_SCREENER = 'https://api.nasdaq.com/api/screener/stocks?tableonly=tr
 const NASDAQ_LISTED='https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt';
 const OTHER_LISTED='https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt';
 const SEC_TICKERS='https://www.sec.gov/files/company_tickers.json';
+let listingDirectoryCache:{expiresAt:number;retrievedAt:string;rows:DirectoryCompany[]}|null=null;
+let listingDirectoryFlight:Promise<{retrievedAt:string;rows:DirectoryCompany[]}>|null=null;
 const CBOE_BASE='https://cdn.cboe.com/api/global/delayed_quotes';
 const YAHOO_HOSTS=['query1.finance.yahoo.com','query2.finance.yahoo.com'] as const;
 export const quickSymbols = Object.keys(quickCache.symbols);
 const browserAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124 Safari/537.36';
-// SEC asks clients to identify themselves with a descriptive product name and
-// a reachable contact.  The parenthesized form is accepted by SEC's edge from
-// both local and Cloudflare Worker egress; the old colon-only form was answered
-// with HTTP 403 by data.sec.gov in production.
-const secAgent = 'SmallCapRadar/2.1 (contact: yousef-hamda@users.noreply.github.com)';
 const submissionsUrlFor = (cik: number|string) => `https://data.sec.gov/submissions/CIK${String(cik).padStart(10, '0')}.json`;
 export const numeric = (value: unknown) => { if(typeof value!=='number'&&typeof value!=='string')return null;const text=String(value).replace(/[$,%+,]/g,'').trim();if(!text)return null;const parsed=Number(text);return Number.isFinite(parsed)?parsed:null; };
 export const yahooPercentAsRatio = (value: unknown) => Number.isFinite(value) ? Number(value) / 100 : undefined;
@@ -61,6 +62,10 @@ async function waitForProviderSlot(url: string) {
 }
 
 async function providerFetch(url: string, init?: RequestInit) {
+  const hostname=new URL(url).hostname;
+  if ((hostname==='sec.gov'||hostname.endsWith('.sec.gov')) && !secUserAgent()) {
+    throw Error('SEC request suppressed: SEC_USER_AGENT must contain a valid reachable contact email.');
+  }
   await waitForProviderSlot(url);
   return fetch(url, init);
 }
@@ -71,15 +76,52 @@ async function fetchText(url:string,timeoutMs=4000){
  return response.text();
 }
 
+async function currentListingDirectory(){
+ if(listingDirectoryCache&&listingDirectoryCache.expiresAt>Date.now())return listingDirectoryCache;
+ if(listingDirectoryFlight)return listingDirectoryFlight;
+ listingDirectoryFlight=Promise.allSettled([fetchText(NASDAQ_LISTED),fetchText(OTHER_LISTED),fetchJson(SEC_TICKERS,5000,6*60*60_000)])
+  .then(results=>{
+   const [nasdaqResult,otherResult,secResult]=results;
+   if(nasdaqResult.status==='rejected')recordProviderIssue(`Nasdaq Trader listed directory: ${nasdaqResult.reason instanceof Error?nasdaqResult.reason.message:'provider request failed'}`);
+   if(otherResult.status==='rejected')recordProviderIssue(`NYSE/NYSE American listed directory: ${otherResult.reason instanceof Error?otherResult.reason.message:'provider request failed'}`);
+   if(secResult.status==='rejected')recordProviderIssue(`SEC ticker-to-CIK directory: ${secResult.reason instanceof Error?secResult.reason.message:'provider request failed'}`);
+   if(nasdaqResult.status==='rejected'&&otherResult.status==='rejected')throw Error('Both official exchange listing directories are unavailable.');
+   const nasdaq=nasdaqResult.status==='fulfilled'?nasdaqResult.value:'',other=otherResult.status==='fulfilled'?otherResult.value:'';
+   const sec=secResult.status==='fulfilled'?secResult.value:{};
+   const rows=parseOfficialDirectory(nasdaq,other,sec as Record<string,any>);
+   if(!rows.length)throw Error('Official exchange listing directories contained no usable rows.');
+   return {retrievedAt:new Date().toISOString(),rows};
+  })
+  .then(value=>{listingDirectoryCache={...value,expiresAt:Date.now()+60*60_000};return value;})
+  .finally(()=>{listingDirectoryFlight=null;});
+ return listingDirectoryFlight;
+}
+
 export function companyBySymbol(symbol: string): Company | null {
   return (bundledUniverse.companies as Company[]).find((company) => company.ticker === symbol.toUpperCase()) ?? null;
+}
+
+/** Resolve one issuer against the live exchange issue description before
+ * scoring a company profile; bundled company-name text is not security proof. */
+export async function resolveCompanyBySymbol(symbol:string):Promise<Company|null>{
+ const ticker=symbol.trim().toUpperCase();
+ const bundled=companyBySymbol(ticker);
+ try{
+  const directory=await currentListingDirectory();
+  const listed=directory.rows.find(row=>row.ticker===ticker);
+  if(listed)return {...bundled,...listed,directoryAvailableAt:directory.retrievedAt,cik:listed.cik||bundled?.cik||0};
+ }catch(error){recordProviderIssue(`Official listing identity for ${ticker}: ${error instanceof Error?error.message:'provider request failed'}`)}
+ return bundled;
 }
 
 export function searchCompanies(query: string, limit = 12): Company[] {
   const normalized = query.trim().toLowerCase();
   if (!normalized) return [];
-  return (bundledUniverse.companies as Company[])
-    .filter(company => company.ticker.toLowerCase().includes(normalized) || company.name.toLowerCase().includes(normalized))
+  return rankCompanySearchResults(bundledUniverse.companies as Company[],normalized,limit);
+}
+
+function rankCompanySearchResults(companies:Company[],normalized:string,limit:number){
+  return [...new Map(companies.filter(company=>company.ticker.toLowerCase().includes(normalized)||company.name.toLowerCase().includes(normalized)).map(company=>[company.ticker,company])).values()]
     .sort((a, b) => {
       const rank = (company: Company) => company.ticker.toLowerCase() === normalized ? 0 : company.ticker.toLowerCase().startsWith(normalized) ? 1 : company.name.toLowerCase().startsWith(normalized) ? 2 : 3;
       return rank(a) - rank(b) || a.ticker.localeCompare(b.ticker);
@@ -87,10 +129,26 @@ export function searchCompanies(query: string, limit = 12): Company[] {
     .slice(0, Math.max(1, Math.min(20, limit)));
 }
 
+/** Search the current official exchange directory so picker coverage is not
+ * limited to the last generated bundle. Fall back to the dated bundle on
+ * provider failure; the caller still gets useful results with known limits. */
+export async function searchListedCompanies(query:string,limit=12):Promise<Company[]>{
+ const normalized=query.trim().toLowerCase();
+ if(!normalized)return [];
+ try{
+  const directory=await currentListingDirectory();
+  const rows=directory.rows.map(row=>({...row,directoryAvailableAt:directory.retrievedAt}));
+  return rankCompanySearchResults(rows,normalized,limit);
+ }catch(error){
+  recordProviderIssue(`Live company search directory: ${error instanceof Error?error.message:'provider request failed'}`);
+  return searchCompanies(query,limit);
+ }
+}
+
 function requestHeaders(url: string): Record<string, string> {
   const hostname=new URL(url).hostname;
   return hostname==='sec.gov'||hostname.endsWith('.sec.gov')
-    ? { 'User-Agent': secAgent, Accept: 'application/json', 'Accept-Encoding': 'gzip, deflate' }
+    ? { ...(secUserAgent()?{'User-Agent':secUserAgent()!}:{}), Accept: 'application/json', 'Accept-Encoding': 'gzip, deflate' }
     : { 'User-Agent': browserAgent, Accept: 'application/json, text/plain, */*', 'Accept-Language': 'en-US,en;q=0.9', Referer: 'https://www.nasdaq.com/' };
 }
 
@@ -151,14 +209,15 @@ export async function universe(options?:{skipYahoo?:boolean}): Promise<Company[]
   const base = (bundledUniverse.companies as Company[]).map((company) => ({ ...company, quoteSource: 'bundled official dated snapshot', quoteAvailableAt: bundledUniverse.generatedAt,priceSource:'bundled official dated snapshot',priceAvailableAt:bundledUniverse.generatedAt,marketCapSource:'bundled official dated snapshot',marketCapAvailableAt:bundledUniverse.generatedAt }));
   const [latestResult,directoryResult]=await Promise.allSettled([
     fetchJson(NASDAQ_SCREENER,3_000) as Promise<{data?:{rows?:NasdaqRow[]}}>,
-    Promise.all([fetchText(NASDAQ_LISTED),fetchText(OTHER_LISTED),fetchJson(SEC_TICKERS,5000,6*60*60_000)]).then(([nasdaq,other,sec])=>parseOfficialDirectory(nasdaq,other,sec as Record<string,any>)),
+    currentListingDirectory().then(({rows})=>rows),
   ]);
   let directory:Company[]=base;
   if(directoryResult.status==='fulfilled'&&directoryResult.value.length){
+    const directoryAvailableAt=listingDirectoryCache?.retrievedAt||new Date().toISOString();
     const old=new Map(base.map(company=>[company.ticker,company]));
     directory=directoryResult.value.map(company=>{
       const previous=old.get(company.ticker);
-      return {...previous,...company,cik:company.cik||previous?.cik||0,quoteSource:previous?.quoteSource||'official live listing directory',quoteAvailableAt:previous?.quoteAvailableAt||new Date().toISOString()};
+      return {...previous,...company,cik:company.cik||previous?.cik||0,directoryAvailableAt,quoteSource:previous?.quoteSource||'official live listing directory',quoteAvailableAt:previous?.quoteAvailableAt||directoryAvailableAt};
     });
   }else recordProviderIssue(`Official listing directory: ${directoryResult.status==='rejected'&&directoryResult.reason instanceof Error?directoryResult.reason.message:'empty response'}`);
   let nasdaq = directory;
@@ -311,8 +370,6 @@ export async function yahooBulkQuotes(companies: Company[]): Promise<Company[]> 
 
 function isoDate(date: string) { const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(date); return match ? `${match[3]}-${match[1]}-${match[2]}` : '' }
 function dateOffset(iso: string, days: number) { const date = new Date(iso); date.setUTCDate(date.getUTCDate() + days); return date.toISOString().slice(0, 10) }
-function commonSecurity(name: string) { return !NON_TRADABLE_NAME.test(name) }
-
 function applyBundledFundamentals(snapshot:Snapshot,cik:number,now:string){
  const facts=(bundledFrames as any).fundamentals?.[String(cik)];
  if(!facts)return false;
@@ -330,10 +387,118 @@ function applyBundledFundamentals(snapshot:Snapshot,cik:number,now:string){
 }
 
 type RecentSecSubmission={form:string;accession:string;document:string;filed:string;reportDate?:string};
+const validSecDate=(value:unknown):value is string=>typeof value==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(`${value}T00:00:00Z`))&&new Date(`${value}T00:00:00Z`).toISOString().slice(0,10)===value;
 function recentSubmissions(payload:any):RecentSecSubmission[]{
  const recent=payload?.filings?.recent;
- if(!recent?.form||!recent.accessionNumber||!recent.primaryDocument)return [];
- return recent.form.map((form:string,index:number):RecentSecSubmission=>({form,accession:recent.accessionNumber[index],document:recent.primaryDocument[index],filed:recent.filingDate?.[index]??'',reportDate:recent.reportDate?.[index]})).filter((row:RecentSecSubmission)=>row.accession&&row.document&&row.filed);
+ if(!Array.isArray(recent?.form)||!Array.isArray(recent?.accessionNumber)||!Array.isArray(recent?.primaryDocument)||!Array.isArray(recent?.filingDate))return [];
+ const length=Math.min(recent.form.length,recent.accessionNumber.length,recent.primaryDocument.length,recent.filingDate.length);
+ const rows:RecentSecSubmission[]=[];
+ for(let index=0;index<length;index++){
+  const form=recent.form[index],accession=recent.accessionNumber[index],document=recent.primaryDocument[index],filed=recent.filingDate[index],reportDate=recent.reportDate?.[index];
+  if(typeof form!=='string'||typeof accession!=='string'||!/^[0-9]{10}-[0-9]{2}-[0-9]{6}$/.test(accession)||typeof document!=='string'||!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(document)||!validSecDate(filed))continue;
+  rows.push({form,accession,document,filed,...(typeof reportDate==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(reportDate)?{reportDate}:{})});
+ }
+ return rows;
+}
+
+const INSIDER_FORM4_WINDOW_DAYS=365;
+// Fetch the full 12-month window for normal issuers. A high safety ceiling
+// protects profile latency and provider budgets; exceeding it is disclosed as
+// partial coverage rather than interpreted as no insider purchases.
+const INSIDER_FORM4_FETCH_LIMIT=100;
+const INSIDER_FORM4_MAX_DURATION_MS=12_000;
+export function selectRecentForm4Filings(payload:any,asOf:string,limit=INSIDER_FORM4_FETCH_LIMIT){
+ const end=asOf.slice(0,10),cutoff=dateOffset(end,-INSIDER_FORM4_WINDOW_DAYS);
+ const rows=recentSubmissions(payload).filter(row=>row.form==='4'&&/^\d{4}-\d{2}-\d{2}$/.test(row.filed)&&row.filed>=cutoff&&row.filed<=end).sort((a,b)=>b.filed.localeCompare(a.filed)||b.accession.localeCompare(a.accession));
+ const selected=rows.slice(0,Math.max(0,limit));
+ const allRecentDates=recentSubmissions(payload).map(row=>row.filed).filter(date=>/^\d{4}-\d{2}-\d{2}$/.test(date)&&date<=end).sort();
+ const submissionWindowComplete=allRecentDates.length>0&&allRecentDates[0]<=cutoff;
+ const formWindowComplete=rows.length<=selected.length||selected.at(-1)?.filed===cutoff||!!selected.at(-1)&&selected.at(-1)!.filed<cutoff;
+ return {selected,coverage:{windowStart:cutoff,windowEnd:end,availableForm4Count:rows.length,selectedForm4Count:selected.length,fetchedForm4Count:0,failedForm4Count:0,reviewedForm4Count:0,invalidForm4Count:0,unattemptedForm4Count:0,httpStatusCounts:{},submissionWindowComplete,state:'partial' as const,message:!submissionWindowComplete?'SEC recent-submission index does not prove it spans the full 12-month window.':!formWindowComplete?`More than ${limit} Form 4 filings were found; only the newest filings are fetched.`:'Form 4 coverage will be complete only after every in-window filing is fetched successfully.'}};
+}
+
+const OPPORTUNITY_FILING_FORMS=new Set(['10-K','10-K/A','10-Q','10-Q/A','8-K','6-K','20-F','20-F/A','40-F','40-F/A','S-1','S-1/A','S-3','S-3/A','DEF 14A','DEFA14A','13D','13D/A','13G','13G/A','144','4','4/A','8-A','424B1','424B2','424B3','424B4','424B5']);
+export function parseSecFilingIndex(payload:any,cik:number,asOf:string,limit=60,retrievedAtInput?:string):SecFilingResearch{
+ const retrievedAt=retrievedAtInput&&Number.isFinite(Date.parse(retrievedAtInput))?retrievedAtInput:new Date().toISOString(),asOfDate=typeof asOf==='string'?asOf.slice(0,10):'',validAsOf=validSecDate(asOfDate)&&Number.isFinite(Date.parse(asOf)),safeDate=validAsOf?asOfDate:retrievedAt.slice(0,10);
+ const validCik=Number.isSafeInteger(cik)&&cik>0,source:Provenance={source:'SEC EDGAR submissions · recent filing index',...(validCik?{url:submissionsUrlFor(cik)}:{}),periodEnd:safeDate,availableAt:validAsOf?asOf:retrievedAt,retrievedAt,confidence:'high',rightsStatus:'unknown'};
+ if(!validCik||!validAsOf)return {providerStatus:'invalid',items:[],source,limitations:['SEC submissions identity or as-of date is missing or malformed; filings are not attached.']};
+ if(payload==null)return {providerStatus:'unavailable',items:[],source,limitations:['SEC submissions could not be acquired for this profile cut; an unavailable response must not be interpreted as an empty filing history.']};
+ if(typeof payload!=='object'||Number(payload.cik)!==cik)return {providerStatus:'invalid',items:[],source,limitations:['SEC submissions identity is malformed or does not match this issuer; filings are not attached.']};
+ const recent=payload.filings?.recent;
+ if(!Array.isArray(recent?.form)||!Array.isArray(recent?.accessionNumber)||!Array.isArray(recent?.primaryDocument)||!Array.isArray(recent?.filingDate))return {providerStatus:'invalid',items:[],source,limitations:['SEC submissions recent-index structure is malformed; filings are not attached.']};
+ const parallelLength=Math.min(recent.form.length,recent.accessionNumber.length,recent.primaryDocument.length,recent.filingDate.length),malformedRows=Math.max(0,parallelLength-recentSubmissions(payload).length);
+ const rows=recentSubmissions(payload).filter(row=>OPPORTUNITY_FILING_FORMS.has(row.form)&&/^\d{4}-\d{2}-\d{2}$/.test(row.filed)&&row.filed<=safeDate).sort((a,b)=>b.filed.localeCompare(a.filed)||b.accession.localeCompare(a.accession));
+ const items=rows.slice(0,Math.max(0,Math.min(100,limit))).map(row=>({form:row.form,filed:row.filed,...(row.reportDate?{reportDate:row.reportDate}:{}),accession:row.accession,title:`SEC filing: ${row.form} filed ${row.filed}`,url:`https://www.sec.gov/Archives/edgar/data/${cik}/${row.accession.replaceAll('-','')}/${row.document}`}));
+ const indexEarliestFiled=recentSubmissions(payload).map(row=>row.filed).filter(date=>/^\d{4}-\d{2}-\d{2}$/.test(date)&&date<=safeDate).sort()[0];
+ const limitations=['This is the issuer’s bounded recent-submissions index; older filing-history files are not loaded here. Filing metadata does not establish the contents, binding status, future catalyst, or investment impact of a filing.'];
+ if(malformedRows)limitations.push(`${malformedRows} malformed recent-index row${malformedRows===1?' was':'s were'} rejected; the surviving index is partial and cannot establish complete filing coverage.`);
+ if(rows.length>items.length)limitations.push(`Only ${items.length} of ${rows.length} relevant recent filings are included in this profile.`);
+ return {providerStatus:malformedRows?(items.length?'partial':'invalid'):items.length?'retrieved':'empty',...(indexEarliestFiled?{indexEarliestFiled}:{}),items,source,limitations};
+}
+
+const FORM_8K_ITEMS = new Set(['1.01','1.02','1.03','2.01','2.02','2.03','2.04','2.05','2.06','3.01','3.02','3.03','4.01','4.02','5.01','5.02','5.03','5.04','5.05','5.06','5.07','5.08','6.01','6.02','6.03','6.04','6.05','7.01','8.01','9.01']);
+const FORM_8K_DOCUMENT_LIMIT = 4;
+const FORM_8K_DOCUMENT_BUDGET_MS = 7_000;
+const FORM_8K_DOCUMENT_BYTES = 512_000;
+const FORM_8K_TOTAL_BYTES = 1_500_000;
+
+/** Extract only section numbers explicitly mentioned by a filing body.
+ * This is a review index, not a claim that the section is material or positive. */
+export function parseSec8KItemReferences(html: string): string[] {
+ if(typeof html!=='string'||!html||html.length>FORM_8K_DOCUMENT_BYTES||!/<(?:html|body|document|div|p|h[1-6])\b/i.test(html))return [];
+ const text=html.replace(/<!--[\s\S]*?-->/g,' ').replace(/<(script|style|ix:header)\b[^>]*>[\s\S]*?<\/\1\s*>/gi,' ')
+  .replace(/&nbsp;|&#160;/gi,' ').replace(/&amp;/gi,'&').replace(/&(?:#x([\da-f]{1,6})|#(\d{1,7}));?/gi,(_all,hex,decimal)=>{const code=hex?parseInt(hex,16):Number(decimal);return Number.isFinite(code)&&code>=32&&code<=0x10ffff?String.fromCodePoint(code):' ';})
+  .replace(/<[^>]*>/g,' ').replace(/\s+/g,' ');
+ const found=new Set<string>();
+ for(const match of text.matchAll(/\bitem\s+(\d\.\d{2})\b/gi))if(FORM_8K_ITEMS.has(match[1]))found.add(match[1]);
+ return [...found].sort((a,b)=>Number(a)-Number(b));
+}
+
+async function readLimitedText(response:Response,perDocumentLimit:number,remainingTotal:number):Promise<{text:string;truncated:boolean;bytes:number}>{
+ const contentLength=Number(response.headers.get('content-length'));
+ if(Number.isFinite(contentLength)&&contentLength>Math.min(perDocumentLimit,remainingTotal))return {text:'',truncated:true,bytes:0};
+ if(!response.body){const text=await response.text();const bytes=new TextEncoder().encode(text).byteLength;return bytes>Math.min(perDocumentLimit,remainingTotal)?{text:'',truncated:true,bytes:0}:{text,truncated:false,bytes};}
+ const reader=response.body.getReader(),decoder=new TextDecoder();let text='',bytes=0,truncated=false;
+ try{while(true){const part=await reader.read();if(part.done)break;bytes+=part.value.byteLength;if(bytes>Math.min(perDocumentLimit,remainingTotal)){truncated=true;await reader.cancel();break;}text+=decoder.decode(part.value,{stream:true});}if(!truncated)text+=decoder.decode();}
+ finally{reader.releaseLock();}
+ return {text:truncated?'':text,truncated,bytes:truncated?0:bytes};
+}
+
+/** On-demand bounded scan of recent 8-K bodies. Captures referenced item
+ * numbers only; analyst review remains mandatory before catalyst scoring. */
+type Form8KItemIndex=NonNullable<SecFilingResearch['form8KItemIndex']>;
+export async function fetchSec8KItemIndex(payload:any,cik:number,asOf:string,retrievedAtInput?:string):Promise<Form8KItemIndex>{
+ const retrievedAt=retrievedAtInput&&Number.isFinite(Date.parse(retrievedAtInput))?retrievedAtInput:new Date().toISOString();
+ const unavailable=(providerStatus:'unavailable'|'empty'|'partial'='unavailable',selectedDocuments=0,limitations:string[]=[])=>( {providerStatus,selectedDocuments,fetchedDocuments:0,failedDocuments:0,truncatedDocuments:0,items:[] as Array<{accession:string;filed:string;form:'8-K';url:string;referencedItemNumbers:string[]}>,limitations} );
+ if(!Number.isSafeInteger(cik)||cik<=0||!validSecDate(asOf.slice(0,10))||Date.parse(retrievedAt)>Date.parse(asOf))return unavailable('unavailable',0,['Filing-body retrieval was skipped because issuer identity or timestamps were invalid.']);
+ if(!secUserAgent())return unavailable('unavailable',0,['Filing-body retrieval was suppressed because SEC_USER_AGENT has no valid reachable contact.']);
+ if(!payload||Number(payload.cik)!==cik||!Array.isArray(payload?.filings?.recent?.form))return unavailable('unavailable',0,['SEC submissions were unavailable or did not match the issuer.']);
+ const cutoff=dateOffset(asOf.slice(0,10),-180),index=parseSecFilingIndex(payload,cik,asOf,100,retrievedAt);
+ const recent8Ks=index.items.filter(item=>item.form==='8-K'&&item.filed>=cutoff),selected=recent8Ks.slice(0,FORM_8K_DOCUMENT_LIMIT);
+ if(!selected.length)return unavailable('empty',0,['No recent domestic 8-K documents were selected from the validated submissions index.']);
+ const items:Array<{accession:string;filed:string;form:'8-K';url:string;referencedItemNumbers:string[]}>=[];
+ let fetchedDocuments=0,failedDocuments=0,truncatedDocuments=0,totalBytes=0;
+ const deadline=Date.now()+FORM_8K_DOCUMENT_BUDGET_MS;
+ for(const filing of selected){
+  const remaining=deadline-Date.now();if(remaining<=0){failedDocuments+=selected.length-items.length-failedDocuments-truncatedDocuments;break;}
+  try{
+   const response=await providerFetch(filing.url,{headers:{...requestHeaders(filing.url),Accept:'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'},signal:AbortSignal.timeout(Math.min(5_000,remaining))});
+   if(!response.ok){failedDocuments++;recordProviderIssue(`SEC 8-K ${filing.accession}: HTTP ${response.status}`);continue;}
+   const body=await readLimitedText(response,FORM_8K_DOCUMENT_BYTES,FORM_8K_TOTAL_BYTES-totalBytes);
+   if(body.truncated){truncatedDocuments++;continue;}
+   if(!/<(?:html|document|ix:[a-z]+)/i.test(body.text)){failedDocuments++;recordProviderIssue(`SEC 8-K ${filing.accession}: response did not contain a recognizable filing document`);continue;}
+   totalBytes+=body.bytes;fetchedDocuments++;
+   items.push({accession:filing.accession,filed:filing.filed,form:'8-K',url:filing.url,referencedItemNumbers:parseSec8KItemReferences(body.text)});
+  }catch(error){failedDocuments++;recordProviderIssue(`SEC 8-K ${filing.accession}: ${error instanceof Error?error.message:'document retrieval failed'}`);}
+ }
+ const unattempted=Math.max(0,selected.length-items.length-failedDocuments-truncatedDocuments);
+ if(unattempted)failedDocuments+=unattempted;
+ const limitations=['The bounded document scan extracts only 8-K item-number references. It does not summarize the filing, establish a binding obligation or catalyst, assess materiality, or support an investment score; open each SEC filing and review its exhibits.',...(index.limitations)];
+ if(selected.length<recent8Ks.length)limitations.unshift(`Only the newest ${selected.length} of ${recent8Ks.length} recent 8-K filings were selected (maximum ${FORM_8K_DOCUMENT_LIMIT}).`);
+ if(failedDocuments)limitations.push(`${failedDocuments} selected 8-K document(s) failed or remained unattempted within the ${FORM_8K_DOCUMENT_BUDGET_MS/1000}-second request budget.`);
+ if(truncatedDocuments)limitations.push(`${truncatedDocuments} selected 8-K document(s) exceeded the bounded response-size limit and were not parsed.`);
+ const providerStatus:Form8KItemIndex['providerStatus']=items.length===selected.length&&selected.length===recent8Ks.length?'retrieved':'partial';
+ return {providerStatus,selectedDocuments:selected.length,fetchedDocuments,failedDocuments,truncatedDocuments,items,limitations};
 }
 
 /** Convert the official SEC submissions index into dated filing items when a
@@ -426,25 +591,36 @@ export async function intradayMarketData(symbol:string,asOf=new Date().toISOStri
  return parsed;
 }
 
-async function fetchInsiderPurchases(cik: number) {
+export async function fetchInsiderPurchases(cik: number,asOf:string) {
   const submissionsUrl = submissionsUrlFor(cik);
   try {
     const payload = await fetchJson(submissionsUrl, 8_000) as { filings?: { recent?: { form?: string[]; accessionNumber?: string[]; primaryDocument?: string[]; filingDate?: string[] } } };
-    const recent = payload.filings?.recent;
-    if (!recent?.form || !recent.accessionNumber || !recent.primaryDocument) return [];
-    const filings = recent.form.map((form, index) => ({ form, accession: recent.accessionNumber![index], document: recent.primaryDocument![index], filed: recent.filingDate?.[index] ?? '' })).filter(f => f.form === '4').slice(0, 8);
+    const {selected:filings,coverage}=selectRecentForm4Filings(payload,asOf);
+    const completeFilingWindow=coverage.submissionWindowComplete&&coverage.availableForm4Count<=coverage.selectedForm4Count;
     const parsed: InsiderPurchase[] = [];
     const read = (tag: string, from: string) => from.match(new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`, 'i'))?.[1]?.replace(/<[^>]+>/g, '').trim() ?? '';
     // Fetch bounded groups; eight consecutive request timeouts used to hold a
     // single company file open for more than a minute.
-    for (let offset=0;offset<filings.length;offset+=4) await Promise.all(filings.slice(offset,offset+4).map(async filing => {
+    let fetchedForm4Count=0,failedForm4Count=0,reviewedForm4Count=0,invalidForm4Count=0,unattemptedForm4Count=0;
+    const httpStatusCounts:Record<string,number>={};
+    const deadline=Date.now()+INSIDER_FORM4_MAX_DURATION_MS;
+    for (let offset=0;offset<filings.length;offset+=4) {
+      if(Date.now()>=deadline){unattemptedForm4Count=filings.length-offset;break;}
+      await Promise.all(filings.slice(offset,offset+4).map(async filing => {
       const accessionPath = filing.accession.replaceAll('-', '');
       const url = `https://www.sec.gov/Archives/edgar/data/${cik}/${accessionPath}/${filing.document}`;
-      const xml = await providerFetch(url, { headers: requestHeaders(url), signal: AbortSignal.timeout(8_000) }).then(response => response.ok ? response.text() : '').catch(() => '');
-      if (!xml) {recordProviderIssue(`SEC Form 4 ${filing.accession}: document unavailable`);return;}
+      let responseStatus:number|undefined;
+      const remaining=Math.max(1,deadline-Date.now());
+      const xml = await providerFetch(url, { headers: requestHeaders(url), signal: AbortSignal.timeout(Math.min(8_000,remaining)) }).then(async response => {responseStatus=response.status;if(!response.ok)return '';return response.text();}).catch(() => '');
+      if (!xml) {failedForm4Count++;if(responseStatus!=null)httpStatusCounts[String(responseStatus)]=(httpStatusCounts[String(responseStatus)]??0)+1;recordProviderIssue(`SEC Form 4 ${filing.accession}: ${responseStatus==null?'network failure':`HTTP ${responseStatus}`}`);return;}
+      fetchedForm4Count++;
+      if(!/<ownershipDocument(?:\s|>)/i.test(xml)||!/<\/ownershipDocument\s*>/i.test(xml)||!/<issuer(?:\s|>)/i.test(xml)||!/<reportingOwner(?:\s|>)/i.test(xml)){
+        invalidForm4Count++;recordProviderIssue(`SEC Form 4 ${filing.accession}: HTTP ${responseStatus??200} body was not a valid ownershipDocument`);return;
+      }
       const blocks = xml.match(new RegExp('<nonDerivativeTransaction[\\s\\S]*?<\\/nonDerivativeTransaction>', 'gi')) ?? [];
       const ownerBlock = xml.match(new RegExp('<reportingOwner>[\\s\\S]*?<\\/reportingOwner>', 'i'))?.[0] ?? '';
       const owner = read('rptOwnerName', ownerBlock) || 'مبلّغ داخلي غير مسمّى';
+      let filingValid=true;
       for (const block of blocks) {
         if (read('transactionCode', block) !== 'P') continue;
         const dateBlock = block.match(new RegExp('<transactionDate[\\s\\S]*?<\\/transactionDate>', 'i'))?.[0] ?? '';
@@ -454,34 +630,208 @@ async function fetchInsiderPurchases(cik: number) {
         const shares = numeric(read('value', sharesBlock));
         const price = numeric(read('value', priceBlock));
         if (date && shares != null && price != null && shares > 0 && price >= 0) parsed.push({ owner, date, shares, price, value: shares * price, source: url });
+        else filingValid=false;
       }
-    }));
-    return parsed.sort((a,b)=>b.date.localeCompare(a.date)||(a.source??'').localeCompare(b.source??'')||a.owner.localeCompare(b.owner)).slice(0, 20);
-  } catch { return []; }
+      if(filingValid)reviewedForm4Count++;else{invalidForm4Count++;recordProviderIssue(`SEC Form 4 ${filing.accession}: malformed code-P transaction fields`);}
+      }));
+    }
+    const purchases=parsed.sort((a,b)=>b.date.localeCompare(a.date)||(a.source??'').localeCompare(b.source??'')||a.owner.localeCompare(b.owner)).slice(0, 20);
+    if(!unattemptedForm4Count&&reviewedForm4Count+invalidForm4Count+failedForm4Count<filings.length)unattemptedForm4Count=filings.length-reviewedForm4Count-invalidForm4Count-failedForm4Count;
+    const complete=completeFilingWindow&&reviewedForm4Count===filings.length&&invalidForm4Count===0&&failedForm4Count===0&&unattemptedForm4Count===0;
+    const state:'complete'|'partial'=complete?'complete':'partial';
+    const failureSummary=Object.entries(httpStatusCounts).map(([status,count])=>`HTTP ${status}: ${count}`).join(', ');
+    const limitations:string[]=[];
+    if(!coverage.submissionWindowComplete)limitations.push('SEC recent-submission index does not prove coverage of the full 12-month window.');
+    if(coverage.availableForm4Count>coverage.selectedForm4Count)limitations.push(`Only ${coverage.selectedForm4Count} of ${coverage.availableForm4Count} Form 4 filings were selected within the profile request limit.`);
+    if(failedForm4Count)limitations.push(`${failedForm4Count} of ${filings.length} selected filing documents failed retrieval${failureSummary?` (${failureSummary})`:''}; absence of a visible code-P purchase is inconclusive.`);
+    if(invalidForm4Count)limitations.push(`${invalidForm4Count} retrieved filing document(s) were malformed or could not be parsed; coverage is incomplete.`);
+    if(unattemptedForm4Count)limitations.push(`The ${INSIDER_FORM4_MAX_DURATION_MS/1000}-second profile research budget ended with ${unattemptedForm4Count} selected filing document(s) not fetched; coverage is partial.`);
+    if(!failedForm4Count&&!invalidForm4Count&&!unattemptedForm4Count&&reviewedForm4Count<filings.length)limitations.push(`${reviewedForm4Count} of ${filings.length} selected Form 4 filings passed document validation.`);
+    const message=complete?'All Form 4 filings in the verified 12-month SEC index window were fetched and reviewed for code-P open-market purchases.':limitations.join(' ');
+    return {purchases,coverage:{...coverage,fetchedForm4Count,failedForm4Count,reviewedForm4Count,invalidForm4Count,unattemptedForm4Count,httpStatusCounts,state,message}};
+  } catch(error) {
+    const end=asOf.slice(0,10),windowStart=dateOffset(end,-INSIDER_FORM4_WINDOW_DAYS);
+    return {purchases:[],coverage:{state:'unavailable' as const,windowStart,windowEnd:end,availableForm4Count:0,selectedForm4Count:0,fetchedForm4Count:0,failedForm4Count:0,reviewedForm4Count:0,invalidForm4Count:0,unattemptedForm4Count:0,httpStatusCounts:{},submissionWindowComplete:false,message:`SEC insider filing lookup failed: ${error instanceof Error?error.message:'provider request failed'}`}};
+  }
 }
 
-export async function companySnapshot(company: Company): Promise<Snapshot> {
+async function attachOpportunityEarnings(snapshot: Snapshot, facts: unknown, providerError?: unknown, benchmark?: HistoricalResult | null, splitAdjusted = false, submissions?: unknown, includeFilingIndex = false, form8KItemIndex?:Awaited<ReturnType<typeof fetchSec8KItemIndex>>) {
+  // The network response arrives after the snapshot's initial quote cut. Stamp
+  // the research cut only after acquisition so SEC retrievedAt is never forged
+  // into the past or rejected as future evidence.
+  let retrievedAt = new Date().toISOString();
+  snapshot.asOf = retrievedAt;
+  let reportedEarnings = buildSecEarningsQualityAssessment(Number(snapshot.cik), facts, snapshot.asOf, retrievedAt);
+  let profileFxSeries: EcbDailySeries[] | null = null;
+  let profileFxFailure: string | undefined;
+  let result: typeof reportedEarnings & { currencyTranslation?: { state: 'complete' | 'partial' | 'unavailable'; sourceCurrency: string; targetCurrency: 'USD'; annualConvertedPeriods: number; quarterlyConvertedPeriods: number; annualWithheldPeriods: number; quarterlyWithheldPeriods: number; source: string; disclosure: string } } = reportedEarnings;
+  if (includeFilingIndex && reportedEarnings.coverage.selectedUnit !== 'USD'
+    && [...reportedEarnings.periods.annual, ...reportedEarnings.periods.quarterly].length) {
+    const periods = [...reportedEarnings.periods.annual, ...reportedEarnings.periods.quarterly];
+    const start = periods.map(period => period.start).sort()[0], end = periods.map(period => period.end).sort().at(-1)!;
+    const fx = await fetchEcbDailySeries(reportedEarnings.coverage.selectedUnit, start, end, reason => { profileFxFailure = reason; });
+    profileFxSeries = fx;
+    retrievedAt = new Date().toISOString(); snapshot.asOf = retrievedAt;
+    reportedEarnings = buildSecEarningsQualityAssessment(Number(snapshot.cik), facts, snapshot.asOf, retrievedAt);
+    const annual = fx ? convertEarningsPeriodsToUsd(reportedEarnings.periods.annual, reportedEarnings.coverage.selectedUnit, fx, retrievedAt) : null;
+    const quarterly = fx ? convertEarningsPeriodsToUsd(reportedEarnings.periods.quarterly, reportedEarnings.coverage.selectedUnit, fx, retrievedAt) : null;
+    const annualConverted = annual?.periods ?? reportedEarnings.periods.annual;
+    const quarterlyConverted = quarterly?.periods ?? reportedEarnings.periods.quarterly;
+    const withheld = (annual?.withheldCount ?? reportedEarnings.periods.annual.length) + (quarterly?.withheldCount ?? reportedEarnings.periods.quarterly.length);
+    const converted = (annual?.convertedCount ?? 0) + (quarterly?.convertedCount ?? 0);
+    result = {
+      ...reportedEarnings,
+      periods: { annual: annualConverted, quarterly: quarterlyConverted },
+      missing: fx && withheld === 0 ? reportedEarnings.missing.filter(item => !item.startsWith(`currency ${reportedEarnings.coverage.selectedUnit} is not converted`)) : reportedEarnings.missing,
+      limitations: [fx
+        ? `ترجمة أرباح ECB إلى USD: ${annual?.convertedCount ?? 0}/${reportedEarnings.periods.annual.length} سنة و${quarterly?.convertedCount ?? 0}/${reportedEarnings.periods.quarterly.length} ربع؛ العملة الأصلية ${reportedEarnings.coverage.selectedUnit}.`
+        : `ترجمة أرباح ECB إلى USD غير متاحة (${profileFxFailure ?? 'rate-series-unavailable'}); العملة الأصلية ${reportedEarnings.coverage.selectedUnit}.`,
+        ...reportedEarnings.limitations, fx
+        ? 'التحويل إلى الدولار تقديري للمقارنة وليس قوائم بالدولار أصدرتها الشركة أو راجعها مدقق. التدفقات تستخدم متوسط أسعار ECB اليومية المتطابقة؛ وتبقى العملة الأصلية ومعدل التحويل وتواريخه موثقة لكل قيمة. لا تُستخدم القيم المحوّلة لتقييم القوة المالية.'
+        : 'تعذّر التحقق من أسعار ECB اليومية؛ تبقى القيم ظاهرة بعملتها الأصلية من دون تحويل.'],
+      currencyTranslation: {
+        state: !fx ? 'unavailable' : withheld ? converted ? 'partial' : 'unavailable' : 'complete',
+        sourceCurrency: reportedEarnings.coverage.selectedUnit,
+        targetCurrency: 'USD',
+        annualConvertedPeriods: annual?.convertedCount ?? 0,
+        quarterlyConvertedPeriods: quarterly?.convertedCount ?? 0,
+        annualWithheldPeriods: annual?.withheldCount ?? reportedEarnings.periods.annual.length,
+        quarterlyWithheldPeriods: quarterly?.withheldCount ?? reportedEarnings.periods.quarterly.length,
+        source: 'ECB Data Portal EXR daily spot reference rates',
+        disclosure: 'تحويل تحليلي للمقارنة فقط؛ وليس قوائم مالية بالدولار أصدرتها الشركة أو راجعها مدقق.',
+      },
+    };
+  }
+  const issuerModel = classifySecIssuerModel(submissions, Number(snapshot.cik));
+  const industryModel = issuerModel?.industryModel;
+  if (issuerModel) snapshot.provenance.industryModel = {
+    source: 'SEC EDGAR submissions · issuer SIC classification',
+    url: submissionsUrlFor(Number(snapshot.cik)), periodEnd: snapshot.asOf.slice(0, 10),
+    availableAt: snapshot.asOf, retrievedAt, tag: `SIC ${issuerModel.sic}: ${issuerModel.sicDescription}`,
+    confidence: 'high', rightsStatus: 'unknown',
+  };
+  const financialStrength = buildSecFinancialStrengthInputs(Number(snapshot.cik), facts, snapshot.asOf, retrievedAt, reportedEarnings, industryModel);
+  if (profileFxSeries && reportedEarnings.coverage.selectedUnit !== 'USD') {
+    const translated = convertFinancialMetricsToUsd(financialStrength.metrics, reportedEarnings.coverage.selectedUnit, profileFxSeries, retrievedAt);
+    financialStrength.metrics = translated.metrics;
+    financialStrength.missing = financialStrength.missing.filter(item => !item.startsWith('financial-strength scoring: reported currency'));
+    financialStrength.missing.push('القيم المالية المحوّلة لا تُحتسب بعد؛ راجع العملة الوظيفية للشركة، شروط التحويل والإفصاح في الملف الأصلي قبل استخدامها في تقييم القوة المالية.');
+    financialStrength.limitations.push(`ترجمة أرصدة الميزانية والقيم المتراكمة إلى USD: ${translated.convertedCount} قيمة؛ ${translated.withheldCount} قيمة بقيت بعملتها المعلنة. أسعار ECB مساعدة للتحليل وليست ترجمة مدققة أو بديلاً عن أسعار الشركة.`);
+  }
+  financialStrength.limitations.unshift(issuerModel
+    ? `${issuerModel.reason} SEC SIC ${issuerModel.sic}: ${issuerModel.sicDescription}.`
+    : 'SEC submissions SIC classification is missing, malformed, or does not match this issuer; no solvency formula is selected.');
+  const technicalTiming = buildTechnicalTimingResearch({
+    history: snapshot.history,
+    benchmarkHistory: benchmark?.history,
+    historySource: snapshot.provenance.history,
+    benchmarkSource: benchmark ? { source: benchmark.source, url: benchmark.url, periodEnd: benchmark.availableAt.slice(0, 10), availableAt: benchmark.availableAt, retrievedAt: benchmark.retrievedAt, currency: 'USD', confidence: 'medium', rightsStatus: 'unknown' } : undefined,
+    splitAdjusted,
+    asOf: snapshot.asOf,
+    rightsStatus: 'unknown',
+  });
+  const sourcedRevenueQuarters = result.periods.quarterly.flatMap(period => {
+    const revenue = period.metrics.revenue;
+    return revenue?.unit === 'USD' ? [{ quarter: period.end.slice(0, 7), value: revenue.value, periodEnd: period.end, source: revenue.source }] : [];
+  }).slice(-6);
+  if (sourcedRevenueQuarters.length) {
+    snapshot.revenueTrend = sourcedRevenueQuarters.map(({ quarter, value, periodEnd }) => ({ quarter, value, periodEnd }));
+    const latest = sourcedRevenueQuarters.at(-1)!;
+    snapshot.provenance.revenueTrend = { ...latest.source, source: 'SEC Company Facts · standalone quarterly revenue' };
+  }
+  const providerStatus = providerError ? 'unavailable' : classifySecCompanyFacts(facts, Number(snapshot.cik));
+  snapshot.opportunityResearch = {
+    earnings: {
+      providerStatus,
+      ...(providerError instanceof Error ? { providerMessage: providerError.message.slice(0, 160) } : {}),
+      coverage: result.coverage,
+      ...(result.currencyTranslation ? { currencyTranslation: result.currencyTranslation } : {}),
+      annual: result.periods.annual,
+      quarterly: result.periods.quarterly,
+      missing: result.missing,
+      conflicts: result.conflicts,
+      limitations: result.limitations,
+      readyForScoring: !!result.assessment,
+    },
+    financialStrength: {
+      providerStatus: providerError ? 'unavailable' : classifySecCompanyFacts(facts, Number(snapshot.cik)),
+      ...(financialStrength.industryModel ? { industryModel: financialStrength.industryModel } : {}),
+      metrics: financialStrength.metrics,
+      missing: financialStrength.missing,
+      conflicts: financialStrength.conflicts,
+      limitations: financialStrength.limitations,
+      readyForScoring: !!financialStrength.assessment,
+    },
+    technicalTiming,
+    ...(includeFilingIndex ? { secFilings: {...parseSecFilingIndex(submissions, Number(snapshot.cik), snapshot.asOf, 60, retrievedAt),...(form8KItemIndex?{form8KItemIndex}:{})} } : {}),
+  };
+}
+
+/** Attach compact, identity-checked SEC research to an existing scan row. */
+export async function enrichSnapshotsWithSecOpportunity(snapshots: Snapshot[]): Promise<{
+  providerStatus: 'retrieved' | 'unavailable' | 'empty' | 'invalid';
+  retryable: boolean;
+  requests: number;
+  error?: string;
+}> {
+  if (!snapshots.length) return { providerStatus: 'invalid', retryable: false, requests:0, error: 'SEC snapshot batch is empty' };
+  const cik = Number(snapshots[0].cik);
+  if (!Number.isSafeInteger(cik) || cik <= 0 || snapshots.some(snapshot => Number(snapshot.cik) !== cik)) {
+    await Promise.all(snapshots.map(snapshot => attachOpportunityEarnings(snapshot, null, Error('SEC issuer CIK is missing, invalid, or inconsistent'))));
+    return { providerStatus: 'invalid', retryable: false, requests:0, error: 'SEC issuer CIK is missing, invalid, or inconsistent' };
+  }
+  const url = `https://data.sec.gov/api/xbrl/companyfacts/CIK${String(cik).padStart(10, '0')}.json`;
+  try {
+    const [facts, submissions] = await Promise.all([
+      fetchJson(url, 8_000, 6 * 60 * 60_000, 2),
+      fetchJson(submissionsUrlFor(cik), 8_000, 6 * 60 * 60_000, 2).catch(() => null),
+    ]);
+    await Promise.all(snapshots.map(snapshot => attachOpportunityEarnings(snapshot, facts, undefined, undefined, false, submissions)));
+    const providerStatus = classifySecCompanyFacts(facts, cik);
+    return { providerStatus, retryable: false, requests:2 };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message.slice(0, 180) : 'SEC Company Facts request failed';
+    await Promise.all(snapshots.map(snapshot => attachOpportunityEarnings(snapshot, null, Error(detail))));
+    return { providerStatus: 'unavailable', retryable: !/\bHTTP (400|401|403|404|405|422)\b/.test(detail), requests:2, error: detail };
+  }
+}
+
+export async function enrichSnapshotWithSecOpportunity(snapshot: Snapshot) {
+  return enrichSnapshotsWithSecOpportunity([snapshot]);
+}
+
+export async function companySnapshot(company: Company, options: { includeOpportunityResearch?: boolean } = {}): Promise<Snapshot> {
   const now = new Date().toISOString(), symbol = company.ticker, cik = String(company.cik).padStart(10, '0'), issues: string[] = [];
   // Independent enrichment starts together. Every rejection is handled here,
   // even when another provider fails or the company is outside screening size.
   const factsUrl = `https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`;
-  const factsPromise=fetchJson(factsUrl).then(value=>({value:value as {facts:Record<string,unknown>},error:null}),error=>({value:null,error}));
+  const factsPromise=fetchJson(factsUrl).then(value=>({value:value as {cik?:number;facts:Record<string,unknown>},error:null}),error=>({value:null,error}));
+  const benchmarkPromise=options.includeOpportunityResearch
+    ? historicalMarketData('SPY',now).catch(error=>{issues.push(`SPY benchmark history: ${error instanceof Error?error.message:'provider request failed'}`);return null;})
+    : Promise.resolve(null);
   const profilePromise=yahooCompanyProfile(symbol);
   const summaryPromise = fetchJson(`https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/summary?assetclass=stocks`, 8_000).catch(error => {issues.push(`Nasdaq summary: ${error.message}`);return null;}) as Promise<any>;
   const newsPromise = fetch(`https://feeds.finance.yahoo.com/rss/2.0/headline?s=${encodeURIComponent(yahooSymbol(symbol))}&region=US&lang=en-US`, { headers: { 'User-Agent': browserAgent, Accept: 'application/rss+xml,text/xml' }, signal: AbortSignal.timeout(8_000) }).then(r => {if(!r.ok)throw Error(`HTTP ${r.status}`);return r.text();}).catch(error => {issues.push(`Yahoo news: ${error.message}`);return '';});
   const googleNewsPromise = fetch(`https://news.google.com/rss/search?q=${encodeURIComponent(`\"${symbol}\" stock`)}&hl=en-US&gl=US&ceid=US:en`, { headers: { 'User-Agent': browserAgent, Accept: 'application/rss+xml,text/xml' }, signal: AbortSignal.timeout(8_000) }).then(r => {if(!r.ok)throw Error(`HTTP ${r.status}`);return r.text();}).catch(error => {issues.push(`Google News RSS: ${error.message}`);return '';});
   const filingsPromise = fetchJson(submissionsUrlFor(company.cik),8_000).catch(error => {issues.push(`SEC submissions: ${error instanceof Error?error.message:'provider request failed'}`);return null;});
-  const insiderPromise = fetchInsiderPurchases(company.cik);
-  let history: NonNullable<Snapshot['history']> = [], historyUrl = NASDAQ_SCREENER,historySource='Nasdaq screener · bundled dated fallback',historyRetrievedAt=bundledUniverse.generatedAt,chartMeta:any=null;
+  const form8KItemIndexPromise=options.includeOpportunityResearch?filingsPromise.then(payload=>{const indexAsOf=new Date().toISOString();return fetchSec8KItemIndex(payload,company.cik,indexAsOf,indexAsOf).catch(error=>({providerStatus:'unavailable' as const,selectedDocuments:0,fetchedDocuments:0,failedDocuments:0,truncatedDocuments:0,items:[],limitations:[`Bounded SEC 8-K item scan failed: ${error instanceof Error?error.message:'provider request failed'}`]}));}):Promise.resolve(undefined);
+  const insiderPromise = fetchInsiderPurchases(company.cik,now);
+  let history: NonNullable<Snapshot['history']> = [], historyUrl = NASDAQ_SCREENER,historySource='Nasdaq screener · bundled dated fallback',historyRetrievedAt=bundledUniverse.generatedAt,chartMeta:any=null,historySplitAdjusted=false;
   try {
     const result = await historicalMarketData(symbol, now); historyUrl = result.url;historySource=result.source;historyRetrievedAt=result.retrievedAt;chartMeta=(result as any).meta??null;
+    historySplitAdjusted=result.source.includes('Yahoo Finance chart API')&&result.splits!==null;
     history = result.history.map((row) => ({ date: row.date, close: row.close!, open: row.open ?? undefined, high: row.high ?? undefined, low: row.low ?? undefined, volume: row.volume ?? undefined }));
   } catch (error) { issues.push(`تعذّر تحميل تاريخ Nasdaq: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`) }
 
   const last = history.at(-1), quoteDate = last?.date ?? bundledUniverse.generatedAt.slice(0, 10), quoteAvailableAt = last ? `${last.date}T21:00:00.000Z` : bundledUniverse.generatedAt;
-  const quoteEvidence: Provenance = { source: historySource, url: historyUrl, periodEnd: quoteDate, availableAt: quoteAvailableAt > now ? now : quoteAvailableAt, retrievedAt: historyRetrievedAt, currency: 'USD', confidence: historySource.includes('fallback')?'low':'medium' };
+  const quoteEvidence: Provenance = { source: historySource, url: historyUrl, periodEnd: quoteDate, availableAt: quoteAvailableAt > now ? now : quoteAvailableAt, retrievedAt: historyRetrievedAt, currency: 'USD', confidence: historySource.includes('fallback')?'low':'medium', rightsStatus:'unknown' };
   const price = last?.close ?? company.price ?? null;
-  const snapshot: Snapshot = { symbol, name: company.name, cik: company.cik, description: 'الوصف غير متاح من مصدر موثق لهذه اللقطة.', asOf: now, exchange: company.exchange, sector: company.sector, industry: company.industry, securityType: commonSecurity(company.name) ? 'common' : 'unknown', price, marketCap: company.marketCap ?? null, confidence: 'C', deathSpiral: 'unknown', provenance: {}, history, dataIssues: issues, research: { financials: false, valuation: false, analysts: false, sector: !!company.sector } };
+  const snapshot: Snapshot = { symbol, name: company.name, cik: company.cik, description: 'الوصف غير متاح من مصدر موثق لهذه اللقطة.', asOf: now, exchange: company.exchange, sector: company.sector, industry: company.industry, securityType: company.securityType??'unknown', price, marketCap: company.marketCap ?? null, confidence: 'C', deathSpiral: 'unknown', provenance: {}, history, dataIssues: issues, research: { financials: false, valuation: false, analysts: false, sector: !!company.sector } };
+  if(company.directoryUrl&&company.directoryAvailableAt){
+    const identity:Provenance={source:'Nasdaq Trader official symbol directory',url:company.directoryUrl,periodEnd:company.directoryAvailableAt.slice(0,10),availableAt:company.directoryAvailableAt,retrievedAt:now,tag:company.securityName||company.securityType||'listed issue description',confidence:'high',rightsStatus:'unknown'};
+    snapshot.provenance.exchange=identity;
+    snapshot.provenance.securityType=identity;
+  }
 
   // Yahoo chart metadata is available without a crumb and supplies a useful
   // identity/quote fallback even when quoteSummary is blocked.
@@ -498,7 +848,7 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
   if(session){snapshot.price=session.price;snapshot.dailyChange=session.dailyChange;snapshot.provenance.price={...quoteEvidence,periodEnd:session.periodEnd,tag:'last completed session close'};snapshot.provenance.dailyChange={...quoteEvidence,periodEnd:session.periodEnd,tag:'last completed close / previous completed close - 1'};}
   if(history.length)snapshot.provenance.history=quoteEvidence;
   if (snapshot.marketCap != null) {const availableAt=company.marketCapAvailableAt||company.quoteAvailableAt||bundledUniverse.generatedAt,source=company.marketCapSource||company.quoteSource||'Nasdaq stock screener';snapshot.provenance.marketCap = { source, url: NASDAQ_SCREENER, periodEnd: availableAt.slice(0, 10), availableAt, retrievedAt: now, currency: 'USD', confidence: source.includes('bundled') ? 'low' : 'medium' };}
-  const [summaryResult, newsResult, googleNewsResult, insiderPurchases, filingsResult] = await Promise.all([summaryPromise, newsPromise, googleNewsPromise, insiderPromise, filingsPromise]);
+  const [summaryResult, newsResult, googleNewsResult, insiderResult, filingsResult,form8KItemIndex] = await Promise.all([summaryPromise, newsPromise, googleNewsPromise, insiderPromise, filingsPromise,form8KItemIndexPromise]);
   const summary = summaryResult?.data?.summaryData ?? {};
   const summaryValue = (key: string) => String(summary[key]?.value ?? '').trim();
   const summaryEvidence:Provenance={source:'Nasdaq quote summary · observed',url:`https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/summary?assetclass=stocks`,periodEnd:now.slice(0,10),availableAt:now,retrievedAt:now,confidence:'medium'};
@@ -516,7 +866,9 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
   const filingNews=parseSecFilingNews(filingsResult,company.cik,now);
   snapshot.news=[...rssNews,...fallbackNews,...filingNews].filter((item,index,array)=>array.findIndex(other=>other.link===item.link)===index).sort((a,b)=>(b.publishedAt??'').localeCompare(a.publishedAt??'')).slice(0,8);
   if(snapshot.news.length){const newsSource=rssNews.length?'Yahoo Finance RSS':fallbackNews.length?'Google News RSS':'SEC EDGAR filing index';snapshot.provenance.news={source:`${newsSource}${filingNews.length?' + SEC EDGAR filing index':''}`,url:rssNews.length?'https://feeds.finance.yahoo.com/':fallbackNews.length?'https://news.google.com/rss/':'https://www.sec.gov/edgar/searchedgar/companysearch',periodEnd:snapshot.news[0].publishedAt?.slice(0,10)||now.slice(0,10),availableAt:snapshot.news[0].publishedAt||now,retrievedAt:now,confidence:rssNews.length?'medium':fallbackNews.length?'low':'high'};}
+  const insiderPurchases=insiderResult.purchases;
   snapshot.insiderPurchases = insiderPurchases;
+  snapshot.insiderResearch=insiderResult.coverage;
   snapshot.insiderBuyValue = insiderPurchases.reduce((total, purchase) => total + purchase.value, 0) || null;
   if (snapshot.insiderBuyValue != null) snapshot.provenance.insiderBuyValue = { source: 'SEC Form 4 open-market purchases (code P)', url: submissionsUrlFor(cik), periodEnd: insiderPurchases[0]?.date ?? now.slice(0, 10), availableAt: now, retrievedAt: now, currency: 'USD', confidence: 'high' };
   if (history.length >= 20) {
@@ -541,6 +893,7 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
     }
     await enrichWithYahooProfile(snapshot, symbol, now, profilePromise);
     snapshot.research = { financials: !!snapshot.revenue, valuation: snapshot.evSales != null || snapshot.ps != null, analysts: snapshot.analystTarget != null, sector: !!snapshot.sector };
+    if (options.includeOpportunityResearch) await attachOpportunityEarnings(snapshot, null, factsResult.error, await benchmarkPromise, historySplitAdjusted, filingsResult, true,form8KItemIndex);
     return translateSnapshotContent(applyFinancingRisk(snapshot));
   }
 
@@ -554,6 +907,7 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
     const bundledRecovered=applyBundledFundamentals(snapshot,company.cik,now);
     await enrichWithYahooProfile(snapshot, symbol, now, profilePromise);
     snapshot.research = { financials: bundledRecovered||!!snapshot.revenue, valuation: snapshot.evSales != null || snapshot.ps != null, analysts: snapshot.analystTarget != null, sector: !!snapshot.sector };
+    if (options.includeOpportunityResearch) await attachOpportunityEarnings(snapshot, null, factsResult.error, await benchmarkPromise, historySplitAdjusted, filingsResult, true,form8KItemIndex);
     return translateSnapshotContent(applyFinancingRisk(snapshot));
   }
 
@@ -571,7 +925,7 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
   const selectedQuarters=quarterly.filter(row => { if (seenQuarters.has(row.end)) return false; seenQuarters.add(row.end); return true; }).slice(0, 6).reverse();
   snapshot.revenueTrend = selectedQuarters.map(row => ({ quarter: row.end.slice(0, 7), value: row.val, periodEnd: row.end }));
   if (snapshot.revenueTrend.length > 0) snapshot.provenance.revenueTrend = { source: 'SEC EDGAR XBRL quarterly revenue', url: factsUrl, periodEnd: snapshot.revenueTrend.at(-1)!.periodEnd || now.slice(0, 10), availableAt: `${selectedQuarters.map(row=>row.filed).sort().at(-1)}T23:59:59Z`, retrievedAt: now, currency: 'USD', tag: 'quarterly revenue', confidence: 'high' };
-  for (const [key, tags] of Object.entries({ revenue: [...REVENUE_TAGS, 'Revenue'], netIncome: ['NetIncomeLoss', 'ProfitLoss'], ocf: ['NetCashProvidedByUsedInOperatingActivities', 'NetCashProvidedByUsedInOperatingActivitiesContinuingOperations', 'NetCashFlowsFromUsedInOperatingActivities'], capex: ['PaymentsToAcquirePropertyPlantAndEquipment', 'PaymentsToAcquirePropertyPlantAndEquipmentContinuingOperations', 'PurchaseOfPropertyPlantAndEquipment'] })) {
+  for (const [key, tags] of Object.entries({ revenue: REVENUE_TAGS, netIncome: ['NetIncomeLoss', 'ProfitLoss'], ocf: ['NetCashProvidedByUsedInOperatingActivities', 'NetCashProvidedByUsedInOperatingActivitiesContinuingOperations', 'NetCashFlowsFromUsedInOperatingActivities', 'CashFlowsFromUsedInOperatingActivities'], capex: ['PaymentsToAcquirePropertyPlantAndEquipment', 'PaymentsToAcquirePropertyPlantAndEquipmentContinuingOperations', 'PurchaseOfPropertyPlantAndEquipment', 'PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities'] })) {
     const annual = trailingAnnual(observations(facts, tags), now);
     if (annual) { (snapshot as unknown as Record<string, unknown>)[key] = annual.val; snapshot.provenance[key] = provenance(annual, factsUrl, now); if (['20-F', '40-F'].includes(annual.form)) snapshot.foreignFiler = true }
   }
@@ -587,6 +941,9 @@ export async function companySnapshot(company: Company): Promise<Snapshot> {
   }
   await enrichWithYahooProfile(snapshot, symbol, now, profilePromise);
   snapshot.research = { financials: !!snapshot.revenue, valuation: snapshot.evSales != null || snapshot.ps != null, analysts: snapshot.analystTarget != null, sector: !!snapshot.sector };
+  // Preserve the root CIK and facts envelope for issuer-identity validation;
+  // the legacy fundamental parsers above intentionally consume `facts` only.
+  if (options.includeOpportunityResearch) await attachOpportunityEarnings(snapshot, factsResult.value, undefined, await benchmarkPromise, historySplitAdjusted, filingsResult, true,form8KItemIndex);
   return translateSnapshotContent(applyFinancingRisk(enrichFinancials(snapshot,facts,factsUrl)));
 }
 

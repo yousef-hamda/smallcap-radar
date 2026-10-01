@@ -7,7 +7,7 @@
   },
   "scripts": {
     "install:ci": "bash scripts/install-ci.sh",
-    "dev": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vite",
+    "dev": "CLOUDFLARE_INCLUDE_PROCESS_ENV=true WRANGLER_LOG_PATH=.wrangler/wrangler.log vite",
     "build": "bash scripts/build-verified.sh",
     "start": "CLOUDFLARE_INCLUDE_PROCESS_ENV=true WRANGLER_LOG_PATH=.wrangler/wrangler.log vite preview",
     "start:sites": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
@@ -17,7 +17,8 @@
     "test:engine": "node scripts/test-engine.mjs",
     "test:runtime": "npm run test:engine && node scripts/test-runtime.mjs",
     "test:research": "node --test tests/research-weight-lab.test.mjs",
-    "research:price-backtest": "node research/free-price-backtest.mjs",
+    "research:legacy-bounce-backtest": "node research/free-price-backtest.mjs",
+    "research:opportunity-coverage": "node research/opportunity-data-coverage.mjs",
     "research:audit": "node research/data-audit.mjs",
     "data:sync-company-facts": "node scripts/sync-company-facts.mjs",
     "typecheck": "tsc --noEmit"

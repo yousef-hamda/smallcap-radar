@@ -9,6 +9,7 @@ const selected = Array.from({ length: Math.min(12, eligible.length) }, (_, index
 const now = new Date().toISOString();
 const from = new Date(Date.now() - 550 * 864e5).toISOString().slice(0, 10);
 const to = now.slice(0, 10);
+const secUserAgent = process.env.SEC_USER_AGENT?.trim();
 const revenueTags = ['RevenueFromContractWithCustomerExcludingAssessedTax', 'RevenueFromContractWithCustomerIncludingAssessedTax', 'Revenues', 'SalesRevenueNet', 'SalesRevenueGoodsNet'];
 const forms = new Set(['10-K', '20-F', '40-F']);
 
@@ -17,6 +18,12 @@ const annual = (facts, tags) => rows(facts, tags).filter((row) => row.start && f
 const evidence = (fact, url) => fact ? { source: 'SEC EDGAR cached snapshot', url, periodStart: fact.start, periodEnd: fact.end, availableAt: `${fact.filed}T23:59:59Z`, retrievedAt: now, currency: 'USD', tag: fact.tag, confidence: 'high' } : undefined;
 const number = (value) => { const parsed = Number(String(value ?? '').replace(/[$,%+,]/g, '').trim()); return Number.isFinite(parsed) ? parsed : null };
 const isoDate = (value) => { const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(value); return match ? `${match[3]}-${match[1]}-${match[2]}` : '' };
+
+if (!secUserAgent || secUserAgent.length > 256 || /[\r\n\u0000-\u001f\u007f]/.test(secUserAgent)
+  || !/\([^()\s]+@[^()\s]+\.[^()\s]+\)/.test(secUserAgent)
+  || /users\.noreply\.github\.com/i.test(secUserAgent)) {
+  throw new Error('Set SEC_USER_AGENT to an application name followed by a reachable email in parentheses before fetching quick-cache data.');
+}
 
 async function fetchJson(url, headers) {
   const response = await fetch(url, { headers, signal: AbortSignal.timeout(25_000) });
@@ -29,7 +36,7 @@ async function build(company) {
   const factsUrl = `https://data.sec.gov/api/xbrl/companyfacts/CIK${String(company.cik).padStart(10, '0')}.json`;
   const [historyResult, factsResult] = await Promise.allSettled([
     fetchJson(historyUrl, { 'User-Agent': 'Mozilla/5.0 Chrome/124 Safari/537.36', Accept: 'application/json, text/plain, */*', Referer: 'https://www.nasdaq.com/' }),
-    fetchJson(factsUrl, { 'User-Agent': 'SmallCapRadar/2.1 research-contact:yousef-hamda@users.noreply.github.com', Accept: 'application/json' }),
+    fetchJson(factsUrl, { 'User-Agent': secUserAgent, Accept: 'application/json' }),
   ]);
   const result = { history: [], financials: {}, provenance: {}, issues: [] };
   if (historyResult.status === 'fulfilled') {

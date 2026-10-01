@@ -1,0 +1,70 @@
+{
+  "measuredAt": "2026-09-29T23:26:05.307Z",
+  "scope": "Local bundled issuer/quote directory joined by CIK to SEC Frames/Company Facts fallback. This is not a live-provider check and not a complete stock-profile coverage measure.",
+  "universe": {
+    "generatedAt": "2026-09-06T11:44:28.521Z",
+    "listedRows": 7675,
+    "withCik": 7675,
+    "withPositiveCachedPrice": 6725,
+    "withPositiveCachedMarketCap": 5797,
+    "below5mMarketCap": 320,
+    "above5bMarketCap": 1460,
+    "missingMarketCap": 1878
+  },
+  "secFacts": {
+    "generatedAt": "2026-09-15T03:48:49.165Z",
+    "issuerRecords": 5235,
+    "matchedListedCiks": 5235,
+    "matchedListingRows": 6515,
+    "listingRowCoverage": "84.9%",
+    "fields": {
+      "revenue": {
+        "listingRows": 4652,
+        "percentOfUniverse": "60.6%"
+      },
+      "netIncome": {
+        "listingRows": 5833,
+        "percentOfUniverse": "76.0%"
+      },
+      "ocf": {
+        "listingRows": 5685,
+        "percentOfUniverse": "74.1%"
+      },
+      "capex": {
+        "listingRows": 3941,
+        "percentOfUniverse": "51.3%"
+      },
+      "shares": {
+        "listingRows": 5399,
+        "percentOfUniverse": "70.3%"
+      },
+      "priorShares": {
+        "listingRows": 5208,
+        "percentOfUniverse": "67.9%"
+      },
+      "cash": {
+        "listingRows": 5390,
+        "percentOfUniverse": "70.2%"
+      },
+      "debtCurrent": {
+        "listingRows": 2522,
+        "percentOfUniverse": "32.9%"
+      },
+      "debtNoncurrent": {
+        "listingRows": 3262,
+        "percentOfUniverse": "42.5%"
+      }
+    }
+  },
+  "notMeasuredByThisBundle": [
+    "valuation methods and fair-value scenarios",
+    "contract binding status and catalyst pricing-in",
+    "eight-quarter earnings bridges and GAAP/non-GAAP reconciliation",
+    "debt covenants and detailed maturities",
+    "customer concentration, peers, market share, and competitive durability",
+    "litigation and exhaustive governance review",
+    "rights-cleared short-interest/borrow data",
+    "point-in-time chart signals and scenario probabilities"
+  ],
+  "warning": "Bundled data timestamps predate this measurement date. Counts indicate local field presence only; they do not prove source correctness, freshness, security-class identity, or production-provider health."
+}

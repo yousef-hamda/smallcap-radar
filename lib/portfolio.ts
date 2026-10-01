@@ -33,10 +33,6 @@ export type PortfolioQuote = {
   sector?: string;
   industry?: string;
   exchange?: string;
-  coreScore?: number | null;
-  coreCoverage?: number | null;
-  bounceScore?: number | null;
-  bounceCoverage?: number | null;
   snapshot?: Snapshot;
 };
 
@@ -60,10 +56,6 @@ export type PortfolioPosition = {
   sector?: string;
   industry?: string;
   exchange?: string;
-  coreScore?: number | null;
-  coreCoverage?: number | null;
-  bounceScore?: number | null;
-  bounceCoverage?: number | null;
 };
 
 export type PortfolioHistory = Record<string, Array<{ date: string; close: number }>>;
@@ -184,10 +176,6 @@ export function calculatePortfolio(transactions: PortfolioTransaction[], quotes:
       sector: quote?.sector || position.metadata?.sector,
       industry: quote?.industry || position.metadata?.industry,
       exchange: quote?.exchange || position.metadata?.exchange,
-      coreScore: quote?.coreScore,
-      coreCoverage: quote?.coreCoverage,
-      bounceScore: quote?.bounceScore,
-      bounceCoverage: quote?.bounceCoverage,
     });
   }
   for (const position of positions) position.weight = position.marketValue == null || marketValue <= 0 ? null : position.marketValue / marketValue;
@@ -200,12 +188,6 @@ export function calculatePortfolio(transactions: PortfolioTransaction[], quotes:
   const sectorValues = new Map<string, number>();
   for (const position of positions) if (position.marketValue != null) sectorValues.set(position.sector || 'غير مصنف', (sectorValues.get(position.sector || 'غير مصنف') ?? 0) + position.marketValue);
   const sectors = [...sectorValues.entries()].map(([name, value]) => ({ name, value, weight: marketValue > 0 ? value / marketValue : 0 })).sort((a, b) => b.value - a.value);
-  const weighted = (key: 'coreScore' | 'bounceScore') => {
-    const eligible = positions.filter(position => position.marketValue != null && position[key] != null);
-    const value = eligible.reduce((total, position) => total + position.marketValue! * position[key]!, 0);
-    const covered = eligible.reduce((total, position) => total + position.marketValue!, 0);
-    return covered > 0 ? { score: value / covered, coverage: marketValue > 0 ? covered / marketValue : 0 } : { score: null, coverage: 0 };
-  };
   const totalPnl = realizedPnl + unrealizedPnl;
   const alerts: string[] = [];
   if ((positions[0]?.weight ?? 0) >= 0.35) alerts.push(`${positions[0].symbol} يمثل ${((positions[0].weight ?? 0) * 100).toFixed(1)}% من المحفظة؛ تركّز مرتفع في سهم واحد.`);
@@ -235,8 +217,6 @@ export function calculatePortfolio(transactions: PortfolioTransaction[], quotes:
       diversificationScore,
       effectiveHoldings,
       topWeight: positions[0]?.weight ?? null,
-      weightedCore: weighted('coreScore'),
-      weightedBounce: weighted('bounceScore'),
     },
   };
 }

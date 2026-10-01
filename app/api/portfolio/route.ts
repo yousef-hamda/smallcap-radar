@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { db, ensureSchema } from '@/lib/storage';
 import { body as readBody, json, sameOrigin, statusOf } from '@/lib/http';
 import { resolveVisitor, type VisitorIdentity } from '@/lib/visitor';
-import { searchCompanies } from '@/lib/providers';
+import { searchListedCompanies } from '@/lib/providers';
 import { canonicalPortfolioAsset, invalidatePortfolioCache, readPortfolio, readPortfolioTransactions } from '@/lib/portfolio-storage';
 import { validateLedger, type PortfolioSide, type PortfolioTransaction } from '@/lib/portfolio';
 
@@ -54,7 +54,7 @@ export async function GET(request: Request) {
     const url = new URL(request.url), query = url.searchParams.get('q')?.trim() || '';
     if (query) {
       if (query.length > 100) return json({ error: 'عبارة البحث طويلة جدًا.' }, 400);
-      return json({ results: searchCompanies(query).map(company => ({ symbol: company.ticker, name: company.name, exchange: company.exchange, price: company.price ?? null, sector: company.sector, industry: company.industry })) });
+      return json({ results: (await searchListedCompanies(query)).map(company => ({ symbol: company.ticker, name: company.name, exchange: company.exchange, securityType: company.securityType, price: company.price ?? null, sector: company.sector, industry: company.industry })) });
     }
     const identity = await resolveVisitor(request);
     return await respond(request, identity, url.searchParams.get('refresh') === '1');

@@ -2,9 +2,9 @@ import type { Company } from './providers';
 import { fetchJson } from './providers';
 import type { Provenance, Snapshot } from './engine';
 import bundledFrames from './sec-frames.generated.json';
-import {REVENUE_TAGS, observations, latestInstant, trailingAnnual, COST_OF_REVENUE_TAGS, BACKLOG_TAGS} from './sec';
+import {REVENUE_TAGS, US_GAAP_REVENUE_TAGS, observations, latestInstant, trailingAnnual, COST_OF_REVENUE_TAGS, BACKLOG_TAGS} from './sec';
 import {derivedEvidence,usableEvidence} from './evidence';
-import {NON_TRADABLE_NAME, SEC_FRAME_DATASET_COUNT} from './strategy-spec';
+import {SEC_FRAME_DATASET_COUNT} from './strategy-spec';
 import {applyFinancingRisk} from './financing-risk';
 
 type FrameFact = { cik: number; entityName?: string; start?: string; end: string; val: number; filed?: string; form?: string; accn?: string; frame?: string };
@@ -27,7 +27,9 @@ type FundamentalKey = Exclude<keyof BulkFundamentals, 'conflicts'>;
 type FrameConfig = { key: FundamentalKey; tag: string; taxonomy?: 'us-gaap' | 'ifrs-full' | 'dei'; unit: string; period: string; priority: number };
 
 const FRAME_BASE = 'https://data.sec.gov/api/xbrl/frames/us-gaap';
-const revenueTags = REVENUE_TAGS;
+// This endpoint is explicitly under the SEC us-gaap Frames taxonomy. IFRS
+// aliases belong in the Company Facts adapter, not in us-gaap frame URLs.
+const revenueTags = US_GAAP_REVENUE_TAGS;
 
 function lastCompletedQuarter(date = new Date()) {
   const currentQuarter = Math.floor(date.getUTCMonth() / 3) + 1;
@@ -44,8 +46,8 @@ function newer(candidate: StoredFact, existing?: StoredFact) {
 const COMPANY_FACTS_TAGS = {
   revenue: REVENUE_TAGS,
   netIncome: ['NetIncomeLoss', 'ProfitLoss'],
-  ocf: ['NetCashProvidedByUsedInOperatingActivities', 'NetCashProvidedByUsedInOperatingActivitiesContinuingOperations', 'NetCashFlowsFromUsedInOperatingActivities'],
-  capex: ['PaymentsToAcquirePropertyPlantAndEquipment', 'PaymentsToAcquirePropertyPlantAndEquipmentContinuingOperations', 'PurchaseOfPropertyPlantAndEquipment'],
+  ocf: ['NetCashProvidedByUsedInOperatingActivities', 'NetCashProvidedByUsedInOperatingActivitiesContinuingOperations', 'NetCashFlowsFromUsedInOperatingActivities', 'CashFlowsFromUsedInOperatingActivities'],
+  capex: ['PaymentsToAcquirePropertyPlantAndEquipment', 'PaymentsToAcquirePropertyPlantAndEquipmentContinuingOperations', 'PurchaseOfPropertyPlantAndEquipment', 'PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities'],
   shares: ['EntityCommonStockSharesOutstanding', 'CommonStockSharesOutstanding'],
   cash: ['CashAndCashEquivalentsAtCarryingValue', 'CashAndCashEquivalents'],
   debtCurrent: ['LongTermDebtCurrent', 'ShortTermBorrowings', 'BorrowingsCurrent'],
@@ -58,6 +60,13 @@ const COMPANY_FACTS_TAGS = {
 
 function companyFactsUrl(cik: number) {
   return `https://data.sec.gov/api/xbrl/companyfacts/CIK${String(cik).padStart(10, '0')}.json`;
+}
+
+function companyFactsIdentityMatches(cik: number, payload: any) {
+  const responseCik = typeof payload?.cik === 'number' && Number.isSafeInteger(payload.cik)
+    ? payload.cik
+    : typeof payload?.cik === 'string' && /^\d{1,10}$/.test(payload.cik) ? Number(payload.cik) : NaN;
+  return Number.isSafeInteger(cik) && cik > 0 && responseCik === cik;
 }
 
 function usableCompanyFact(fact: any, asOf: Date): fact is { start?: string; end: string; val: number; filed: string; form: string; accn?: string; tag?: string } {
@@ -81,6 +90,7 @@ function latestInstantPair(rows: any[], asOf: Date) {
  * left visible as a gap instead of being guessed into a standard metric.
  */
 export function parseCompanyFacts(cik: number, payload: any, asOf = new Date()): BulkFundamentals | undefined {
+  if (!companyFactsIdentityMatches(cik, payload)) return undefined;
   const facts = payload?.facts;
   if (!facts || typeof facts !== 'object') return undefined;
   const result: BulkFundamentals = {};
@@ -124,7 +134,7 @@ function mergeCompanyFacts(existing: BulkFundamentals | undefined, fallback: Bul
     const candidate = fallback[key], current = merged[key];
     if (!candidate) continue;
     if (current && current.end === candidate.end && current.val !== candidate.val) conflicts.push(`${key}: ${current.val} (${current.kind || 'frames'}) مقابل ${candidate.val} (Company Facts) في ${candidate.end}`);
-    if (!current) merged[key] = candidate;
+    if (!current || newer(candidate, current)) merged[key] = candidate;
   }
   if (conflicts.length) merged.conflicts = [...new Set(conflicts)].slice(0, 12);
   return merged;
@@ -142,6 +152,7 @@ export async function fetchCompanyFactsFallback(candidateCiks: number[], asOf = 
     const url = companyFactsUrl(cik);
     try {
       const payload = await fetchJson(url, 8_000, 6 * 60 * 60_000, 3);
+      if (!companyFactsIdentityMatches(cik, payload)) throw new Error('SEC Company Facts issuer identity mismatch');
       return { cik, parsed: parseCompanyFacts(cik, payload, asOf), error: null };
     } catch (error) {
       return { cik, parsed: undefined, error: error instanceof Error ? error : Error('SEC Company Facts error') };
@@ -289,7 +300,7 @@ export function preliminarySnapshot(company: Company, facts: BulkFundamentals | 
     description: 'الوصف غير متاح من مصدر موثق لهذه اللقطة.',
     asOf: retrievedAt,
     exchange: company.exchange,
-    securityType: NON_TRADABLE_NAME.test(company.name)?'unknown':'common',
+    securityType: company.securityType??'unknown',
     price: company.price ?? null,
     dailyChange:company.dailyChange??null,
     marketCap: company.marketCap ?? null,
@@ -304,6 +315,11 @@ export function preliminarySnapshot(company: Company, facts: BulkFundamentals | 
     dataIssues: [],
     research: { financials: false, valuation: false, analysts: false, sector: !!company.sector },
   };
+  if(company.directoryUrl&&company.directoryAvailableAt){
+    const identity:Provenance={source:'Nasdaq Trader official symbol directory',url:company.directoryUrl,periodEnd:company.directoryAvailableAt.slice(0,10),availableAt:company.directoryAvailableAt,retrievedAt,tag:company.securityName||company.securityType||'listed issue description',confidence:'high',rightsStatus:'unknown'};
+    snapshot.provenance.exchange=identity;
+    snapshot.provenance.securityType=identity;
+  }
   if (snapshot.price != null) snapshot.provenance.price = quote;
   if(snapshot.dailyChange!=null)snapshot.provenance.dailyChange=quote;
   if (snapshot.marketCap != null) snapshot.provenance.marketCap = marketCapQuote;

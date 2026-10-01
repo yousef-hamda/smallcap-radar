@@ -1,0 +1,36 @@
+{
+  "retrievedAt": "2026-09-30T21:59:29.580Z",
+  "scope": "One read-only parse of the current Nasdaq Trader Nasdaq-listed and other-listed text directories. Rows flagged as test issues or ETFs are excluded by the production parser. This checks exchange issue-name classification only; it is not a full market universe, rights, SEC CIK-join, or production-health audit.",
+  "sourceUrls": [
+    "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt",
+    "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt"
+  ],
+  "includedRows": 7102,
+  "securityTypeCounts": {
+    "common": 5286,
+    "adr": 314,
+    "preferred": 129,
+    "warrant": 473,
+    "unit": 297,
+    "right": 144,
+    "fund": 66,
+    "debt": 11,
+    "other": 0,
+    "unknown": 382
+  },
+  "classificationSamples": {
+    "AAPL": "common",
+    "AACIU": "unit",
+    "ACGLN": "preferred",
+    "AACIW": "warrant",
+    "AACPR": "right",
+    "NOK": "adr",
+    "AAL": "common"
+  },
+  "limitations": [
+    "A security description without explicit type wording remains unknown; the company's legal name is never used to infer common stock.",
+    "ADR rows remain research-only until the depositary ratio is proven for per-share valuation.",
+    "A live directory retrieval timestamp is not a rights grant. Display/redistribution terms still need confirmation.",
+    "The SEC ticker-to-CIK join is omitted from this count-only verification. Current official file rows and this parser result are not a completeness guarantee for every US exchange or security history."
+  ]
+}

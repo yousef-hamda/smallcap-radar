@@ -57,6 +57,14 @@ test("forwards progress semantics to the primitive", async () => {
   assert.match(html, /data-state="loading"/);
 });
 
+test('SEC scan progress copy matches the issuer-wide acquisition rules', async()=>{
+ const {OPPORTUNITY_SEC_PROGRESS_DETAIL,scanProgress}=await vite.ssrLoadModule('/lib/scan-progress.ts');
+ const state=scanProgress({id:'run',status:'running',source:'full',stage:11,offset:8,total:100,processed:8,failed:0,created_at:'2026-09-30',updated_at:'2026-09-30'});
+ assert.match(state.phase,/SEC/);assert.match(OPPORTUNITY_SEC_PROGRESS_DETAIL,/لكل سهم عادي مرتبط برقم CIK/);
+ assert.match(OPPORTUNITY_SEC_PROGRESS_DETAIL,/لا يوقف الجلب/);assert.match(OPPORTUNITY_SEC_PROGRESS_DETAIL,/يمنع أهلية الترتيب/);
+ assert.doesNotMatch(OPPORTUNITY_SEC_PROGRESS_DETAIL,/تعالج الشركات ذات السعر/);
+});
+
 test("emits chart themes for the starter's media dark mode", async () => {
   const { ChartStyle } = await vite.ssrLoadModule("/components/ui/chart.tsx");
   const html = renderToStaticMarkup(
@@ -84,12 +92,49 @@ test("renders sidebar skeletons deterministically", async () => {
   assert.match(first, /--skeleton-width:70%/);
 });
 
-test('radar has the two strategies, favorites and a dedicated portfolio without bottom navigation', async()=>{
+test('radar exposes one opportunity category, favorites and portfolio without bottom navigation', async()=>{
  const {default:Radar}=await vite.ssrLoadModule('/app/page.tsx');
  const html=renderToStaticMarkup(React.createElement(Radar));
  assert.match(html,/رادار الشركات الصغيرة/);assert.match(html,/aria-label="المفضلة: 0"/);
- assert.equal((html.match(/role="tab"/g)||[]).length,4);assert.match(html,/محفظتي/);
+ assert.equal((html.match(/role="tab"/g)||[]).length,3);assert.match(html,/الفرص الاستثمارية/);assert.match(html,/محفظتي/);
+ assert.doesNotMatch(html,/فرص الارتداد|القيمة الأساسية/);
  assert.doesNotMatch(html,/bottom-nav|terminal-shell|sidebar-head/);
+});
+
+test('company profile consumes only the canonical Opportunity evaluation',async()=>{
+ const source=await readFile(path.join(root,'app/company-sheet.tsx'),'utf8');
+ const route=await readFile(path.join(root,'app/api/company/route.ts'),'utf8');
+ assert.match(source,/opportunityEvaluation\.factors\.map/);
+ assert.match(source,/opportunityEvaluation\.evidencedWeight\?opportunityEvaluation\.score\.toFixed\(1\):'—'/);
+ assert.match(source,/أدلة القوة المالية والسيولة/);assert.match(source,/unrestrictedCash/);assert.match(source,/النقص يمنع احتساب العامل/);
+ assert.doesNotMatch(source,/evaluateStrategy|SPECS\.(core|bounce)|فرص الارتداد|القيمة الأساسية/);
+ assert.match(route,/evaluateOpportunityDossier\(snapshot,opportunityDossierFromSnapshot\(snapshot\)\)/);
+});
+
+test('profile renders sourced financial-strength gaps without filling missing figures with zero',async()=>{
+ const {FinancialStrengthEvidence}=await vite.ssrLoadModule('/app/company-sheet.tsx');
+ const research={providerStatus:'retrieved',metrics:{unrestrictedCash:{value:1250000,unit:'USD',source:{source:'SEC fixture',url:'https://www.sec.gov/Archives/edgar/data/1/',periodEnd:'2026-06-30',availableAt:'2026-08-01T00:00:00.000Z',retrievedAt:'2026-09-30T12:00:00.000Z',currency:'USD',rightsStatus:'redistribution-permitted',confidence:'high'} }},missing:['rolling year-two debt maturity unavailable'],conflicts:[],limitations:['Standard concepts only'],readyForScoring:false};
+ const html=renderToStaticMarkup(React.createElement(FinancialStrengthEvidence,{research}));
+ assert.match(html,/أدلة القوة المالية والسيولة · 1\/6 مدخلات/);
+ assert.match(html,/\$1\.25M/);
+ assert.match(html,/rolling year-two debt maturity unavailable/);
+ assert.match(html,/النقص يمنع احتساب العامل ولا يُعامل كقيمة صفرية/);
+ assert.doesNotMatch(html,/إجمالي الدين المعياري[\s\S]{0,80}>\$0/);
+});
+
+test('profile source ledger displays ECB conversion rate dates, method inputs, provider, and source link',async()=>{
+ const {FinancialStrengthEvidence}=await vite.ssrLoadModule('/app/company-sheet.tsx');
+ const research={providerStatus:'retrieved',metrics:{unrestrictedCash:{value:1250000,unit:'USD',source:{source:'SEC fact · analytical USD translation using ECB daily reference rates',url:'https://www.sec.gov/Archives/edgar/data/1/filing.htm',periodEnd:'2026-06-30',availableAt:'2026-09-30T12:00:00.000Z',retrievedAt:'2026-09-30T12:00:00.000Z',currency:'USD',rightsStatus:'redistribution-permitted',confidence:'high',conversion:{rate:0.0067,sourceCurrency:'JPY',targetCurrency:'USD',method:'period-average-daily-reference-cross-rate',ratePeriodStart:'2026-04-01',ratePeriodEnd:'2026-06-30',observationCount:63,sourceUrl:'https://api.frankfurter.dev/v2/providers/ecb/rates?from=2026-04-01&to=2026-06-30&base=EUR&quotes=JPY%2CUSD',rateProvider:'European Central Bank (ECB) via Frankfurter API',inputAvailableAt:'2026-08-01T00:00:00.000Z',inputRetrievedAt:'2026-08-15T00:00:00.000Z'}}}},missing:['other inputs remain unavailable'],conflicts:[],limitations:[],readyForScoring:false};
+ const html=renderToStaticMarkup(React.createElement(FinancialStrengthEvidence,{research}));
+ assert.match(html,/JPY→USD @ 0\.006700000/);assert.match(html,/2026-04-01…2026-06-30 · 63 rates/);assert.match(html,/SEC available 2026-08-01T00:00:00\.000Z/);assert.match(html,/European Central Bank \(ECB\) via Frankfurter API/);assert.match(html,/FX rate source/);assert.match(html,/api\.frankfurter\.dev/);
+});
+
+test('profile renders SEC filing links as bounded discovery metadata, not catalyst claims',async()=>{
+ const {SecFilingEvidence}=await vite.ssrLoadModule('/app/company-sheet.tsx');
+ const research={providerStatus:'retrieved',items:[{form:'8-K',filed:'2026-09-20',reportDate:'2026-09-18',accession:'0000000001-26-000001',title:'SEC filing: 8-K filed 2026-09-20',url:'https://www.sec.gov/Archives/edgar/data/1/000000000126000001/current.htm'}],form8KItemIndex:{providerStatus:'retrieved',selectedDocuments:1,fetchedDocuments:1,failedDocuments:0,truncatedDocuments:0,items:[{form:'8-K',filed:'2026-09-20',accession:'0000000001-26-000001',url:'https://www.sec.gov/Archives/edgar/data/1/000000000126000001/current.htm',referencedItemNumbers:['2.02','9.01']}],limitations:['Item numbers only; human review required.']},source:{source:'SEC EDGAR submissions',url:'https://data.sec.gov/submissions/CIK0000000001.json',periodEnd:'2026-09-20',availableAt:'2026-09-20T23:59:59Z',retrievedAt:'2026-09-21T00:00:00Z',confidence:'high'},limitations:['Older filing-history files are not loaded.']};
+ const html=renderToStaticMarkup(React.createElement(SecFilingEvidence,{research}));
+ assert.match(html,/إفصاحات الشركة الأولية · 1/);assert.match(html,/SEC filing: 8-K/);assert.match(html,/محتواه أو إلزاميته/);assert.match(html,/فهرس بنود 8-K/);assert.match(html,/Items 2\.02, 9\.01/);assert.match(html,/Item numbers only; human review required/);assert.match(html,/Older filing-history files are not loaded/);assert.match(html,/target="_blank"/);
+ const partial=renderToStaticMarkup(React.createElement(SecFilingEvidence,{research:{...research,providerStatus:'partial',limitations:[...research.limitations,'1 malformed recent-index row was rejected.']}}));assert.match(partial,/الفهرس جزئي؛ استُبعدت سجلات غير صالحة/);assert.match(partial,/malformed recent-index row/);
 });
 
 test('empty chart keeps all seven period controls',async()=>{
@@ -220,11 +265,23 @@ test('radar favorites send the displayed verified snapshot when saving',async()=
  assert.match(source,/action:'favorite',symbol:s\.symbol,saved,\.\.\.\(saved\?\{snapshot:s\}:\{\}\)/);
 });
 
-test('radar category rendering keeps rejected and unknown rows out of the visible list',async()=>{
+test('unified opportunity view requests explicit states and never ranks incomplete evidence',async()=>{
  const source=await readFile(path.join(root,'app/page.tsx'),'utf8');
- assert.match(source,/const visibleEvaluated=useMemo\(\(\)=>view==='favorites'\?evaluated:evaluated\.filter\(\(\{e\}\)=>e\.screeningQualified\)/);
+ assert.match(source,/strategy=\$\{view==='opportunity'\?'opportunity':view\}/);
+ assert.match(source,/state=\$\{opportunityState\}/);
+ assert.match(source,/e\.state===opportunityState/);
+ assert.match(source,/e\.evidencedWeight\?e\.score\.toFixed\(1\):'—'/);
+ assert.match(source,/useState<OpportunityState>\('needs-research'\)/);
  assert.match(source,/visibleEvaluated\.map\(\(\{s,e\},index\)=>/);
  assert.match(source,/visibleEvaluated\.length\} نتيجة معروضة/);
+});
+
+test('opportunity report uses the unified evaluation and factor blockers',async()=>{
+ const [route,component]=await Promise.all([readFile(path.join(root,'app/api/scan-report/route.ts'),'utf8'),readFile(path.join(root,'app/scan-report.tsx'),'utf8')]);
+ assert.match(route,/requestedStrategy!=='opportunity'/);
+ assert.match(route,/OPPORTUNITY_SPEC\.factors/);
+ assert.match(component,/evaluation\.factors\.map/);
+ assert.match(component,/opportunityStateText/);
 });
 
 test('opening a profile synchronizes its completed-session quote back into the visible card',async()=>{
@@ -241,6 +298,24 @@ test('screen refresh work is bounded while manual refresh remains available',asy
  assert.doesNotMatch(radar,/window\.addEventListener\('focus'/);
  assert.match(portfolio,/10 \* 60_000/);
  assert.doesNotMatch(portfolio,/window\.addEventListener\('focus'/);
+});
+
+test('company profile labels SEC fact-fetch failures and keeps the sourced financial ledger collapsed and phone-readable',async()=>{
+ const [source,css,route]=await Promise.all([readFile(path.join(root,'app/company-sheet.tsx'),'utf8'),readFile(path.join(root,'app/globals.css'),'utf8'),readFile(path.join(root,'app/api/company/route.ts'),'utf8')]);
+ assert.match(source,/<details className="audit-details financial-history">/);
+ assert.match(source,/providerStatus==='unavailable'\?/);
+ assert.match(source,/providerStatus==='empty'\?/);
+ assert.match(source,/providerStatus==='invalid'\?/);
+ assert.match(source,/providerStatus==='retrieved'\?/);
+ assert.match(source,/حالة استجابة SEC غير معروفة/);
+ assert.match(source,/providerMessage&&/);
+ assert.match(route,/deep:\$\{secUserAgentCacheVersion\(\)\}:/);
+ assert.doesNotMatch(route,/const cacheKey = `deep:v10:/);
+ assert.match(source,/القوائم المالية المنظمة · 3 سنوات و8 أرباع/);
+ for(const label of ['الإيرادات','صافي الدخل','الدخل التشغيلي','التدفق النقدي التشغيلي','الإنفاق الرأسمالي','تعويضات الأسهم'])assert(source.includes(label),`financial history is missing ${label}`);
+ assert.match(css,/\.financial-periods\{display:grid;grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);
+ const phoneRules=css.slice(css.indexOf('@media(max-width:600px)'));
+ assert.match(phoneRules,/\.financial-periods\{grid-template-columns:minmax\(0,1fr\)\}/);
 });
 
 test('Arabic enrichment preserves sourced fields and translates company news',async()=>{

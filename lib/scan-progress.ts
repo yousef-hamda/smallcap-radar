@@ -1,5 +1,7 @@
 import {SEC_FRAME_DATASET_COUNT} from './strategy-spec';
 
+export const OPPORTUNITY_SEC_PROGRESS_DETAIL = 'تحاول هذه المرحلة جلب البيانات المالية من SEC لكل سهم عادي مرتبط برقم CIK. نقص السعر أو القيمة السوقية أو السيولة لا يوقف الجلب، لكنه قد يمنع أهلية الترتيب.';
+
 export type ScanRun = {
  id: string; status: string; source: string; stage: number; offset: number;
  processed: number; total: number; failed: number; retryPending?: number;
@@ -18,7 +20,8 @@ export function scanProgress(run: ScanRun | null | undefined) {
  if (run.status === 'partial' && terminal) return { percent: 100, phase: 'اكتمل العمل مع نقص موثّق في بعض بيانات المزود', active: false };
  let percent = 0, phase = 'تجهيز السوق وجلب الأسعار الجماعية';
  if (run.source.includes('quick')) { percent = run.stage===0?0:run.stage===1?5+fraction*15:20+fraction*79; phase = 'فحص العينة — ليس السوق الكامل'; }
- else if (run.stage >= 10) { percent = 60 + fraction * 39.99; phase = 'التحقق من التاريخ والسيولة للمرشحين'; }
+ else if (run.stage === 11) { percent = 82 + fraction * 17.99; phase = 'جلب البيانات المالية من SEC حسب هوية المُصدر'; }
+ else if (run.stage === 10) { percent = 60 + fraction * 22; phase = 'التحقق من التاريخ والسيولة للمرشحين'; }
  else if (run.stage >= 9) { percent = 35 + fraction * 25; phase = 'تقييم الشركات وحفظ النتائج الأولية'; }
  else if (run.stage === 5) { percent = 30 + fraction * 5; phase = 'استعادة SEC Company Facts للبيانات الناقصة'; }
  else if (run.stage >= 4) {

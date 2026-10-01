@@ -5,6 +5,8 @@ const root = path.resolve(import.meta.dirname, '..');
 const universe = JSON.parse(await fs.readFile(path.join(root, 'lib/universe.generated.json'), 'utf8'));
 const allowed = new Set(universe.companies.map((company) => Number(company.cik)));
 const now = new Date();
+const asOf = now.getTime();
+const secUserAgent = process.env.SEC_USER_AGENT?.trim();
 const annual = `CY${now.getUTCFullYear() - 1}`;
 const currentQuarter = Math.floor(now.getUTCMonth() / 3) + 1;
 const quarter = currentQuarter === 1
@@ -33,6 +35,15 @@ const configs = [
   { key: 'debtNoncurrent', tag: 'BorrowingsNoncurrent', unit: 'USD', period: instant, priority: 1, taxonomy: 'ifrs-full' },
 ];
 
+if (process.argv.includes('--dry-run')) {
+  const issuers = new Set(universe.companies.map((company) => Number(company.cik)).filter(cik => Number.isSafeInteger(cik) && cik > 0));
+  console.log(`SEC Frames sync dry run: ${universe.companies.length} listings, ${issuers.size} distinct issuer CIKs, ${configs.length} bounded frame requests; no network calls or files changed. Contact identity configured: ${Boolean(secUserAgent)}.`);
+  process.exit(0);
+}
+if (!secUserAgent || !/\([^()\s]+@[^()\s]+\.[^()\s]+\)/.test(secUserAgent)) {
+  throw new Error('Set SEC_USER_AGENT to an application name followed by a reachable email in parentheses before making SEC requests.');
+}
+
 const records = {};
 const newer = (candidate, existing) => !existing || candidate.end > existing.end ||
   (candidate.end === existing.end && (candidate.filed > existing.filed ||
@@ -43,7 +54,7 @@ for (let index = 0; index < configs.length; index += 5) {
   const outcomes = await Promise.allSettled(group.map(async (config) => {
     const url = `https://data.sec.gov/api/xbrl/frames/${config.taxonomy}/${config.tag}/${config.unit}/${config.period}.json`;
     const response = await fetch(url, {
-      headers: { 'User-Agent': 'SmallCapRadar/2.1 (contact: yousef-hamda@users.noreply.github.com)', Accept: 'application/json' },
+      headers: { 'User-Agent': secUserAgent, Accept: 'application/json' },
       signal: AbortSignal.timeout(45_000),
     });
     if (!response.ok) throw new Error(`${config.tag}: HTTP ${response.status}`);
@@ -57,7 +68,10 @@ for (let index = 0; index < configs.length; index += 5) {
     const { config, url, payload } = outcome.value;
     for (const row of payload.data ?? []) {
       const cik = Number(row.cik);
-      if (!allowed.has(cik) || !Number.isFinite(row.val) || !row.end) continue;
+      const end = typeof row.end === 'string' ? Date.parse(`${row.end}T00:00:00Z`) : NaN;
+      const filed = typeof row.filed === 'string' ? Date.parse(`${row.filed}T23:59:59Z`) : NaN;
+      if (!allowed.has(cik) || !Number.isFinite(row.val) || !Number.isFinite(end) || end > asOf
+        || !Number.isFinite(filed) || filed > asOf) continue;
       const fact = { ...row, tag: config.tag, priority: config.priority, url };
       records[cik] ??= {};
       if (newer(fact, records[cik][config.key])) records[cik][config.key] = fact;
