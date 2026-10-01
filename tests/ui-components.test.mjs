@@ -265,12 +265,15 @@ test('radar favorites send the displayed verified snapshot when saving',async()=
  assert.match(source,/action:'favorite',symbol:s\.symbol,saved,\.\.\.\(saved\?\{snapshot:s\}:\{\}\)/);
 });
 
-test('unified opportunity view requests explicit states and never ranks incomplete evidence',async()=>{
+test('unified opportunity view separates verified investment scores from numbered SEC research priorities',async()=>{
  const source=await readFile(path.join(root,'app/page.tsx'),'utf8');
  assert.match(source,/strategy=\$\{view==='opportunity'\?'opportunity':view\}/);
  assert.match(source,/state=\$\{opportunityState\}/);
  assert.match(source,/e\.state===opportunityState/);
- assert.match(source,/e\.evidencedWeight\?e\.score\.toFixed\(1\):'—'/);
+ assert.match(source,/e\.state==='ranked'\?e\.score\.toFixed\(1\):e\.state==='needs-research'&&candidate\.hasVerifiedRevenue\?`#\$\{queuePosition\}`:'—'/);
+ assert.match(source,/operatingCandidateSignals\(s\)/);
+ assert.match(source,/candidate-signals/);
+ assert.match(source,/ليست درجة استثمار/);
  assert.match(source,/useState<OpportunityState>\('needs-research'\)/);
  assert.match(source,/visibleEvaluated\.map\(\(\{s,e\},index\)=>/);
  assert.match(source,/visibleEvaluated\.length\} نتيجة معروضة/);

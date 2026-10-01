@@ -13,6 +13,7 @@ import {parseOfficialDirectory,classifyListedSecurity} from '../../.test-build/d
 import {applyFinancingRisk} from '../../.test-build/financing-risk.mjs';
 import {OPPORTUNITY_SPEC} from '../../.test-build/opportunity-spec.mjs';
 import {evaluateOpportunity,isOpportunityProvenanceValid} from '../../.test-build/opportunity-engine.mjs';
+import {operatingCandidateSignals,operatingCandidateOrderSql} from '../../.test-build/opportunity-candidates.mjs';
 import {scoreFairValue,scoreFinancialStrength,scoreCatalysts,scoreEarningsQuality,scoreDownsideRisk,scoreTechnicalTiming,scoreQualitativeFactor} from '../../.test-build/opportunity-scoring.mjs';
 import {scoreOpportunityDossier,evaluateOpportunityDossier,opportunityDossierFromSnapshot} from '../../.test-build/opportunity-dossier.mjs';
 import {buildTechnicalTimingResearch} from '../../.test-build/opportunity-market.mjs';
@@ -627,6 +628,13 @@ test('unified opportunity scores on the fixed denominator and ranks only with ma
  const materialOnly=Object.fromEntries(['valuation','catalysts','financialStrength','earningsQuality','downsideRisk'].map(id=>[id,opportunityEvidence()[id]]));
  const partial=evaluateOpportunity(opportunitySnapshot,materialOnly);
  assert.equal(partial.state,'needs-research');assert.equal(partial.coveragePct,82);assert.equal(partial.score,82);assert.equal(partial.confidence,'low');
+});
+test('SEC operating research priorities use only issuer-linked dated facts and expose missing history',()=>{
+ const annual=(year,revenue,income,cash,capex,rightsStatus='redistribution-permitted')=>{const end=`${year}-12-31`,source={source:'SEC Company Facts · annual fixture',url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0000000001.json',periodEnd:end,availableAt:`${Number(year)+1}-02-01T00:00:00Z`,retrievedAt:`${Number(year)+1}-02-02T00:00:00Z`,rightsStatus,confidence:'high'};const value=n=>({value:n,unit:'USD',source});return{start:`${year}-01-01`,end,metrics:{revenue:value(revenue),netIncome:value(income),operatingCashFlow:value(cash),capitalExpenditure:value(capex)}}};
+ const snapshot={...opportunitySnapshot,asOf:'2026-09-30T23:00:00Z',opportunityResearch:{earnings:{annual:[annual('2023',100,10,14,4),annual('2024',120,18,22,5),annual('2025',150,30,40,8)]}}};
+ const signals=operatingCandidateSignals(snapshot);assert.equal(signals.hasVerifiedRevenue,true);assert.equal(signals.annualEvidenceYears,3);assert.equal(signals.profitableYears,3);assert.equal(signals.positiveFcfYears,3);assert.ok(signals.revenueGrowth>0);assert.equal(signals.latestProfitMargin,.2);assert.equal(signals.latestFcfMargin,32/150);
+ const restricted={...snapshot,opportunityResearch:{earnings:{annual:[annual('2025',150,30,40,8,'unknown')]}}};assert.equal(operatingCandidateSignals(restricted).hasVerifiedRevenue,false);assert.equal(operatingCandidateSignals(restricted).annualEvidenceYears,0);
+ const order=operatingCandidateOrderSql();assert.match(order,/source\.rightsStatus/);assert.match(order,/redistribution-permitted/);assert.match(order,/symbol ASC/);assert.match(order,/operatingCashFlow/);
 });
 test('missing, out-of-range, unsourced, stale and future factor evidence never earns points',()=>{
  const evidence=opportunityEvidence();evidence.valuation.score=11;evidence.catalysts.sources=[];evidence.financialStrength.sources=[{...opportunityProvenance,availableAt:'2027-01-01T00:00:00Z'}];

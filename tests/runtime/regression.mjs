@@ -476,15 +476,24 @@ test('15000 directory rows use bounded durable pages and resume quote progress',
 });
 
 test('unified opportunity pages keep incomplete companies in research and never rank them',async()=>{
- await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES('ranked-order','2099-01-01','2099-01-01','complete','Bulk Quotes/SEC Frames v10 · full',3,3,13,?)").bind(currentHash()).run();
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES('ranked-order','2099-01-01','2099-01-01','complete','Bulk Quotes/SEC Frames v10 · full',7,7,13,?)").bind(currentHash()).run();
  await insertSnapshot('ranked-order',{...base,symbol:'RANK-HIGH',name:'High score fixture',marketCap:50e6,return12m:-.2,evSales:1,ps:1,revenueGrowth:.25,operatingMarginTrend:.12,insiderBuyValue:50000,cash:20e6,debt:1e6}).run();
  await insertSnapshot('ranked-order',{...base,symbol:'RANK-LOW',name:'Low score fixture',marketCap:1.8e9,return12m:-.6,evSales:9,ps:9,revenueGrowth:-.2,operatingMarginTrend:-.1,insiderBuyValue:0,cash:1e6,debt:50e6}).run();
  await insertSnapshot('ranked-order',{...base,symbol:'RANK-FAIL',name:'Failed gate fixture',marketCap:5e9,return12m:.4}).run();
- const ranked=await readState({strategy:'opportunity',opportunityState:'ranked',limit:10});assert.equal(ranked.summary.total,3);assert.equal(ranked.summary.opportunityRanked,0);assert.equal(ranked.snapshots.length,0);
- const first=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:1});assert.equal(first.summary.opportunityNeedsResearch,3);assert.equal(first.snapshots.length,1);assert.equal(first.page.hasMore,true);
- const second=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:10,offset:1});assert.equal(second.snapshots.length,2);
- const all=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:10});assert.equal(all.snapshots.length,3);assert(all.snapshots.some(s=>s.symbol==='RANK-FAIL'));
+ const asOf='2026-09-30T23:00:00Z';
+ const annual=(year,revenue,income,cash,capex,rightsStatus='redistribution-permitted')=>{const end=`${year}-12-31`,source={source:'SEC Company Facts · runtime fixture',url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0000000001.json',periodEnd:end,availableAt:`${Number(year)+1}-02-01T00:00:00Z`,retrievedAt:`${Number(year)+1}-02-02T00:00:00Z`,rightsStatus,confidence:'high'};const value=n=>({value:n,unit:'USD',source});return{start:`${year}-01-01`,end,metrics:{revenue:value(revenue),netIncome:value(income),operatingCashFlow:value(cash),capitalExpenditure:value(capex)}}};
+ const researched=(symbol,values,rights='redistribution-permitted')=>insertSnapshot('ranked-order',{...base,symbol,asOf,opportunityResearch:{earnings:{providerStatus:'retrieved',coverage:{annualPeriodsFound:values.length,quarterlyPeriodsFound:0,selectedUnit:'USD'},annual:values.map((values,index)=>annual(String(2023+index),...values,rights)),quarterly:[],missing:[],conflicts:[],limitations:[],readyForScoring:false}}});
+ await researched('RANK-STRONG',[[100,10,14,4],[120,18,22,5],[150,30,40,8]]).run();
+ await researched('RANK-GROWTH',[[100,20,24,8],[150,30,35,10],[225,45,55,15]]).run();
+ await researched('RANK-LOSS',[[100,-5,0,3],[130,-4,2,3],[180,-2,4,4]]).run();
+ await researched('RANK-UNVERIFIED',[[500,100,150,10],[600,120,180,10],[700,140,210,10]],'unknown').run();
+ const ranked=await readState({strategy:'opportunity',opportunityState:'ranked',limit:10});assert.equal(ranked.summary.total,7);assert.equal(ranked.summary.opportunityRanked,0);assert.equal(ranked.snapshots.length,0);
+ const first=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:1});assert.equal(first.summary.opportunityNeedsResearch,7);assert.equal(first.snapshots.length,1);assert.equal(first.page.hasMore,true);
+ const second=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:10,offset:1});assert.equal(second.snapshots.length,6);
+ const all=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:10});assert.equal(all.snapshots.length,7);assert(all.snapshots.some(s=>s.symbol==='RANK-FAIL'));
  assert.deepEqual([...first.snapshots,...second.snapshots].map(s=>s.symbol),all.snapshots.map(s=>s.symbol));
+ assert.equal(all.snapshots[0].symbol,'RANK-STRONG','highest current profit and FCF margins lead the research shortlist');
+ assert.equal(all.snapshots.at(-1).symbol,'RANK-UNVERIFIED','facts without verified SEC reuse provenance are not used to prioritize');
 });
 
 test('radar pages refresh cached completed-session quotes without exceeding D1 bind limits',async()=>{

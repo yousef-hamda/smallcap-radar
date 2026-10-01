@@ -71,6 +71,9 @@ button,input{font:inherit}button,a{-webkit-tap-highlight-color:transparent}butto
 .opportunity-score strong{font-size:31px;line-height:1.1;color:#93d8bb;font-variant-numeric:tabular-nums}
 .opportunity-score>span{color:var(--muted);font-size:13px}
 .opportunity-score em{grid-column:1/-1;margin-top:5px;color:#a8b2ad;font-size:12px;font-style:normal}
+.candidate-signals{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:14px 0 8px;position:relative;z-index:1}
+.candidate-signals>span{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0;padding:9px 10px;border:1px solid #244a3a;border-radius:8px;background:#101b16;color:#b8c9c0;font-size:12px;line-height:1.5}
+.candidate-signals b{color:#a3e6c5;font-variant-numeric:tabular-nums;white-space:nowrap}
 .opportunity-factors{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:16px 0 10px;position:relative;z-index:1}
 .opportunity-factors>span{display:flex;flex-direction:column;justify-content:space-between;gap:7px;min-width:0;min-height:64px;padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:#141716}
 .opportunity-factors>span b{font-size:12px;line-height:1.45;color:#d9dedb}
@@ -86,7 +89,7 @@ button,input{font:inherit}button,a{-webkit-tap-highlight-color:transparent}butto
 .opportunity-detail-factors article>div span,.opportunity-detail-factors article>small{color:var(--muted);font-size:12px}
 .opportunity-detail-factors article>strong{color:#d8bd77}
 .opportunity-detail-factors article>small{line-height:1.6;overflow-wrap:anywhere}
-@media(max-width:760px){.opportunity-factors{grid-template-columns:repeat(2,minmax(0,1fr))}.opportunity-card-head{gap:9px}.opportunity-score{min-width:112px}.opportunity-detail-factors{grid-template-columns:1fr}}
+@media(max-width:760px){.opportunity-factors{grid-template-columns:repeat(2,minmax(0,1fr))}.candidate-signals{grid-template-columns:repeat(2,minmax(0,1fr))}.opportunity-card-head{gap:9px}.opportunity-score{min-width:112px}.opportunity-detail-factors{grid-template-columns:1fr}}
 @media(max-width:420px){.opportunity-card-head{flex-direction:column}.opportunity-score{justify-content:start;text-align:right}.opportunity-factors{gap:6px}.opportunity-factors>span{padding:8px;min-height:60px}.opportunity-factors>span b{font-size:11px}.opportunity-state-filter button{font-size:13px}}
 @media(max-width:370px){.transactions-list article{grid-template-columns:34px 48px minmax(60px,1fr) 92px}}
 

@@ -2,6 +2,7 @@ import {env} from 'cloudflare:workers';
 import type {Snapshot} from './engine';
 import {applyFinancingRisk} from './financing-risk';
 import {evaluateOpportunityDossier,opportunityDossierFromSnapshot} from './opportunity-dossier';
+import {operatingCandidateOrderSql} from './opportunity-candidates';
 import {OPPORTUNITY_SPEC,opportunitySpecHash} from './opportunity-spec';
 import {secUserAgentCacheVersion} from './sec-user-agent';
 export const db=()=>{const d=(env as any).DB;if(!d)throw Error('قاعدة البيانات غير متاحة');return d;};
@@ -109,7 +110,10 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
   // sort, and page in SQLite rather than loading the full market universe into
   // the Worker for every page request.
   const requested=options.opportunityState??'ranked';
-  queryForPage+=` AND (?='all' OR json_extract(evaluation,'$.opportunity.state')=?) ORDER BY COALESCE(json_extract(evaluation,'$.opportunity.score'),-1) DESC, COALESCE(json_extract(evaluation,'$.opportunity.scoreCoverage'),json_extract(evaluation,'$.opportunity.coveragePct'),0) DESC, symbol ASC LIMIT ? OFFSET ?`;
+  const requestedOrder=requested==='needs-research'
+   ? operatingCandidateOrderSql()
+   : `COALESCE(json_extract(evaluation,'$.opportunity.score'),-1) DESC, COALESCE(json_extract(evaluation,'$.opportunity.scoreCoverage'),json_extract(evaluation,'$.opportunity.coveragePct'),0) DESC, symbol ASC`;
+  queryForPage+=` AND (?='all' OR json_extract(evaluation,'$.opportunity.state')=?) ORDER BY ${requestedOrder} LIMIT ? OFFSET ?`;
   queryParams=[...params,requested,requested,limit+1,offset];
   databasePaged=true;
  }
@@ -149,7 +153,7 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
   // Category pages contain only proven members. Failed/unknown rows remain in
   // the immutable scan report so users can inspect every exclusion reason.
   rows=rows.filter((row:any)=>{const s=applyFinancingRisk(JSON.parse(row.payload));const saved=JSON.parse(row.evaluation).opportunity;const assessment=saved?.hash===opportunitySpecHash()?saved:evaluateSnapshotOpportunity(s);row.evaluation=JSON.stringify({...JSON.parse(row.evaluation),opportunity:assessment});const requested=options.opportunityState??'ranked';return requested==='all'||assessment.state===requested});
-  rows.sort((a:any,b:any)=>{const ae=JSON.parse(a.evaluation)[strategy],be=JSON.parse(b.evaluation)[strategy];const score=(e:any)=>e.score==null?Number.NEGATIVE_INFINITY:e.score;return score(be)-score(ae)||(be.scoreCoverage??be.coveragePct??0)-(ae.scoreCoverage??ae.coveragePct??0)||JSON.parse(a.payload).symbol.localeCompare(JSON.parse(b.payload).symbol)});
+  if(!databasePaged)rows.sort((a:any,b:any)=>{const ae=JSON.parse(a.evaluation)[strategy],be=JSON.parse(b.evaluation)[strategy];const score=(e:any)=>e.score==null?Number.NEGATIVE_INFINITY:e.score;return score(be)-score(ae)||(be.scoreCoverage??be.coveragePct??0)-(ae.scoreCoverage??ae.coveragePct??0)||JSON.parse(a.payload).symbol.localeCompare(JSON.parse(b.payload).symbol)});
  }
  if(strategy==='favorites'){
   rows=fav.filter(r=>!search||`${r.symbol} ${JSON.parse(r.payload).name}`.toLowerCase().includes(search)).map(r=>{
