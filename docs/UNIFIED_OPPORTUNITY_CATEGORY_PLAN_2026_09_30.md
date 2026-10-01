@@ -356,3 +356,37 @@ Structurally valid payloads with bad individual rows now report `partial` if val
 The integrated unified-category code is deployed; earlier sections that state there was no production release are historical and superseded. Commit `9743a33` is active at Railway deployment `b31bd856-32a6-41aa-b43e-fc769727435a`, and GitHub CI run `36804865916` passed. A production SQL-variable overflow in large radar pages was fixed by replacing per-stock/per-cache-generation bind lists with a one-bind JSON symbol filter. A 20-stock regression and live page checks at 1/5/10/40 pass.
 
 A full production scan is still in progress (run `20e35b96-dcb2-4840-b1a5-cce5a45ee3f1`, SEC enrichment stage 11, 816/5,923 issuer queue at this checkpoint). The API currently gives 6,961 rows, 0 ranked, 5,974 needs research, 987 excluded, stale=false. This confirms the production UI/read path works and that required evidence remains missing; it does not satisfy the requested complete eight-factor shortlist. Preserve strict unscored behavior until the acquisition, rights/review, and historical-validation gates below are actually met. Update this checkpoint with terminal coverage after the run finishes.
+
+## Terminal production evidence audit + performance fix — 2026-10-01
+
+The full production run `20e35b96-dcb2-4840-b1a5-cce5a45ee3f1` finished `partial` at stage 13. It processed 5,923/5,923 unique issuers in its SEC stage; one history acquisition failed after bounded retry. Telemetry: 17,911 SEC requests, 11,624 successes, 364 failures, 5,346 fundamental records. Report totals are 6,961 candidates, 0 ranked, 5,974 unknown, and 987 excluded. The `failed` count in the report is eligibility exclusions; it is not the pipeline's number of failed tasks.
+
+### Why the ranking is empty
+
+The report says every one of the eight required factors is UNKNOWN on all 6,961 rows. This is a dossier/source-acquisition gap, not evidence that the universe contains no undervalued companies. The risk gate is correctly fail-closed; do not weaken it to make the page nonempty.
+
+- Valuation: no sourced fair-value assessment is attached to the scanned dossier.
+- Catalysts: issuer filing indexes/classification are absent from the durable scanned dossier; raw filing counts or headlines cannot establish a binding contract, revenue timing, or uncaptured catalyst.
+- Financial strength: the sample issuer has 3/6 model inputs; debt dates conflict, debt maturity and standard consecutive interest histories are missing. SEC data presence alone is insufficient.
+- Earnings quality: 3 annual and 8 quarterly periods can exist while explicit GAAP/non-GAAP adjustment and one-off review is still absent; missing gross-profit series are reported rather than guessed.
+- Competition and management: required qualitative dimensions (differentiation, customer evidence, switching advantage, durability/substitution, execution, capital allocation, controls, alignment and verified insider activity) have not been reviewed.
+- Downside risk: no complete dated assessment is attached.
+- Technical timing: bulk rows have no stock/benchmark time series. On-demand profile history is not equivalent to per-issuer bulk coverage, and redistribution rights are unresolved.
+
+The live registry remains 14 families: 0 complete, 8 partial, 4 planned, 2 not guaranteed. Therefore the current output is a needs-research queue—not the finished automated short list in the request. Prioritize durable, cached, source-bearing factor adapters; write factor-specific acceptance tests and universe coverage reports; only then calculate a ranking. Do not automatically generate unsupported narrative judgements. For issuer-level qualitative dimensions, either show `not reviewed` or add a transparent, citeable review workflow.
+
+### Read-path correction and release
+
+The previous API materialized and re-scored all 6,961 rows in Worker memory and scanned the growing multi-GB deep-profile cache to overlay recent session prices. Commit `4a0e4d82687911aeb0cccc414f6efe45c39d4ba0` moves current-hash filter/order/pagination into SQLite and uses newest-first, bounded primary-key lookups for quote caches. Cold production page `state=needs-research&limit=40`: 21.359s before and 1.948s after, HTTP 200 and 40 rows; `ranked&limit=40`: HTTP 200 in 0.869s and 0 rows. These timings are sequential checks, deliberately avoiding concurrent D1 contention.
+
+Railway deployment `315afb09-198a-4879-872d-064fade25474` is SUCCESS; GitHub Actions `36811450289` passed. Local typecheck/lint/runtime (158 engine + 62 integration)/research (5)/DB (3)/verified build plus root/UI (46)/diff gates passed. Live scan report and AAPL profile returned HTTP 200. No data volume reset was done.
+
+### Work still required before claiming completion
+
+1. Implement coverage-counted market-data adapters and verified listing/price provenance; settle exchange sessions, corporate actions, source terms and history rights.
+2. Complete issuer-specific model routing and SEC XBRL reconciliation for same-date unrestricted cash, debt, interest, principal maturities, dilution, working capital and 8-quarter/3-year GAAP history, including IFRS/custom-tag gaps and currency methods.
+3. Build reproducible, source-linked fair-value methods (diluted shares and current-session quote reconciliation), and test scenario calculations/assumptions.
+4. Add primary-source catalyst extraction and manual/verified classification; distinguish contract, backlog, orders, partnership, MOU, announced capacity, contingent grant and recognized revenue.
+5. Build independently auditable risk, competition and governance/management evidence workflows; do not call summaries a complete review.
+6. Validate with as-of historical dossiers and survivorship-safe/delisted securities, fixed weights, untouched holdouts, calibrated confidence and walk-forward reporting before treating ranking quality as proven.
+7. Run another complete scan after acquisition changes and verify report counts, factor coverage, security classes, refresh freshness, and mobile/desktop view before upgrading the product's completion claim.
