@@ -103,7 +103,17 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
  // otherwise leave old null scores and stale weights in front of the user.
  const query=latest&&strategy!=='favorites'?`SELECT payload,evaluation FROM fundamental_snapshots WHERE run_id=? AND (?='' OR instr(lower(symbol),?)>0 OR instr(lower(json_extract(payload,'$.name')),?)>0)`:null;
  const params=latest?[latest.id,search,search,search]:[];
- let rows:any[]=query?(await d.prepare(query).bind(...params).all()).results.map((r:any)=>{
+ let databasePaged=false,queryForPage=query,queryParams=params;
+ if(query&&currentData){
+  // Current-run evaluations already have the active strategy hash. Filter,
+  // sort, and page in SQLite rather than loading the full market universe into
+  // the Worker for every page request.
+  const requested=options.opportunityState??'ranked';
+  queryForPage+=` AND (?='all' OR json_extract(evaluation,'$.opportunity.state')=?) ORDER BY COALESCE(json_extract(evaluation,'$.opportunity.score'),-1) DESC, COALESCE(json_extract(evaluation,'$.opportunity.scoreCoverage'),json_extract(evaluation,'$.opportunity.coveragePct'),0) DESC, symbol ASC LIMIT ? OFFSET ?`;
+  queryParams=[...params,requested,requested,limit+1,offset];
+  databasePaged=true;
+ }
+ let rows:any[]=queryForPage?(await d.prepare(queryForPage).bind(...queryParams).all()).results.map((r:any)=>{
   // A current run already stores the evaluation produced by this exact
   // strategy hash. Reusing it avoids parsing and scoring every company on
   // every page refresh; stale runs still take the conservative re-evaluation
@@ -153,7 +163,7 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
   });
   rows=rows.slice(offset,offset+limit+1);
  }
- if(strategy!=='favorites')rows=rows.slice(offset,offset+limit+1);
+ if(strategy!=='favorites'&&!databasePaged)rows=rows.slice(offset,offset+limit+1);
  const pageRows=rows.slice(0,limit);
  // A profile may have been refreshed after the durable scan row was written.
  // Use its canonical completed-session pair for the card response so an old
@@ -163,12 +173,22 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
  const deepSymbols=[...new Set(pageRows.flatMap((row:any)=>{try{return [String(JSON.parse(row.payload).symbol)]}catch{return []}}))];
  const deepSessionBySymbol=new Map<string,any>();
  if(deepSymbols.length){
-  // Use one JSON parameter instead of one SQL bind per cache generation and
-  // symbol. The old 15 * page-size IN list exceeded D1's variable limit on
-  // ordinary 10+ row pages. Keep the suffix delimiter check so e.g. ABC
-  // cannot match a cached symbol ABCD.
-  const deepRows=(await d.prepare(`SELECT key,payload FROM raw_cache WHERE key LIKE 'deep:%' AND EXISTS (SELECT 1 FROM json_each(?) AS requested WHERE substr(raw_cache.key,length(raw_cache.key)-length(requested.value)+1)=requested.value AND substr(raw_cache.key,length(raw_cache.key)-length(requested.value),1)=':') ORDER BY key ASC`).bind(JSON.stringify(deepSymbols)).all()).results as any[];
-  for(const row of deepRows){try{const snapshot=JSON.parse(String(row.payload));const tag=String(snapshot?.provenance?.dailyChange?.tag||'');if(snapshot?.symbol&&Number.isFinite(snapshot.dailyChange)&&(tag.includes('previous close')||tag.includes('previous completed close'))){const existing=deepSessionBySymbol.get(snapshot.symbol);const priority=(key:string)=>key.startsWith(`deep:${secUserAgentCacheVersion()}:`)?15:key.startsWith('deep:v21:')?14:key.startsWith('deep:v20:')?13:key.startsWith('deep:v19:')?12:key.startsWith('deep:v18:')?11:key.startsWith('deep:v17:')?10:key.startsWith('deep:v16:')?9:key.startsWith('deep:v15:')?8:key.startsWith('deep:v14:')?7:key.startsWith('deep:v13:')?6:key.startsWith('deep:v12:')?5:key.startsWith('deep:v11:')?4:key.startsWith('deep:v10:')?3:key.startsWith('deep:v9:')?2:1;if(!existing||priority(String(row.key))>priority(existing.key))deepSessionBySymbol.set(snapshot.symbol,{snapshot,key:String(row.key)})}}catch{/* ignore malformed optional cache */}}
+  // Probe indexed primary keys newest-first. Scanning the multi-GB raw_cache
+  // table with LIKE + json_each made radar reads slow as profiles accumulated.
+  // Only unresolved symbols move to the next generation; each query binds at
+  // most one key per page symbol, below even conservative D1 variable limits.
+  const versions=[secUserAgentCacheVersion(),...Array.from({length:18},(_,index)=>`v${21-index}`)];
+  let unresolved=deepSymbols;
+  for(const version of versions){
+   for(let start=0;start<unresolved.length;start+=80){
+    const symbols=unresolved.slice(start,start+80),keys=symbols.map(symbol=>`deep:${version}:${symbol}`);
+    if(!keys.length)continue;
+    const found=(await d.prepare(`SELECT key,payload FROM raw_cache WHERE key IN (${keys.map(()=>'?').join(',')})`).bind(...keys).all()).results as any[];
+    for(const row of found){try{const snapshot=JSON.parse(String(row.payload));const tag=String(snapshot?.provenance?.dailyChange?.tag||'');if(snapshot?.symbol&&Number.isFinite(snapshot.dailyChange)&&(tag.includes('previous close')||tag.includes('previous completed close')))deepSessionBySymbol.set(snapshot.symbol,{snapshot,key:String(row.key)})}catch{/* ignore malformed optional cache */}}
+   }
+   if(deepSessionBySymbol.size===deepSymbols.length)break;
+   unresolved=deepSymbols.filter(symbol=>!deepSessionBySymbol.has(symbol));
+  }
  }
  const compact=(payload:string)=>{const parsed=JSON.parse(payload);const deep=deepSessionBySymbol.get(parsed.symbol)?.snapshot;if(deep&&Number.isFinite(deep.dailyChange)&&deep.provenance?.dailyChange){parsed.dailyChange=deep.dailyChange;if(Number.isFinite(deep.price))parsed.price=deep.price;parsed.provenance={...parsed.provenance,price:deep.provenance.price??parsed.provenance?.price,dailyChange:deep.provenance.dailyChange};}delete parsed.history;return parsed};
  const evaluatedRows=pageRows.map((row:any)=>{const result=JSON.parse(row.evaluation);if(result.opportunity?.hash===opportunitySpecHash())return result;const snapshot=applyFinancingRisk(JSON.parse(row.payload));return {...result,opportunity:evaluateSnapshotOpportunity(snapshot)}});
