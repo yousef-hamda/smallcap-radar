@@ -224,3 +224,9 @@ Final FX follow-up verification: `npm run test:runtime` passes 157 engine + 60 i
 - CI now includes lint, runtime, research, database, and full build/root tests in addition to type checking.
 - Production audit: latest live deploy is still old; `/api/source-registry` is 404, and its existing scan is stale/partial with 0/6 Company Facts success and HTTP 403. Do not describe this as a live unified release or healthy current data. Railway service settings/volume and a post-deploy fresh scan still need checking.
 - No universal free, rights-cleared feed was identified for every requested market-history/ownership/short-interest field; keep technical factor unscored until rights and coverage are demonstrated. Never substitute daily short volume for official short-interest positions.
+
+## Superseding production release and scan checkpoint — 2026-10-01
+
+The unified Opportunity pipeline and its D1 bind-limit fix are live on Railway at deployment `b31bd856-32a6-41aa-b43e-fc769727435a` (commit `9743a33`). CI run `36804865916` passed. Root cause was a large `IN (...)` cache-key query (up to 15 binds per stock); it now uses one JSON-array bind and a 20-row regression. Production `/api/radar` tests at limits 1/5/10/40 return HTTP 200; 40 rows took ~3.6s. Persistent volume remains `/app/data` (last reported 2,227/5,000 MB).
+
+Production full scan `20e35b96-dcb2-4840-b1a5-cce5a45ee3f1` remains in stage 11 (816/5,923 unique issuers at checkpoint). Earlier stages covered 7,102 listings/6,961 candidates and recorded 6,065 SEC requests, 5,869 successes, 196 failures, and 5,346 issuer-fact records; one historical acquisition failure remains recorded after retry. Current result totals: 6,961, 0 ranked, 5,974 needs research, 987 excluded, not stale. Do not represent it as a complete ranking. Factors without sourced evidence stay unscored. Await scan terminal state and record the final factor-level blocker counts. No owner email or credentials belong in memory.
