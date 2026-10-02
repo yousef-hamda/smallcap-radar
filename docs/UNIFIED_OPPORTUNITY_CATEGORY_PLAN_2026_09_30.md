@@ -2,6 +2,10 @@
 
 Updated: 2026-10-02
 
+## Deployment checkpoint — evidence-backed subtotals (2026-10-02)
+
+The first zero-ranking correction has been deployed and checked against production (Railway deployment `4d0bda48-146c-47a7-bbef-72d8424f86b0`, Git commits `292fd50`, `702c870`). It fixes a presentation/order defect: 2,004/6,954 stored companies now have auditable partial points and appear in the default needs-research queue; 0 are promoted to final ranked. The fixed 100-point denominator and eight-factor complete-evidence gate are unchanged. Production sample top rows have 19.98 points with 20.7% coverage; that is a research priority subtotal, not a full rating. This does not complete the original goal of an automated fully researched ranking for all stocks: broad free sources do not provide evidence for valuation, catalyst verification, competitive advantage, full downside diligence, governance, and rights-cleared technical timing for every issuer. Production API latency was ~31s on first legacy re-evaluation and ~7–13s on repeat, so persistent caching and load/performance verification are still required. Continue with factor-by-factor source and dossier implementation; never manufacture unknown evidence or relax completion gates.
+
 ## Ranking-zero follow-up — 2026-10-02
 
 - Live endpoint confirmation: the newest Railway run is complete (run `99298b14-0edc-4d36-a4cc-ba7913022e27`; 6,954 stored rows), with 0 complete ratings. The cause is downstream evidence completeness: the run has SEC/market snapshot data but does not carry all eight evaluated factor dossiers. CELH profile has three annual and eight quarterly periods, yet no verified 6-month catalysts, multi-method fair value, competitive/management reviews, all-domain downside search, or product-rights-cleared technical source. This is not a scan completion failure.

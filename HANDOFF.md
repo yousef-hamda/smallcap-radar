@@ -2,6 +2,14 @@
 
 Updated 2026-10-02. Start with `docs/UNIFIED_OPPORTUNITY_CATEGORY_PLAN_2026_09_30.md`, `docs/PROJECT_MEMORY.md`, and `docs/OPERATIONS_MEMORY.md`. Earlier status entries below are historical; the latest checkpoints supersede them.
 
+## Latest production verification — opportunity subtotals (2026-10-02)
+
+- Commits `292fd50` (scoring/UI/storage fix) and `702c870` (ignore local browser artifacts) are on `master`. Railway production deploy `4d0bda48-146c-47a7-bbef-72d8424f86b0` completed successfully.
+- Live `/api/radar?strategy=opportunity&state=needs-research&limit=10` returned HTTP 200. Completed run `99298b14-0edc-4d36-a4cc-ba7913022e27` has 6,954 stored rows and 5,921 processed; summary: 0 fully ranked, 5,971 need research, 983 excluded, 2,004 with positive supported points. Response marks scan data stale relative to current strategy hash; it has been re-evaluated on read.
+- Live top rows are ordered by fixed-denominator evidence points, then coverage: ASTH 19.98/20.7%, FLOC 19.98/20.7%, DXPE 19.98/20.7%, DGX 19.98/20.7%, BFAM 19.98/20.7%, FOUR 19.74/20.7%, RGS 19.74/20.7%, CVSA 19.50/20.7%, CELH 19.38/20.7%, OPCH 19.38/20.7%. CELH profile endpoint confirms 19.38 points and 20.7% coverage; financial strength and earnings quality are the only partially evidenced factors.
+- The UI defaults to the research queue, so those candidates are visible. The fully complete ranked filter correctly remains empty: available broad-scan/SEC facts cannot establish the other six rubric factors. Do not describe the subtotal as a complete rating or prediction. The required full automated investment shortlist is still incomplete pending licensed/right-cleared data and/or researched dossier workflows for all eight factors.
+- Verification caveat: first stale-run request took about 31 seconds, repeated requests 7–13 seconds during this check. Investigate persistent evaluation/materialized summary caching and per-factor source coverage before calling runtime performance complete. Automated local gates and 390px browser UI checks passed before release; browser session artifacts are ignored.
+
 ## Latest continuation — ranking zero diagnosis (2026-10-02)
 
 - Production was checked directly: run `99298b14-0edc-4d36-a4cc-ba7913022e27` is complete (5,921 processed; 6,954 stored rows), but its deployed evaluator returns 0 complete ranks. The live scan data exists; ranking is zero because the deployed evaluator requires all eight fixed-weight factors and the stored scan does not contain full dossiers. It is not a failed scan or an empty market.

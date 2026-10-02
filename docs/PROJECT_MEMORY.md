@@ -2,6 +2,10 @@
 
 Last verified: 2026-10-02. This is repository memory; many older entries below are dated historical checkpoints and are superseded by the latest continuation at the end. Active plan: `docs/UNIFIED_OPPORTUNITY_CATEGORY_PLAN_2026_09_30.md`.
 
+## 2026-10-02 production ranking follow-up
+
+Scoring/UI/storage change is pushed (`292fd50`) and deployed to Railway (`4d0bda48-146c-47a7-bbef-72d8424f86b0`); `.playwright-cli/` ignore follow-up is `702c870`. Live API version is `0.6.0-fixed-weight-evidence-subtotals`. On the completed run (6,954 rows), 2,004 have evidence-backed points and appear in the default, score-sorted research queue; 0 have a complete final rating. Sample top: ASTH/FLOC/DXPE/DGX/BFAM each 19.98 points at 20.7% coverage. CELH profile confirms 19.38 points, 20.7% coverage, partial financial-strength and earnings-quality evidence only. Scores use the fixed 100-point denominator and must be labeled provisional. The other six factor groups lack evidence; keep final eligibility gated at complete factors and safety checks. First stale-run API read took ~31s and repeats took 7–13s; measure/cache more durably before declaring performance complete. See handoff and operations memory.
+
 ## Latest continuation — investigate zero ranking (2026-10-02)
 
 - Live Railway `GET /api/radar` returned completed run `99298b14-0edc-4d36-a4cc-ba7913022e27`, 6,954 rows, 0 complete ranks, 5,971 needs-research, 983 evidence-based exclusions. It did not indicate a fetch that had failed to finish. `GET /api/company?symbol=CELH` showed full SEC financial periods but no completed fair-value, catalyst, competitor, downside, governance or rights-cleared technical dossier.

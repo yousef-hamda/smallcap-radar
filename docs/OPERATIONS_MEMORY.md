@@ -2,6 +2,10 @@
 
 Last verified: 2026-10-02. Keep this file free of credentials and private recovery links.
 
+## 2026-10-02 opportunity scorer deployment
+
+Railway release `4d0bda48-146c-47a7-bbef-72d8424f86b0` is live after manual `railway up`; pushing GitHub did not trigger a Railway deployment. Validate by checking deployment status and calling `/api/radar?strategy=opportunity&state=needs-research&limit=10`. Expected spec version `0.6.0-fixed-weight-evidence-subtotals`, 2,004 companies with supported points on the current 6,954-row run, and descending score/coverage order. `opportunityRanked: 0` remains expected until eight-factor evidence plus gates exists; do not weaken this gate. The existing scan is served as `stale: true` relative to the new strategy hash but re-evaluated in memory. Observed first request ~31s, later requests 7–13s: investigate durable versioned evaluation cache/materialized summaries and D1 query timings. Scan refresh is not required merely to recompute the formula, but broader source/dossier completion is required before final ratings can appear.
+
 ## Ranking-zero production diagnosis — 2026-10-02
 
 - Live radar endpoint confirmed the current production scan is complete, but its deployed evaluator has 0 complete ratings because the strict eight-factor dossier gate is not met. The current Railway code does not include local verified-subfactor scoring, bounded stale-snapshot re-evaluation, or the four evidence/ranking summary counters.
