@@ -1,8 +1,9 @@
 import {env} from 'cloudflare:workers';
 import type {Snapshot} from './engine';
+import type {OpportunityEvaluation} from './opportunity-engine';
 import {applyFinancingRisk} from './financing-risk';
 import {evaluateOpportunityDossier,opportunityDossierFromSnapshot} from './opportunity-dossier';
-import {operatingCandidateOrderSql} from './opportunity-candidates';
+import {operatingCandidateOrderSql,operatingCandidateSignals} from './opportunity-candidates';
 import {OPPORTUNITY_SPEC,opportunitySpecHash} from './opportunity-spec';
 import {secUserAgentCacheVersion} from './sec-user-agent';
 export const db=()=>{const d=(env as any).DB;if(!d)throw Error('قاعدة البيانات غير متاحة');return d;};
@@ -11,8 +12,12 @@ type StateCacheEntry={expiresAt:number;value:any};
 const stateCache=new Map<string,StateCacheEntry>();
 const STATE_CACHE_TTL=5_000;
 const STATE_CACHE_LIMIT=64;
+type LegacyEvaluationRow={id:string;symbol:string;name:string;state:string;score:number;coverage:number;eligible:boolean;positiveFcf:number;profitable:number;evidenceYears:number;growth:number|null;fcfMargin:number|null;profitMargin:number|null};
+type LegacyEvaluationCache={expiresAt:number;summary:{total:number;opportunityRanked:number;opportunityNeedsResearch:number;opportunityExcluded:number;opportunityWithEvidence:number};rows:LegacyEvaluationRow[]};
+const legacyEvaluationCache=new Map<string,LegacyEvaluationCache>();
+const LEGACY_EVALUATION_TTL=5*60_000;
 function evaluateSnapshotOpportunity(snapshot:Snapshot){return evaluateOpportunityDossier(snapshot,opportunityDossierFromSnapshot(snapshot));}
-export function invalidateStateCache(){stateCache.clear();}
+export function invalidateStateCache(){stateCache.clear();legacyEvaluationCache.clear();}
 function rememberState(key:string,value:any){
  if(stateCache.size>=STATE_CACHE_LIMIT)stateCache.delete(stateCache.keys().next().value!);
  stateCache.set(key,{expiresAt:Date.now()+STATE_CACHE_TTL,value});
@@ -93,11 +98,7 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
   }
  }
  const portfolioCount=options.owner?Number((await d.prepare("SELECT COUNT(*) AS count FROM (SELECT symbol FROM portfolio_transactions WHERE owner=? GROUP BY symbol HAVING SUM(CASE side WHEN 'buy' THEN quantity ELSE -quantity END)>0.00000001)").bind(options.owner).first() as any)?.count||0):0;
- let summaryRow=currentData?await d.prepare(`SELECT COUNT(*) AS total, SUM(CASE WHEN json_extract(evaluation, '$.opportunity.state')='ranked' THEN 1 ELSE 0 END) AS opportunityRanked, SUM(CASE WHEN json_extract(evaluation, '$.opportunity.state')='needs-research' THEN 1 ELSE 0 END) AS opportunityNeedsResearch, SUM(CASE WHEN json_extract(evaluation, '$.opportunity.state')='excluded' THEN 1 ELSE 0 END) AS opportunityExcluded FROM fundamental_snapshots WHERE run_id=?`).bind(latest.id).first() as any: null;
- if(latest){
-  const missingOpportunity=Number((await d.prepare("SELECT COUNT(*) AS n FROM fundamental_snapshots WHERE run_id=? AND (json_extract(evaluation,'$.opportunity.hash') IS NULL OR json_extract(evaluation,'$.opportunity.hash')<>?)").bind(latest.id,opportunitySpecHash()).first() as any)?.n||0);
-  if(missingOpportunity){const rowsForOpportunity=(await d.prepare('SELECT payload FROM fundamental_snapshots WHERE run_id=?').bind(latest.id).all()).results as any[];const counts={opportunityRanked:0,opportunityNeedsResearch:0,opportunityExcluded:0};for(const row of rowsForOpportunity){const assessment=evaluateSnapshotOpportunity(JSON.parse(row.payload));if(assessment.state==='ranked')counts.opportunityRanked++;else if(assessment.state==='excluded')counts.opportunityExcluded++;else counts.opportunityNeedsResearch++;}summaryRow={...(summaryRow||{}),...counts};}
- }
+ let summaryRow=currentData?await d.prepare(`SELECT COUNT(*) AS total, SUM(CASE WHEN json_extract(evaluation, '$.opportunity.state')='ranked' THEN 1 ELSE 0 END) AS opportunityRanked, SUM(CASE WHEN json_extract(evaluation, '$.opportunity.state')='needs-research' THEN 1 ELSE 0 END) AS opportunityNeedsResearch, SUM(CASE WHEN json_extract(evaluation, '$.opportunity.state')='excluded' THEN 1 ELSE 0 END) AS opportunityExcluded, SUM(CASE WHEN json_extract(evaluation, '$.opportunity.score')>0 THEN 1 ELSE 0 END) AS opportunityWithEvidence FROM fundamental_snapshots WHERE run_id=?`).bind(latest.id).first() as any: null;
  const search=options.query?.trim().toLowerCase().slice(0,100)||'';
  // Re-evaluate every row with the current engine before ranking. Durable rows
  // can predate a scoring-version change; sorting the persisted evaluation would
@@ -111,7 +112,7 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
   // the Worker for every page request.
   const requested=options.opportunityState??'ranked';
   const requestedOrder=requested==='needs-research'
-   ? operatingCandidateOrderSql()
+   ? `COALESCE(json_extract(evaluation,'$.opportunity.score'),0) DESC, COALESCE(json_extract(evaluation,'$.opportunity.coveragePct'),0) DESC, ${operatingCandidateOrderSql()}`
    : `COALESCE(json_extract(evaluation,'$.opportunity.score'),-1) DESC, COALESCE(json_extract(evaluation,'$.opportunity.scoreCoverage'),json_extract(evaluation,'$.opportunity.coveragePct'),0) DESC, symbol ASC`;
   queryForPage+=` AND (?='all' OR json_extract(evaluation,'$.opportunity.state')=?) ORDER BY ${requestedOrder} LIMIT ? OFFSET ?`;
   queryParams=[...params,requested,requested,limit+1,offset];
@@ -125,14 +126,45 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
   if(currentData&&typeof r.evaluation==='string')return {payload:r.payload,evaluation:r.evaluation};
   const s=applyFinancingRisk(JSON.parse(r.payload));return {payload:JSON.stringify(s),evaluation:JSON.stringify({opportunity:evaluateSnapshotOpportunity(s)})}
  }):[];
- // A strategy-version change must not make the product look empty. Re-evaluate
- // the last completed snapshot with the current engine and label it stale until
- // a new scan replaces it. The prior data timestamp and run remain visible.
- if(latest&&!currentData){
-  const all=search?(await d.prepare('SELECT payload FROM fundamental_snapshots WHERE run_id=?').bind(latest.id).all()).results as any[]:rows;
-  const totals={total:all.length,opportunityRanked:0,opportunityNeedsResearch:0,opportunityExcluded:0};
-  for(const row of all){const opportunity=evaluateSnapshotOpportunity(applyFinancingRisk(JSON.parse(row.payload)));if(opportunity.state==='ranked')totals.opportunityRanked++;else if(opportunity.state==='excluded')totals.opportunityExcluded++;else totals.opportunityNeedsResearch++;}
-  summaryRow=totals;
+ // A scoring-version change must show the last completed run immediately. Re-score
+ // it in bounded payload batches, sort compact keys, and fetch only the requested
+ // page. Never materialize the entire multi-megabyte market snapshot in Worker memory.
+ if(latest&&!currentData&&strategy!=='favorites'){
+  let cached=legacyEvaluationCache.get(String(latest.id));
+  if(cached&&cached.expiresAt<=Date.now()){legacyEvaluationCache.delete(String(latest.id));cached=undefined;}
+  if(!cached){
+   const totals={total:0,opportunityRanked:0,opportunityNeedsResearch:0,opportunityExcluded:0,opportunityWithEvidence:0};
+   const order:LegacyEvaluationRow[]=[];const batchSize=100;let batchOffset=0;
+   while(true){
+    const batch=(await d.prepare(`SELECT id,symbol,payload FROM fundamental_snapshots WHERE run_id=? ORDER BY symbol ASC LIMIT ? OFFSET ?`).bind(latest.id,batchSize,batchOffset).all()).results as any[];
+    if(!batch.length)break;
+    for(const row of batch){
+     totals.total++;let snapshot:Snapshot,opportunity:OpportunityEvaluation;
+     try{snapshot=applyFinancingRisk(JSON.parse(String(row.payload)));opportunity=evaluateSnapshotOpportunity(snapshot)}catch{totals.opportunityNeedsResearch++;continue}
+     if(opportunity.state==='ranked')totals.opportunityRanked++;else if(opportunity.state==='excluded')totals.opportunityExcluded++;else totals.opportunityNeedsResearch++;
+     if(opportunity.score>0)totals.opportunityWithEvidence++;
+     const signals=operatingCandidateSignals(snapshot);order.push({id:String(row.id),symbol:String(row.symbol),name:String(snapshot.name||''),state:opportunity.state,score:opportunity.score,coverage:opportunity.coveragePct,eligible:signals.eligibleForOperatingQueue,positiveFcf:signals.positiveFcfYears,profitable:signals.profitableYears,evidenceYears:signals.yearsWithProfitEvidence+signals.yearsWithFcfEvidence,growth:signals.revenueGrowth,fcfMargin:signals.latestFcfMargin,profitMargin:signals.latestProfitMargin});
+    }
+    batchOffset+=batch.length;if(batch.length<batchSize)break;
+   }
+   const desc=(a:number|null,b:number|null)=>a==null?(b==null?0:1):b==null?-1:b-a;
+   order.sort((a,b)=>b.score-a.score||b.coverage-a.coverage||Number(b.eligible)-Number(a.eligible)||b.positiveFcf-a.positiveFcf||b.profitable-a.profitable||b.evidenceYears-a.evidenceYears||desc(a.growth,b.growth)||desc(a.fcfMargin,b.fcfMargin)||desc(a.profitMargin,b.profitMargin)||a.symbol.localeCompare(b.symbol));
+   cached={expiresAt:Date.now()+LEGACY_EVALUATION_TTL,summary:totals,rows:order};
+   if(legacyEvaluationCache.size>=2)legacyEvaluationCache.delete(legacyEvaluationCache.keys().next().value!);
+   legacyEvaluationCache.set(String(latest.id),cached);
+  }
+  summaryRow=cached.summary;
+  const requested=options.opportunityState??'ranked';
+  const order=cached.rows.filter(row=>(requested==='all'||row.state===requested)&&(!search||`${row.symbol} ${row.name}`.toLowerCase().includes(search)));
+
+  const selected=order.slice(offset,offset+limit+1);
+  rows=[];
+  for(let start=0;start<selected.length;start+=80){
+   const group=selected.slice(start,start+80),found=(await d.prepare(`SELECT id,payload FROM fundamental_snapshots WHERE id IN (${group.map(()=>'?').join(',')})`).bind(...group.map(row=>row.id)).all()).results as any[];
+   const payloadById=new Map(found.map((row:any)=>[String(row.id),String(row.payload)]));
+   for(const item of group){const payload=payloadById.get(item.id);if(!payload)continue;const snapshot=applyFinancingRisk(JSON.parse(payload)),opportunity=evaluateSnapshotOpportunity(snapshot);rows.push({payload:JSON.stringify(snapshot),evaluation:JSON.stringify({opportunity})});}
+  }
+  databasePaged=true;
  }
  const coverageRow=latest?await d.prepare(`SELECT COUNT(*) AS total,
   SUM(CASE WHEN json_type(payload,'$.price') IN ('integer','real') THEN 1 ELSE 0 END) AS price,
@@ -149,7 +181,7 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
   SUM(CASE WHEN json_type(payload,'$.dilution') IN ('integer','real') THEN 1 ELSE 0 END) AS dilution
   FROM fundamental_snapshots WHERE run_id=?`).bind(latest.id).first() as any:null;
  const coverage=coverageRow?{runId:latest.id,total:Number(coverageRow.total||0),fields:Object.fromEntries(['price','marketCap','revenue','netIncome','fcf','cash','debt','medianDollarVolume20d','return12m','low52w','ma30w','dilution'].map(key=>[key,Number(coverageRow[key]||0)]))}:null;
- if(strategy!=='favorites'){
+ if(strategy!=='favorites'&&!databasePaged){
   // Category pages contain only proven members. Failed/unknown rows remain in
   // the immutable scan report so users can inspect every exclusion reason.
   rows=rows.filter((row:any)=>{const s=applyFinancingRisk(JSON.parse(row.payload));const saved=JSON.parse(row.evaluation).opportunity;const assessment=saved?.hash===opportunitySpecHash()?saved:evaluateSnapshotOpportunity(s);row.evaluation=JSON.stringify({...JSON.parse(row.evaluation),opportunity:assessment});const requested=options.opportunityState??'ranked';return requested==='all'||assessment.state===requested});
@@ -197,7 +229,7 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
  const compact=(payload:string)=>{const parsed=JSON.parse(payload);const deep=deepSessionBySymbol.get(parsed.symbol)?.snapshot;if(deep&&Number.isFinite(deep.dailyChange)&&deep.provenance?.dailyChange){parsed.dailyChange=deep.dailyChange;if(Number.isFinite(deep.price))parsed.price=deep.price;parsed.provenance={...parsed.provenance,price:deep.provenance.price??parsed.provenance?.price,dailyChange:deep.provenance.dailyChange};}delete parsed.history;return parsed};
  const evaluatedRows=pageRows.map((row:any)=>{const result=JSON.parse(row.evaluation);if(result.opportunity?.hash===opportunitySpecHash())return result;const snapshot=applyFinancingRisk(JSON.parse(row.payload));return {...result,opportunity:evaluateSnapshotOpportunity(snapshot)}});
  const stale=!!latest&&!currentData;
- const value={run:active?{...active,universe:undefined,retry_queue:undefined,retryPending:JSON.parse(active.retry_queue||'[]').length,stale}:null,dataRunId:latest?.id,dataRun:latest?{...latest,universe:undefined,retry_queue:undefined,stale}:null,snapshots:pageRows.map((r:any)=>compact(r.payload)),storedEvaluations:evaluatedRows,favorites:fav.map((r:any)=>r.symbol),portfolioCount,coverage,summary:{total:Number(summaryRow?.total||0),opportunityRanked:Number(summaryRow?.opportunityRanked||0),opportunityNeedsResearch:Number(summaryRow?.opportunityNeedsResearch||0),opportunityExcluded:Number(summaryRow?.opportunityExcluded||0),stale},page:{strategy,limit,offset,hasMore:rows.length>limit}};
+ const value={run:active?{...active,universe:undefined,retry_queue:undefined,retryPending:JSON.parse(active.retry_queue||'[]').length,stale}:null,dataRunId:latest?.id,dataRun:latest?{...latest,universe:undefined,retry_queue:undefined,stale}:null,snapshots:pageRows.map((r:any)=>compact(r.payload)),storedEvaluations:evaluatedRows,favorites:fav.map((r:any)=>r.symbol),portfolioCount,coverage,summary:{total:Number(summaryRow?.total||0),opportunityRanked:Number(summaryRow?.opportunityRanked||0),opportunityNeedsResearch:Number(summaryRow?.opportunityNeedsResearch||0),opportunityExcluded:Number(summaryRow?.opportunityExcluded||0),opportunityWithEvidence:Number(summaryRow?.opportunityWithEvidence||0),stale},page:{strategy,limit,offset,hasMore:rows.length>limit}};
  rememberState(cacheKey,value);return value;}
 export async function readAudit(){await ensureSchema();const d=db();const latest=await d.prepare("SELECT * FROM strategy_runs WHERE status IN ('complete','partial') ORDER BY created_at DESC LIMIT 1").first() as any;const logs=latest?(await d.prepare('SELECT stage,created_at,message FROM diag WHERE run_id=? ORDER BY created_at DESC LIMIT 500').bind(latest.id).all()).results:[];const state=await readState({strategy:'opportunity',opportunityState:'all',limit:1});return {strategyHash:currentHash(),opportunitySpecHash:opportunitySpecHash(),run:state.run,dataRun:state.dataRun,summary:state.summary,favorites:state.favorites,logs};}
 export function insertSnapshot(runId:string,s:Snapshot){invalidateStateCache();const reviewed=applyFinancingRisk(s);return db().prepare('INSERT OR REPLACE INTO fundamental_snapshots(id,run_id,symbol,as_of,payload,evaluation) VALUES (?,?,?,?,?,?)').bind(`${runId}:${s.symbol}`,runId,s.symbol,reviewed.asOf,JSON.stringify(reviewed),JSON.stringify({opportunity:evaluateSnapshotOpportunity(reviewed)}));}

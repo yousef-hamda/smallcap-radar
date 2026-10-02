@@ -1,6 +1,15 @@
 # Unified Opportunity Category: Research, Design, and Acceptance Plan
 
-Updated: 2026-10-01
+Updated: 2026-10-02
+
+## Ranking-zero follow-up — 2026-10-02
+
+- Live endpoint confirmation: the newest Railway run is complete (run `99298b14-0edc-4d36-a4cc-ba7913022e27`; 6,954 stored rows), with 0 complete ratings. The cause is downstream evidence completeness: the run has SEC/market snapshot data but does not carry all eight evaluated factor dossiers. CELH profile has three annual and eight quarterly periods, yet no verified 6-month catalysts, multi-method fair value, competitive/management reviews, all-domain downside search, or product-rights-cleared technical source. This is not a scan completion failure.
+- Current local correction does not relax the all-factor ranking rule. Earnings quality can surface a subtotal for its quantitative 85% when 3 annual/8 quarterly periods are complete; the 15% disclosure-review portion stays uncovered. Industrial solvency can surface only complete independent dimensions (cash runway 40%, interest coverage 30%, maturity coverage 30%). The factor's aggregate score is normalized only among its valid dimensions; its contribution to the portfolio-wide fixed 100-point denominator is multiplied by the evidenced fraction. Every other absent factor stays null/zero weighted contribution with zero evidence coverage.
+- Needs-research results now sort by the evidence-backed fixed-denominator subtotal, then factor-weight coverage, then the same SEC operating signals used by the indexed current-run ordering. UI shows provisional points, the denominator, each factor's coverage, the explicit final-rating gate, and a count of companies with positive points. It does not call those provisional amounts final ratings.
+- Actual production snapshot spot test: first 40 needs-research rows, 29 positive subtotals; top: ASTH 19.98/20.7%, FLOC 19.98/20.7%, CELH 19.38/20.7%, STX 18.78/20.7%, EQT 15.96/16.2%. All 40 remain needs-research. No universe-wide hit rate or investment performance is inferred from this sample.
+- Old spec-hash fallback has been changed from loading the entire historical payload set to sequential 100-row reads, compact in-memory ordering metadata, and an ID-bounded result-page fetch. This specifically protects deployment from a large legacy D1 payload read when a score hash changes.
+- The deployed Railway build does not yet include this local correction. After release, verify the live SHA, first 40 page, evidence count, ordering, and profile-factor breakdown. Full final-factor coverage remains a future requirement; no free universally redistributable source or reliable automatic review path has been established for all requested factor families. SEC standardized entity facts are available without API keys but only cover standardized facts, not arbitrary custom taxonomy concepts or qualitative investment diligence ([SEC EDGAR APIs](https://www.sec.gov/search-filings/edgar-application-programming-interfaces)).
 
 ## Implementation checkpoint (2026-09-30)
 

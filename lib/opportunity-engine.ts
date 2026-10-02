@@ -5,6 +5,8 @@ import { INVESTABLE_EXCHANGES } from './strategy-spec';
 
 export type OpportunityEvidence = {
   score: number | null;
+  /** Share of this factor's fixed weight backed by evidence (0–100). */
+  coveragePct?: number;
   rationale: string;
   sources: Provenance[];
   confidence?: 'low' | 'medium' | 'high';
@@ -36,6 +38,8 @@ export type OpportunityEvaluation = {
     score: number | null;
     points: number;
     evidenced: boolean;
+    complete: boolean;
+    coveragePct: number;
     confidence: 'low' | 'medium' | 'high';
     rationale: string;
     sources: Provenance[];
@@ -175,16 +179,21 @@ export function evaluateOpportunity(
     const calculationValid = !!candidate?.calculation?.rubricId?.trim()
       && candidate.calculation.inputs.length > 0
       && candidate.calculation.inputs.every(input => !!input.name.trim() && (typeof input.value === 'string' || finite(input.value)));
+    const rawCoverage = candidate?.coveragePct ?? 100;
+    const coverageValid = finite(rawCoverage) && rawCoverage > 0 && rawCoverage <= 100;
     const evidenced = conflicts.length === 0
       && finite(candidate?.score)
       && candidate!.score >= 0
       && candidate!.score <= 10
+      && coverageValid
       && candidate!.rationale.trim().length > 0
       && calculationValid
       && sources.length > 0;
     const score = evidenced ? clamp(candidate!.score!, 0, 10) : null;
-    const points = score == null ? 0 : score / 10 * spec.weight;
-    if (evidenced) evidencedWeight += spec.weight;
+    const coveragePct = evidenced ? rawCoverage : 0;
+    const points = score == null ? 0 : score / 10 * spec.weight * coveragePct / 100;
+    const complete = evidenced && coveragePct === 100;
+    if (evidenced) evidencedWeight += spec.weight * coveragePct / 100;
     return {
       id: spec.id,
       label: spec.label,
@@ -192,6 +201,8 @@ export function evaluateOpportunity(
       score,
       points: Math.round(points * 100) / 100,
       evidenced,
+      complete,
+      coveragePct,
       // Missing confidence on otherwise auditable evidence is uncertainty, not
       // proof of low-quality evidence. It can never contribute to high overall
       // confidence, but it may support medium confidence for a complete rank.
@@ -204,7 +215,7 @@ export function evaluateOpportunity(
   });
 
   const coveragePct = evidencedWeight;
-  const requiredFactorsPresent = OPPORTUNITY_SPEC.requiredRankedFactors.every(id => factors.find(factor => factor.id === id)?.evidenced);
+  const requiredFactorsPresent = OPPORTUNITY_SPEC.requiredRankedFactors.every(id => factors.find(factor => factor.id === id)?.complete);
   const rankingEligible = !hardFailure
     && !hardUnknown
     && !sourceConflict

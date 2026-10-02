@@ -9,7 +9,7 @@ import {reconcile} from '../../.test-build/reconcile.mjs';
 import {setHistoryResult,setOpportunityResearchResult,setUniverse,universeCalls,setIntradayResult,opportunityCalls,resetOpportunityCalls} from './providers.mjs';
 import {evaluateStrategy} from '../../.test-build/engine.mjs';
 import {fixtures} from '../../.test-build/fixtures.mjs';
-import {ensureSchema,db,currentHash,readState,insertSnapshot} from '../../.test-build/storage.mjs';
+import {ensureSchema,db,currentHash,readState,insertSnapshot,invalidateStateCache} from '../../.test-build/storage.mjs';
 import {processScanBatch,startScan,historyCandidate,preliminaryCandidates} from '../../.test-build/scanner.mjs';
 import {GET,POST} from '../../.test-build/radar-api.mjs';
 import {GET as recoverGET} from '../../.test-build/recover-api.mjs';
@@ -34,6 +34,13 @@ await ensureSchema();
 const base=fixtures[0];
 process.env.SEC_USER_AGENT??='SmallCapRadar/2.2 (contact: tests@example.com)';
 test('an empty database is not mislabeled as a stale snapshot',async()=>{const state=await readState({strategy:'opportunity'});assert.equal(state.dataRun,null);assert.equal(state.summary.stale,false);});
+test('legacy scoring snapshots are re-evaluated in bounded batches and preserve their visible evidence queue',async()=>{
+ const now='2201-01-01T00:00:00.000Z';await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES('legacy-rating',?,?,'complete','Legacy full scan',2,2,13,'retired-opportunity-hash')").bind(now,now).run();
+ await insertSnapshot('legacy-rating',{...base,symbol:'LEGACY-B'}).run();await insertSnapshot('legacy-rating',{...base,symbol:'LEGACY-A'}).run();
+ invalidateStateCache();const result=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:1});
+ assert.equal(result.summary.stale,true);assert.equal(result.summary.total,2);assert.equal(result.summary.opportunityNeedsResearch,2);assert.equal(result.snapshots.length,1);assert.equal(result.snapshots[0].symbol,'LEGACY-A');assert.equal(result.page.hasMore,true);
+ await db().prepare("DELETE FROM fundamental_snapshots WHERE run_id='legacy-rating'").run();await db().prepare("DELETE FROM strategy_runs WHERE id='legacy-rating'").run();invalidateStateCache();
+});
 const run=(patch={})=>({id:'test',status:'running',source:'Bulk Quotes/SEC Frames v7 · full',stage:0,offset:0,total:100,processed:0,failed:0,retryPending:0,...patch});
 test('SEC identity accepts a reachable-contact override and rejects unsafe or noreply values',()=>{
  assert.equal(secUserAgent('SmallCapRadar/2.2 (contact: data-admin@example.com)'),'SmallCapRadar/2.2 (contact: data-admin@example.com)');

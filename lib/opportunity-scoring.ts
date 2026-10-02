@@ -119,7 +119,7 @@ export type EarningsQualityAssessment = {
   oneOffsReview?: { score: number; rationale: string; sources: Provenance[] };
 };
 export type EarningsQualityScore = OpportunityEvidence & {
-  subScores: { growth: number; cashConversion: number; operatingPersistence: number; sbcBurden: number; accountingTransparency: number };
+  subScores: { growth: number; cashConversion: number; operatingPersistence: number; sbcBurden: number; accountingTransparency?: number };
 };
 export type RiskArea = 'dilution' | 'financing' | 'customer-concentration' | 'legal-regulatory' | 'accounting-auditor' | 'short-interest' | 'insider-overhang' | 'operations-supply-chain';
 export type DownsideRiskAssessment = {
@@ -390,14 +390,15 @@ export function scoreDownsideRisk(input: DownsideRiskAssessment): DownsideRiskSc
 }
 
 /** Three-year/8-quarter industrial earnings-quality diagnostic. */
-export function scoreEarningsQuality(input: EarningsQualityAssessment): EarningsQualityScore {
+function scoreEarningsQualityCore(input: EarningsQualityAssessment, allowPartialDisclosure: boolean): EarningsQualityScore {
   if (!Number.isFinite(Date.parse(input.asOf)) || input.annual.length < 3 || input.quarterly.length < 8) {
     return unavailableEarnings('At least three annual periods and eight quarterly periods are required.');
   }
   const disclosureReviews = [input.gaapNonGaapBridgeReview, input.oneOffsReview];
-  if (disclosureReviews.some(review => !review || !Number.isInteger(review.score) || review.score < 0 || review.score > 10
-    || !review.rationale?.trim() || !review.sources?.length
-    || !review.sources.every(source => isOpportunityProvenanceValid(source, input.asOf)))) {
+  const validDisclosureReviews = disclosureReviews.filter((review): review is NonNullable<typeof review> => !!review
+    && Number.isInteger(review.score) && review.score >= 0 && review.score <= 10 && !!review.rationale?.trim()
+    && !!review.sources?.length && review.sources.every(source => isOpportunityProvenanceValid(source, input.asOf)));
+  if (!allowPartialDisclosure && validDisclosureReviews.length !== 2) {
     const auditedPeriods = [...input.annual, ...input.quarterly];
     const auditedSources = auditedPeriods.flatMap(period => [period.revenue, period.netIncome, period.operatingIncome, period.operatingCashFlow, period.capitalExpenditure, period.stockBasedCompensation]
       .filter(metric => !!metric && isOpportunityProvenanceValid(metric.source, input.asOf)).map(metric => metric.source));
@@ -474,16 +475,22 @@ export function scoreEarningsQuality(input: EarningsQualityAssessment): Earnings
   // These are disclosed analyst judgments because filing tags do not decide
   // whether an adjustment is recurring or economically credible. Both are
   // independently scored and linked to the primary filing evidence.
-  const accountingTransparency = rounded((input.gaapNonGaapBridgeReview!.score + input.oneOffsReview!.score) / 2, 2);
-  const score = rounded(growth * 0.2 + cashConversion * 0.25 + operatingPersistence * 0.2 + sbcBurden * 0.2 + accountingTransparency * 0.15, 2);
+  const accountingTransparency = validDisclosureReviews.length
+    ? rounded(validDisclosureReviews.reduce((sum, review) => sum + review.score, 0) / validDisclosureReviews.length, 2)
+    : undefined;
+  const knownWeight = 0.85 + (accountingTransparency === undefined ? 0 : 0.15);
+  const evidencedWeightedScore = growth * 0.2 + cashConversion * 0.25 + operatingPersistence * 0.2 + sbcBurden * 0.2
+    + (accountingTransparency ?? 0) * 0.15;
+  const score = rounded(evidencedWeightedScore / knownWeight, 2);
   return {
     score,
-    rationale: `Three-year revenue CAGR ${(revenueCagr * 100).toFixed(1)}%; recent TTM FCF/net-income ${cashConversionRatio == null ? 'not meaningful because net income is nonpositive' : `${(cashConversionRatio * 100).toFixed(1)}%`}; positive operating income ${positiveOperatingQuarters}/4 recent quarters; SBC/revenue ${(sbcRatio * 100).toFixed(1)}%; source-reviewed adjustment quality ${accountingTransparency}/10.`,
-    sources: [...allMetrics.map(metric => metric.source), ...disclosureReviews.flatMap(review => review!.sources)],
+    coveragePct: rounded(knownWeight * 100, 2),
+    rationale: `Three-year revenue CAGR ${(revenueCagr * 100).toFixed(1)}%; recent TTM FCF/net-income ${cashConversionRatio == null ? 'not meaningful because net income is nonpositive' : `${(cashConversionRatio * 100).toFixed(1)}%`}; positive operating income ${positiveOperatingQuarters}/4 recent quarters; SBC/revenue ${(sbcRatio * 100).toFixed(1)}%; ${accountingTransparency === undefined ? 'GAAP/non-GAAP and one-off reviews remain unscored' : `source-reviewed adjustment quality ${accountingTransparency}/10`}.`,
+    sources: [...allMetrics.map(metric => metric.source), ...validDisclosureReviews.flatMap(review => review.sources)],
     // The adjustment review contains analyst judgments, so a fully sourced
     // automated ratio series alone can never promote this factor to high.
     confidence: 'medium',
-    subScores: { growth, cashConversion, operatingPersistence, sbcBurden, accountingTransparency },
+    subScores: { growth, cashConversion, operatingPersistence, sbcBurden, ...(accountingTransparency === undefined ? {} : { accountingTransparency }) },
     calculation: {
       rubricId: 'earnings-quality-v1',
       inputs: [
@@ -493,11 +500,25 @@ export function scoreEarningsQuality(input: EarningsQualityAssessment): Earnings
         { name: 'ttm-capex', value: rounded(ttmCapex) }, { name: 'ttm-free-cash-flow', value: rounded(ttmCfo - ttmCapex) },
         { name: 'ttm-sbc-revenue-ratio', value: rounded(sbcRatio), unit: 'ratio' },
         { name: 'quarterly-persistence-count', value: positiveOperatingQuarters },
-        { name: 'gaap-nongaap-bridge-review-score', value: input.gaapNonGaapBridgeReview!.score, unit: 'out-of-10' },
-        { name: 'one-off-item-review-score', value: input.oneOffsReview!.score, unit: 'out-of-10' },
+        { name: 'disclosure-review-coverage', value: `${validDisclosureReviews.length}/2` },
+        ...validDisclosureReviews.map((review, index) => ({ name: `disclosure-review-${index + 1}-score`, value: review.score, unit: 'out-of-10' })),
       ],
     },
   };
+}
+
+/** Full factor score; missing accounting review keeps the factor unscored. */
+export function scoreEarningsQuality(input: EarningsQualityAssessment): EarningsQualityScore {
+  return scoreEarningsQualityCore(input, false);
+}
+
+/**
+ * Quantitative earnings-quality subtotal for the fixed-weight research queue.
+ * The 85% numeric portion can be shown when statements are complete; the
+ * 15% disclosure-review portion stays uncovered until a real review exists.
+ */
+export function scoreEarningsQualityPartial(input: EarningsQualityAssessment): EarningsQualityScore {
+  return scoreEarningsQualityCore(input, true);
 }
 
 /**
@@ -649,6 +670,70 @@ export function scoreFinancialStrength(input: FinancialStrengthAssessment): Fina
         { name: 'cash-interest-maturity-weights', value: '0.4/0.3/0.3' },
       ],
     },
+  };
+}
+
+export type PartialFinancialStrengthAssessment = Pick<FinancialStrengthAssessment, 'asOf' | 'industryModel'>
+  & Partial<Pick<FinancialStrengthAssessment, 'unrestrictedCash' | 'totalDebt' | 'freeCashFlowTtm' | 'operatingIncomeTtm' | 'interestExpenseTtm' | 'debtDueWithin24Months'>>;
+
+/** Score only independently computable solvency dimensions; keep missing slices uncovered. */
+export function scoreFinancialStrengthPartial(input: PartialFinancialStrengthAssessment): FinancialStrengthScore {
+  if (input.industryModel !== 'industrial-operating-company' || !Number.isFinite(Date.parse(input.asOf))) {
+    return unavailableFinancial('Verified industrial issuer model and valid as-of time are required for this diagnostic.');
+  }
+  const validMetric = (metric: SourcedValue | undefined) => !!metric && Number.isFinite(metric.value)
+    && !!metric.unit && isOpportunityProvenanceValid(metric.source, input.asOf)
+    && (Date.parse(input.asOf) - Date.parse(metric.source.periodEnd)) / 86_400_000 <= 400;
+  const unitAligned = (...metrics: Array<SourcedValue | undefined>) => metrics.every(validMetric)
+    && new Set(metrics.map(metric => metric!.unit.toUpperCase())).size === 1;
+  const scores: Array<{ id: 'cashRunway' | 'interestCoverage' | 'maturityCoverage'; score: number; weight: number; metrics: SourcedValue[]; inputs: Array<{ name: string; value: string | number; unit?: string }> }> = [];
+  const cash = input.unrestrictedCash, debt = input.totalDebt, fcf = input.freeCashFlowTtm;
+  if (unitAligned(cash, fcf) && cash!.value >= 0) {
+    const runwayMonths = fcf!.value >= 0 ? Number.POSITIVE_INFINITY : cash!.value / (-fcf!.value / 12);
+    const score = fcf!.value >= 0 ? 10 : runwayMonths < 6 ? 0 : runwayMonths < 12 ? 3 : runwayMonths < 18 ? 5 : runwayMonths < 24 ? 6 : runwayMonths < 36 ? 8 : 9;
+    scores.push({ id: 'cashRunway', score, weight: 0.4, metrics: [cash!, fcf!], inputs: [
+      { name: 'unrestricted-cash', value: cash!.value, unit: cash!.unit },
+      { name: 'ttm-free-cash-flow', value: fcf!.value, unit: fcf!.unit },
+      { name: 'cash-runway-months', value: Number.isFinite(runwayMonths) ? rounded(runwayMonths, 1) : 'positive TTM FCF' },
+    ] });
+  }
+  const operating = input.operatingIncomeTtm, interest = input.interestExpenseTtm;
+  if (unitAligned(debt, operating, interest) && debt!.value >= 0 && interest!.value >= 0) {
+    let score: number | null = null;
+    if (debt!.value === 0 && interest!.value === 0) score = 10;
+    else if (interest!.value > 0) { const ratio = operating!.value / interest!.value; score = ratio < 1 ? 0 : ratio < 1.5 ? 2 : ratio < 2 ? 4 : ratio < 4 ? 6 : ratio < 8 ? 8 : 10; }
+    if (score !== null) scores.push({ id: 'interestCoverage', score, weight: 0.3, metrics: [debt!, operating!, interest!], inputs: [
+      { name: 'total-debt', value: debt!.value, unit: debt!.unit },
+      { name: 'ttm-operating-income', value: operating!.value, unit: operating!.unit },
+      { name: 'ttm-interest-expense', value: interest!.value, unit: interest!.unit },
+      { name: 'interest-coverage-ratio', value: interest!.value > 0 ? rounded(operating!.value / interest!.value, 3) : 'zero debt and zero interest reported' },
+    ] });
+  }
+  const maturities = input.debtDueWithin24Months;
+  if (unitAligned(cash, maturities) && cash!.value >= 0 && maturities!.value >= 0
+    && cash!.source.periodEnd === maturities!.source.periodEnd) {
+    const ratio = maturities!.value === 0 ? Number.POSITIVE_INFINITY : cash!.value / maturities!.value;
+    const score = maturities!.value === 0 ? 10 : ratio < 0.5 ? 0 : ratio < 1 ? 3 : ratio < 2 ? 6 : ratio < 3 ? 8 : 10;
+    scores.push({ id: 'maturityCoverage', score, weight: 0.3, metrics: [cash!, maturities!], inputs: [
+      { name: 'unrestricted-cash', value: cash!.value, unit: cash!.unit },
+      { name: 'debt-due-within-24-months', value: maturities!.value, unit: maturities!.unit },
+      { name: 'cash-to-maturity-coverage', value: Number.isFinite(ratio) ? rounded(ratio, 3) : 'no principal due within 24 months' },
+    ] });
+  }
+  const coveredWeight = scores.reduce((sum, item) => sum + item.weight, 0);
+  if (!coveredWeight) return unavailableFinancial('No complete source-validated solvency dimension is available; partial metrics are not treated as a score.');
+  const score = rounded(scores.reduce((sum, item) => sum + item.score * item.weight, 0) / coveredWeight, 2);
+  const sources = [...new Map(scores.flatMap(item => item.metrics.map(metric => [JSON.stringify(metric.source), metric.source] as const))).values()];
+  const subScores = { cashRunway: 0, interestCoverage: 0, maturityCoverage: 0 };
+  for (const item of scores) subScores[item.id] = item.score;
+  return {
+    score, coveragePct: rounded(coveredWeight * 100, 2),
+    rationale: `Source-validated solvency dimensions: ${scores.map(item => `${item.id} ${item.score}/10`).join(', ')}. ${Math.round(coveredWeight * 100)}% of the financial-strength factor is evidenced; unavailable dimensions remain uncovered.`,
+    sources, confidence: sources.every(source => source.confidence === 'high') ? 'high' : 'medium', subScores,
+    calculation: { rubricId: 'financial-strength-industrial-partial-v1', inputs: [
+      { name: 'covered-solvency-weight', value: rounded(coveredWeight, 2) },
+      ...scores.flatMap(item => [...item.inputs, { name: `${item.id}-weight`, value: item.weight }]),
+    ] },
   };
 }
 

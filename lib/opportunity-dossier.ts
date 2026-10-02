@@ -4,8 +4,10 @@ import {
   scoreCatalysts,
   scoreDownsideRisk,
   scoreEarningsQuality,
+  scoreEarningsQualityPartial,
   scoreFairValue,
   scoreFinancialStrength,
+  scoreFinancialStrengthPartial,
   scoreQualitativeFactor,
   scoreTechnicalTiming,
   type CatalystAssessment,
@@ -14,6 +16,7 @@ import {
   type EarningsPeriod,
   type FairValueAssessment,
   type FinancialStrengthAssessment,
+  type PartialFinancialStrengthAssessment,
   type QualitativeAssessment,
   type TechnicalTimingAssessment,
 } from './opportunity-scoring';
@@ -29,7 +32,9 @@ export type OpportunityDossier = {
   valuation?: FairValueAssessment;
   catalysts?: CatalystAssessment;
   financialStrength?: FinancialStrengthAssessment;
+  financialStrengthPartial?: PartialFinancialStrengthAssessment;
   earningsQuality?: EarningsQualityAssessment;
+  earningsQualityPartial?: EarningsQualityAssessment;
   competitivePosition?: QualitativeAssessment[];
   downsideRisk?: DownsideRiskAssessment;
   management?: QualitativeAssessment[];
@@ -42,8 +47,8 @@ function assessmentDate(dossier: OpportunityDossier, factor: OpportunityFactorId
     case 'competitivePosition': case 'management': return dossier.asOf;
     case 'valuation': return dossier.valuation?.asOf;
     case 'catalysts': return dossier.catalysts?.asOf;
-    case 'financialStrength': return dossier.financialStrength?.asOf;
-    case 'earningsQuality': return dossier.earningsQuality?.asOf;
+    case 'financialStrength': return dossier.financialStrength?.asOf ?? dossier.financialStrengthPartial?.asOf;
+    case 'earningsQuality': return dossier.earningsQuality?.asOf ?? dossier.earningsQualityPartial?.asOf;
     case 'downsideRisk': return dossier.downsideRisk?.asOf;
     case 'technicalTiming': return dossier.technicalTiming?.asOf;
   }
@@ -89,8 +94,12 @@ export function scoreOpportunityDossier(dossier: OpportunityDossier, horizonMont
       switch (factor) {
         case 'valuation': output.valuation = scoreFairValue(dossier.valuation!); break;
         case 'catalysts': output.catalysts = scoreCatalysts(dossier.catalysts!); break;
-        case 'financialStrength': output.financialStrength = scoreFinancialStrength(dossier.financialStrength!); break;
-        case 'earningsQuality': output.earningsQuality = scoreEarningsQuality(dossier.earningsQuality!); break;
+        case 'financialStrength': output.financialStrength = dossier.financialStrength
+          ? scoreFinancialStrength(dossier.financialStrength)
+          : scoreFinancialStrengthPartial(dossier.financialStrengthPartial!); break;
+        case 'earningsQuality': output.earningsQuality = dossier.earningsQuality
+          ? scoreEarningsQuality(dossier.earningsQuality)
+          : scoreEarningsQualityPartial(dossier.earningsQualityPartial!); break;
         case 'competitivePosition': output.competitivePosition = scoreQualitativeFactor('competitivePosition', dossier.asOf, dossier.competitivePosition ?? []); break;
         case 'downsideRisk': output.downsideRisk = scoreDownsideRisk(dossier.downsideRisk!); break;
         case 'management': output.management = scoreQualitativeFactor('management', dossier.asOf, dossier.management ?? []); break;
@@ -167,7 +176,7 @@ export function opportunityDossierFromSnapshot(snapshot: Snapshot): OpportunityD
     : 'No issuer filing index is attached. Future catalysts require dated, source-reviewed evidence; do not infer them from headlines or filing counts.';
   return {
     asOf: snapshot.asOf,
-    ...(research && (research.annual.length > 0 || research.quarterly.length > 0) ? { earningsQuality: {
+    ...(research && (research.annual.length > 0 || research.quarterly.length > 0) ? { earningsQualityPartial: {
       asOf: snapshot.asOf,
       annual: adaptEarningsPeriods(research.annual),
       quarterly: adaptEarningsPeriods(research.quarterly),
@@ -181,6 +190,10 @@ export function opportunityDossierFromSnapshot(snapshot: Snapshot): OpportunityD
       operatingIncomeTtm: financialMetrics!.operatingIncomeTtm!,
       interestExpenseTtm: financialMetrics!.interestExpenseTtm!,
       debtDueWithin24Months: financialMetrics!.debtDueWithin24Months!,
+    } } : financialResearch?.industryModel === 'industrial-operating-company' ? { financialStrengthPartial: {
+      industryModel: financialResearch.industryModel,
+      asOf: snapshot.asOf,
+      ...financialMetrics,
     } } : {}),
     ...(technicalResearch?.assessment ? { technicalTiming: technicalResearch.assessment } : {}),
     researchNotes,

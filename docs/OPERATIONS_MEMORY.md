@@ -1,6 +1,14 @@
 # Operations memory — Railway
 
-Last verified: 2026-10-01. Keep this file free of credentials and private recovery links.
+Last verified: 2026-10-02. Keep this file free of credentials and private recovery links.
+
+## Ranking-zero production diagnosis — 2026-10-02
+
+- Live radar endpoint confirmed the current production scan is complete, but its deployed evaluator has 0 complete ratings because the strict eight-factor dossier gate is not met. The current Railway code does not include local verified-subfactor scoring, bounded stale-snapshot re-evaluation, or the four evidence/ranking summary counters.
+- Local source validation against actual production payloads: first 40 `needs-research` records, 29 with positive evidence subtotals and 0 complete ratings. Top five recomputed rows: ASTH, FLOC, CELH, STX, EQT (see project memory and handoff for points/coverage). This does not establish live Railway behavior until the local commit is deployed.
+- During a code/spec hash transition, `readState` now handles legacy snapshots in 100-row payload batches, maintains compact sort keys, and loads only the result page; the prior implementation fetched all payloads into memory. Avoid full payload/whole-result loading on `/api/radar` requests. D1 documentation specifically notes that query results run under Worker CPU/memory limits and recommends bounded batches: https://developers.cloudflare.com/d1/platform/limits/.
+- SEC Company Facts are free, unauthenticated standardized entity facts, but are not the full investment dossier and do not capture every issuer extension or qualitative review: https://www.sec.gov/search-filings/edgar-application-programming-interfaces. The final all-eight evidence gate remains unchanged. Free-data/redistribution gaps are in `docs/UNIFIED_OPPORTUNITY_CATEGORY_PLAN_2026_09_30.md`.
+- Railway verification after deployment must re-fetch `/api/radar?strategy=opportunity&state=needs-research&limit=40`, inspect `summary.opportunityWithEvidence` and the exact card evaluation values, then check `/api/company?symbol=CELH`. Confirm no scan is running before assessing counts. Push by itself has not reliably triggered Railway in this account; verify the deployment SHA in Railway and the public API before claiming adoption.
 
 ## Live configuration
 

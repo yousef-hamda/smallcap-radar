@@ -1,6 +1,15 @@
 # Project memory — Small-Cap Radar
 
-Last verified: 2026-10-01. This is repository memory; many older entries below are dated historical checkpoints and are superseded by the latest continuation at the end. Active plan: `docs/UNIFIED_OPPORTUNITY_CATEGORY_PLAN_2026_09_30.md`.
+Last verified: 2026-10-02. This is repository memory; many older entries below are dated historical checkpoints and are superseded by the latest continuation at the end. Active plan: `docs/UNIFIED_OPPORTUNITY_CATEGORY_PLAN_2026_09_30.md`.
+
+## Latest continuation — investigate zero ranking (2026-10-02)
+
+- Live Railway `GET /api/radar` returned completed run `99298b14-0edc-4d36-a4cc-ba7913022e27`, 6,954 rows, 0 complete ranks, 5,971 needs-research, 983 evidence-based exclusions. It did not indicate a fetch that had failed to finish. `GET /api/company?symbol=CELH` showed full SEC financial periods but no completed fair-value, catalyst, competitor, downside, governance or rights-cleared technical dossier.
+- Current local evaluator now exposes mathematically auditable subfactor subtotals from live snapshot inputs on the original fixed 100-point denominator. It represents partial factors with `coveragePct`, awards only the verified fraction of their fixed weight, and leaves incomplete factor dimensions uncovered. The all-eight-complete-factor gate is unchanged; no missing factor can be converted to a neutral rating or a PASS.
+- Production-snapshot sample (first 40 research rows, recomputed locally): 29 show positive evidence subtotals; top sorted rows ASTH 19.98/20.7%, FLOC 19.98/20.7%, CELH 19.38/20.7%, STX 18.78/20.7%, EQT 15.96/16.2%. All remain `needs-research`; this sample is not a complete rating or universe-wide return validation. DLO has zero because its current attached snapshot lacks validated inputs for these calculable subfactors.
+- UI now displays counts of companies with points, full ratings, research-needed and excluded. Subtotals and coverage appear on cards and profiles. Needs-research sorting is verified score, evidence coverage, and then SEC operating metrics. Legacy hash snapshots are rescored in 100-row payload batches and only compact keys plus the requested result page are retained in memory.
+- Local actual-company browser validation used a mobile 390px viewport and showed a 19.4-point CELH verified subtotal, 20.7% factor-weight coverage, and all eight factor evidence states with no horizontal overflow; console errors were zero after restarting the stale local preview. Current live Railway has not deployed this work and still reports zero until release.
+- Release and scientific limits: the final full factor rating remains zero until evidence is acquired/reviewed for all eight factors. SEC facts provide comparable statements but do not guarantee all such diligence evidence; restrictions on free market/short data and factual company-specific review are documented in the unified plan. Never remove the completion gate to artificially produce a rating.
 
 ## Product and source of truth
 

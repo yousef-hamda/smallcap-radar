@@ -14,7 +14,7 @@ import {applyFinancingRisk} from '../../.test-build/financing-risk.mjs';
 import {OPPORTUNITY_SPEC} from '../../.test-build/opportunity-spec.mjs';
 import {evaluateOpportunity,isOpportunityProvenanceValid} from '../../.test-build/opportunity-engine.mjs';
 import {operatingCandidateSignals,operatingCandidateOrderSql} from '../../.test-build/opportunity-candidates.mjs';
-import {scoreFairValue,scoreFinancialStrength,scoreCatalysts,scoreEarningsQuality,scoreDownsideRisk,scoreTechnicalTiming,scoreQualitativeFactor} from '../../.test-build/opportunity-scoring.mjs';
+import {scoreFairValue,scoreFinancialStrength,scoreFinancialStrengthPartial,scoreCatalysts,scoreEarningsQuality,scoreDownsideRisk,scoreTechnicalTiming,scoreQualitativeFactor} from '../../.test-build/opportunity-scoring.mjs';
 import {scoreOpportunityDossier,evaluateOpportunityDossier,opportunityDossierFromSnapshot} from '../../.test-build/opportunity-dossier.mjs';
 import {buildTechnicalTimingResearch} from '../../.test-build/opportunity-market.mjs';
 import {buildSecEarningsQualityAssessment,buildSecFinancialStrengthInputs,classifySecCompanyFacts,classifySecIssuerModel} from '../../.test-build/sec-opportunity.mjs';
@@ -628,6 +628,9 @@ test('unified opportunity scores on the fixed denominator and ranks only with ma
  const materialOnly=Object.fromEntries(['valuation','catalysts','financialStrength','earningsQuality','downsideRisk'].map(id=>[id,opportunityEvidence()[id]]));
  const partial=evaluateOpportunity(opportunitySnapshot,materialOnly);
  assert.equal(partial.state,'needs-research');assert.equal(partial.coveragePct,82);assert.equal(partial.score,82);assert.equal(partial.confidence,'low');
+ const partialValuation=opportunityEvidence();partialValuation.valuation.coveragePct=40;
+ const quantified=evaluateOpportunity(opportunitySnapshot,partialValuation);
+ assert.equal(quantified.factors.find(factor=>factor.id==='valuation').points,10);assert.equal(quantified.coveragePct,85);assert.equal(quantified.score,85);assert.equal(quantified.rankingEligible,false);assert.equal(quantified.factors.find(factor=>factor.id==='valuation').complete,false);
 });
 test('SEC operating research priorities use only issuer-linked dated facts and expose missing history',()=>{
  const annual=(year,revenue,income,cash,capex,rightsStatus='redistribution-permitted')=>{const end=`${year}-12-31`,source={source:'SEC Company Facts · annual fixture',url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0000000001.json',periodEnd:end,availableAt:`${Number(year)+1}-02-01T00:00:00Z`,retrievedAt:`${Number(year)+1}-02-02T00:00:00Z`,rightsStatus,confidence:'high'};const value=n=>({value:n,unit:'USD',source});return{start:`${year}-01-01`,end,metrics:{revenue:value(revenue),netIncome:value(income),operatingCashFlow:value(cash),capitalExpenditure:value(capex)}}};
@@ -757,13 +760,13 @@ test('dossier orchestrator does not manufacture missing sections or combine diff
  assert.equal(result.state,'needs-research');assert.equal(result.factors.find(factor=>factor.id==='catalysts').score,null);assert.match(result.factors.find(factor=>factor.id==='catalysts').rationale,/timestamp does not match/);
  assert.equal(evaluateOpportunityDossier({...opportunitySnapshot,asOf:'2026-09-30T12:00:01.000Z'},completeOpportunityDossier()).rankingEligible,false);
 });
-test('snapshot SEC earnings history reaches the Opportunity evaluator with its source coverage and missing review gate',()=>{
+test('snapshot SEC earnings history contributes only the quantified earnings subtotal while review points remain uncovered',()=>{
  const history=earningsInput();
  const adapt=(periods)=>periods.map(period=>({start:period.revenue.source.periodStart,end:period.revenue.source.periodEnd,metrics:{revenue:period.revenue,netIncome:period.netIncome,operatingIncome:period.operatingIncome,operatingCashFlow:period.operatingCashFlow,capitalExpenditure:period.capitalExpenditure,stockBasedCompensation:period.stockBasedCompensation}}));
  const snapshot={...opportunitySnapshot,opportunityResearch:{earnings:{providerStatus:'retrieved',coverage:{annualPeriodsFound:3,quarterlyPeriodsFound:8,selectedUnit:'USD'},annual:adapt(history.annual),quarterly:adapt(history.quarterly),missing:[],conflicts:[],limitations:[],readyForScoring:false}}};
- const dossier=opportunityDossierFromSnapshot(snapshot);assert.equal(dossier.earningsQuality.annual.length,3);assert.equal(dossier.earningsQuality.quarterly.length,8);assert.equal(dossier.earningsQuality.gaapNonGaapBridgeReview,undefined);
+ const dossier=opportunityDossierFromSnapshot(snapshot);assert.equal(dossier.earningsQualityPartial.annual.length,3);assert.equal(dossier.earningsQualityPartial.quarterly.length,8);assert.equal(dossier.earningsQualityPartial.gaapNonGaapBridgeReview,undefined);
  const result=evaluateOpportunityDossier(snapshot,dossier),factor=result.factors.find(item=>item.id==='earningsQuality');
- assert.equal(factor.score,null);assert.equal(factor.evidenced,false);assert.equal(factor.sources.length,66);assert.match(factor.rationale,/source-backed reviews with explicit 0–10 assessments/);
+ assert.ok(factor.score>0);assert.equal(factor.evidenced,true);assert.equal(factor.complete,false);assert.equal(factor.coveragePct,85);assert.equal(factor.points,Math.round(factor.score/10*12*.85*100)/100);assert.equal(factor.sources.length,66);assert.match(factor.rationale,/GAAP\/non-GAAP and one-off reviews remain unscored/);assert.equal(result.state,'needs-research');
 });
 test('SEC financial-strength adapter derives only aligned debt, maturity, interest and four-quarter cash-flow inputs',()=>{
  const asOf='2026-09-30T12:00:00.000Z',cik=1234567;
@@ -783,6 +786,11 @@ test('SEC financial-strength adapter derives only aligned debt, maturity, intere
  const result=buildSecFinancialStrengthInputs(cik,payload,asOf,'2026-09-30T11:00:00.000Z',earnings,'industrial-operating-company');
  assert.equal(result.assessment?.totalDebt.value,400);assert.equal(result.assessment?.debtDueWithin24Months.value,180);assert.equal(result.assessment?.freeCashFlowTtm.value,400);assert.equal(result.assessment?.operatingIncomeTtm.value,320);assert.equal(result.assessment?.interestExpenseTtm.value,48);
  assert.equal(result.missing.length,0);assert.equal(scoreFinancialStrength(result.assessment).score,8.8);
+ const partialAssessment={industryModel:'industrial-operating-company',asOf,unrestrictedCash:result.metrics.unrestrictedCash,totalDebt:result.metrics.totalDebt,freeCashFlowTtm:result.metrics.freeCashFlowTtm,operatingIncomeTtm:result.metrics.operatingIncomeTtm,debtDueWithin24Months:result.metrics.debtDueWithin24Months};
+ const partialScore=scoreFinancialStrengthPartial(partialAssessment);assert.equal(partialScore.coveragePct,70);assert.ok(partialScore.score>0);assert.match(partialScore.rationale,/70%.*unavailable dimensions remain uncovered/);
+ const partialSnapshot={...opportunitySnapshot,opportunityResearch:{financialStrength:{providerStatus:'retrieved',industryModel:'industrial-operating-company',metrics:{...partialAssessment},missing:['interest is missing'],conflicts:[],limitations:[],readyForScoring:false}}};
+ const partialEvaluation=evaluateOpportunityDossier(partialSnapshot,opportunityDossierFromSnapshot(partialSnapshot)),partialFactor=partialEvaluation.factors.find(item=>item.id==='financialStrength');
+ assert.equal(partialFactor.coveragePct,70);assert.ok(partialFactor.points>0);assert.equal(partialFactor.complete,false);assert.equal(partialEvaluation.rankingEligible,false);
  const incomplete=structuredClone(payload);delete incomplete.facts['us-gaap'].LongTermDebtMaturitiesRepaymentsOfPrincipalInYearTwo;
  const missingMaturity=buildSecFinancialStrengthInputs(cik,incomplete,asOf,'2026-09-30T11:00:00.000Z',earnings,'industrial-operating-company');
  assert.equal(missingMaturity.assessment,undefined);assert.match(missingMaturity.missing.join(' '),/year-two debt maturities/);

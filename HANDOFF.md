@@ -1,6 +1,15 @@
 # Handoff — Small-Cap Radar
 
-Updated 2026-10-01. Start with `docs/UNIFIED_OPPORTUNITY_CATEGORY_PLAN_2026_09_30.md`, `docs/PROJECT_MEMORY.md`, and `docs/OPERATIONS_MEMORY.md`. Earlier status entries below are historical; the latest checkpoints supersede them.
+Updated 2026-10-02. Start with `docs/UNIFIED_OPPORTUNITY_CATEGORY_PLAN_2026_09_30.md`, `docs/PROJECT_MEMORY.md`, and `docs/OPERATIONS_MEMORY.md`. Earlier status entries below are historical; the latest checkpoints supersede them.
+
+## Latest continuation — ranking zero diagnosis (2026-10-02)
+
+- Production was checked directly: run `99298b14-0edc-4d36-a4cc-ba7913022e27` is complete (5,921 processed; 6,954 stored rows), but its deployed evaluator returns 0 complete ranks. The live scan data exists; ranking is zero because the deployed evaluator requires all eight fixed-weight factors and the stored scan does not contain full dossiers. It is not a failed scan or an empty market.
+- Actual live snapshot samples were re-evaluated with the current local evaluator. Among the first 40 `needs-research` rows, 29 have positive, source-backed weighted subtotals and none has all eight factors. Sorted by the fixed 100-point denominator: ASTH 19.98 points/20.7% evidence coverage, FLOC 19.98/20.7%, CELH 19.38/20.7%, STX 18.78/20.7%, EQT 15.96/16.2%. CELH's evidenced portions are financial strength (70% of that factor) and earnings quality (85%); valuation, catalysts, competition, downside review, management, and technical timing remain uncovered. These are research-priority subtotals, never complete investment ratings.
+- Local changes make verified sub-factor portions contribute only their documented share of the original factor weight. Unknown dimensions remain uncovered, the fixed denominator is unchanged, and the final-ranked gate still requires all eight complete factors plus safety checks. Needs-research rows now order by verified score, evidence coverage, then dated SEC operating signals; four summary counters show companies with points, complete ratings, research-needed, and excluded.
+- Legacy strategy-hash reads now re-evaluate stored scans in bounded payload batches, keep only compact sort keys, and fetch the requested page. This avoids materializing the entire multi-megabyte scan payload set after a code/spec release. A regression covers old-hash reads and pagination.
+- Local verification after the ranking work: production-shaped scoring exercised against Railway snapshots; Playwright mobile preview at 390px shows the score, coverage, eight factor states, and no horizontal overflow; local build assets were restarted before browser verification. Full automated gates are running/recorded in the current session before release. The public Railway build has not yet adopted this change; until deployment its endpoint still reports 0 and the user will not see these local subtotals.
+- Critical outstanding requirement: the final full-factor rating remains unavailable. SEC filings alone do not establish fair value, verified catalyst impact, peer advantage, complete downside review, or technical evidence with product-use rights. The source plan documents the free-source and rights limits. Do not lower the 100% gate or relabel partial points as final ratings to make the count nonzero.
 
 ## Latest continuation — 2026-10-01
 
