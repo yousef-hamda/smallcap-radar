@@ -119,7 +119,7 @@ test('radar displays fixed-denominator verified subtotals and sorts incomplete r
  assert.match(source,/opportunityWithEvidence\?\?0/);assert.match(source,/شركات لها نقاط موثقة/);
  const css=await readFile(path.join(root,'app/globals.css'),'utf8');assert.match(css,/\.brief-stats\{display:grid;grid-template-columns:repeat\(4,minmax\(0,1fr\)\)/);assert.match(css,/\.brief-stats\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);
  assert.match(storage,/json_extract\(evaluation,'\$\.opportunity\.score'\),0\) DESC, COALESCE\(json_extract\(evaluation,'\$\.opportunity\.coveragePct'\),0\) DESC/);
- assert.match(storage,/SELECT id,symbol,payload FROM fundamental_snapshots WHERE run_id=\? ORDER BY symbol ASC LIMIT \? OFFSET \?/);assert.match(storage,/Never materialize the entire multi-megabyte market snapshot/);
+ assert.match(storage,/SELECT id,symbol,payload,evaluation FROM fundamental_snapshots WHERE run_id=\? AND symbol>\? ORDER BY symbol ASC LIMIT \?/);assert.match(storage,/snapshot_run_symbol_idx/);assert.match(storage,/Never materialize the entire multi-megabyte market snapshot/);
 });
 
 test('profile renders sourced financial-strength gaps without filling missing figures with zero',async()=>{

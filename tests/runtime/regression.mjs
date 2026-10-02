@@ -39,7 +39,23 @@ test('legacy scoring snapshots are re-evaluated in bounded batches and preserve 
  await insertSnapshot('legacy-rating',{...base,symbol:'LEGACY-B'}).run();await insertSnapshot('legacy-rating',{...base,symbol:'LEGACY-A'}).run();
  invalidateStateCache();const result=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:1});
  assert.equal(result.summary.stale,true);assert.equal(result.summary.total,2);assert.equal(result.summary.opportunityNeedsResearch,2);assert.equal(result.snapshots.length,1);assert.equal(result.snapshots[0].symbol,'LEGACY-A');assert.equal(result.page.hasMore,true);
+ const persisted=await db().prepare("SELECT evaluation FROM fundamental_snapshots WHERE run_id='legacy-rating' AND symbol='LEGACY-A'").first();
+ assert.equal(JSON.parse(persisted.evaluation).opportunity.hash,result.storedEvaluations[0].opportunity.hash);
+ invalidateStateCache();const resumed=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:1});
+ assert.equal(resumed.storedEvaluations[0].opportunity.hash,result.storedEvaluations[0].opportunity.hash);assert.equal(resumed.storedEvaluations[0].opportunity.score,result.storedEvaluations[0].opportunity.score);
  await db().prepare("DELETE FROM fundamental_snapshots WHERE run_id='legacy-rating'").run();await db().prepare("DELETE FROM strategy_runs WHERE id='legacy-rating'").run();invalidateStateCache();
+});
+test('large legacy evaluator backfill persists current-hash rows across keyset batches',async()=>{
+ const now='2202-01-01T00:00:00.000Z',count=501;
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES('legacy-backfill',?,?,'complete','Legacy full scan',?,?,13,'retired-opportunity-hash')").bind(now,now,count,count).run();
+ for(let start=0;start<count;start+=100){const batch=[];for(let index=start;index<Math.min(count,start+100);index++){const symbol=`MIGRATE-${String(index).padStart(4,'0')}`,snapshot={...base,symbol,asOf:now};batch.push(db().prepare('INSERT INTO fundamental_snapshots(id,run_id,symbol,as_of,payload,evaluation) VALUES(?,?,?,?,?,?)').bind(`legacy-backfill:${symbol}`,'legacy-backfill',symbol,now,JSON.stringify(snapshot),JSON.stringify({opportunity:{hash:'retired-opportunity-hash'}})));}await db().batch(batch);}
+ invalidateStateCache();const first=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:1});
+ assert.equal(first.summary.total,count);assert.equal(first.snapshots[0].symbol,'MIGRATE-0000');assert.equal(first.page.hasMore,true);
+ const persisted=await db().prepare("SELECT evaluation FROM fundamental_snapshots WHERE run_id='legacy-backfill' AND symbol='MIGRATE-0500'").first();
+ assert.equal(JSON.parse(persisted.evaluation).opportunity.hash,first.storedEvaluations[0].opportunity.hash);
+ invalidateStateCache();const restarted=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:1});
+ assert.equal(restarted.summary.total,count);assert.equal(restarted.storedEvaluations[0].opportunity.hash,first.storedEvaluations[0].opportunity.hash);
+ await db().prepare("DELETE FROM fundamental_snapshots WHERE run_id='legacy-backfill'").run();await db().prepare("DELETE FROM strategy_runs WHERE id='legacy-backfill'").run();invalidateStateCache();
 });
 const run=(patch={})=>({id:'test',status:'running',source:'Bulk Quotes/SEC Frames v7 · full',stage:0,offset:0,total:100,processed:0,failed:0,retryPending:0,...patch});
 test('SEC identity accepts a reachable-contact override and rejects unsafe or noreply values',()=>{

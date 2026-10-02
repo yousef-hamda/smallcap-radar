@@ -28,6 +28,7 @@ export async function ensureSchema(){
   d.prepare("CREATE TABLE IF NOT EXISTS strategy_runs (id TEXT PRIMARY KEY NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, status TEXT NOT NULL, source TEXT NOT NULL, stage INTEGER NOT NULL DEFAULT 0, offset INTEGER NOT NULL DEFAULT 0, processed INTEGER NOT NULL DEFAULT 0, total INTEGER NOT NULL DEFAULT 0, universe_total INTEGER NOT NULL DEFAULT 0, screened_out INTEGER NOT NULL DEFAULT 0, failed INTEGER NOT NULL DEFAULT 0, quote_coverage INTEGER NOT NULL DEFAULT 0, sec_requests INTEGER NOT NULL DEFAULT 0, sec_success INTEGER NOT NULL DEFAULT 0, sec_failed INTEGER NOT NULL DEFAULT 0, fundamental_coverage INTEGER NOT NULL DEFAULT 0, error TEXT, universe TEXT, strategy_hash TEXT NOT NULL, lease_until INTEGER NOT NULL DEFAULT 0, retry_queue TEXT NOT NULL DEFAULT '[]', notification_sent_at TEXT)"),
   d.prepare("CREATE TABLE IF NOT EXISTS fundamental_snapshots (id TEXT PRIMARY KEY NOT NULL, run_id TEXT NOT NULL, symbol TEXT NOT NULL, as_of TEXT NOT NULL, payload TEXT NOT NULL, evaluation TEXT NOT NULL, FOREIGN KEY (run_id) REFERENCES strategy_runs(id))"),
   d.prepare("CREATE INDEX IF NOT EXISTS snapshot_run_idx ON fundamental_snapshots(run_id)"),
+  d.prepare("CREATE INDEX IF NOT EXISTS snapshot_run_symbol_idx ON fundamental_snapshots(run_id,symbol)"),
   d.prepare("CREATE INDEX IF NOT EXISTS snapshot_symbol_date_idx ON fundamental_snapshots(symbol,as_of)"),
   d.prepare("CREATE TABLE IF NOT EXISTS watchlist (symbol TEXT PRIMARY KEY NOT NULL, created_at TEXT NOT NULL)"),
   d.prepare("CREATE TABLE IF NOT EXISTS personal_watchlist (owner TEXT NOT NULL, symbol TEXT NOT NULL, created_at TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(owner,symbol))"),
@@ -140,20 +141,27 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
   if(cached&&cached.expiresAt<=Date.now()){legacyEvaluationCache.delete(String(latest.id));cached=undefined;}
   if(!cached){
    const totals={total:0,opportunityRanked:0,opportunityNeedsResearch:0,opportunityExcluded:0,opportunityWithEvidence:0,opportunityFactorIncomplete:Object.fromEntries(OPPORTUNITY_SPEC.factors.map(factor=>[factor.id,0])) as Record<string,number>,opportunityEligibilityBlockers:{} as Record<string,{status:'FAIL'|'UNKNOWN';count:number}>};
-   const order:LegacyEvaluationRow[]=[];const batchSize=100;let batchOffset=0;
+   const order:LegacyEvaluationRow[]=[];const batchSize=500;let afterSymbol='';
    while(true){
-    const batch=(await d.prepare(`SELECT id,symbol,payload FROM fundamental_snapshots WHERE run_id=? ORDER BY symbol ASC LIMIT ? OFFSET ?`).bind(latest.id,batchSize,batchOffset).all()).results as any[];
+    const batch=(await d.prepare(`SELECT id,symbol,payload,evaluation FROM fundamental_snapshots WHERE run_id=? AND symbol>? ORDER BY symbol ASC LIMIT ?`).bind(latest.id,afterSymbol,batchSize).all()).results as any[];
     if(!batch.length)break;
+    const evaluationWrites:any[]=[];
     for(const row of batch){
      totals.total++;let snapshot:Snapshot,opportunity:OpportunityEvaluation;
-     try{snapshot=applyFinancingRisk(JSON.parse(String(row.payload)));opportunity=evaluateSnapshotOpportunity(snapshot)}catch{totals.opportunityNeedsResearch++;continue}
+     try{
+      snapshot=applyFinancingRisk(JSON.parse(String(row.payload)));
+      let stored:OpportunityEvaluation|undefined;try{stored=JSON.parse(String(row.evaluation))?.opportunity}catch{/* malformed saved evaluation */}
+      opportunity=stored?.hash===opportunitySpecHash()?stored:evaluateSnapshotOpportunity(snapshot);
+      if(stored?.hash!==opportunitySpecHash())evaluationWrites.push(d.prepare('UPDATE fundamental_snapshots SET evaluation=? WHERE id=?').bind(JSON.stringify({opportunity}),String(row.id)));
+     }catch{totals.opportunityNeedsResearch++;continue}
      if(opportunity.state==='ranked')totals.opportunityRanked++;else if(opportunity.state==='excluded')totals.opportunityExcluded++;else totals.opportunityNeedsResearch++;
      if(opportunity.score>0)totals.opportunityWithEvidence++;
      for(const factor of opportunity.factors)if(!factor.complete)totals.opportunityFactorIncomplete[factor.id]=(totals.opportunityFactorIncomplete[factor.id]??0)+1;
      for(const check of opportunity.checks)if(check.status==='FAIL'||check.status==='UNKNOWN'){const key=`${check.id}:${check.status}`;const prior=totals.opportunityEligibilityBlockers[key];totals.opportunityEligibilityBlockers[key]={status:check.status,count:(prior?.count??0)+1};}
      const signals=operatingCandidateSignals(snapshot);order.push({id:String(row.id),symbol:String(row.symbol),name:String(snapshot.name||''),state:opportunity.state,score:opportunity.score,coverage:opportunity.coveragePct,eligible:signals.eligibleForOperatingQueue,positiveFcf:signals.positiveFcfYears,profitable:signals.profitableYears,evidenceYears:signals.yearsWithProfitEvidence+signals.yearsWithFcfEvidence,growth:signals.revenueGrowth,fcfMargin:signals.latestFcfMargin,profitMargin:signals.latestProfitMargin});
     }
-    batchOffset+=batch.length;if(batch.length<batchSize)break;
+    if(evaluationWrites.length)for(let start=0;start<evaluationWrites.length;start+=100)await d.batch(evaluationWrites.slice(start,start+100));
+    afterSymbol=String(batch.at(-1).symbol);if(batch.length<batchSize)break;
    }
    const desc=(a:number|null,b:number|null)=>a==null?(b==null?0:1):b==null?-1:b-a;
    order.sort((a,b)=>b.score-a.score||b.coverage-a.coverage||Number(b.eligible)-Number(a.eligible)||b.positiveFcf-a.positiveFcf||b.profitable-a.profitable||b.evidenceYears-a.evidenceYears||desc(a.growth,b.growth)||desc(a.fcfMargin,b.fcfMargin)||desc(a.profitMargin,b.profitMargin)||a.symbol.localeCompare(b.symbol));
@@ -168,9 +176,9 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
   const selected=order.slice(offset,offset+limit+1);
   rows=[];
   for(let start=0;start<selected.length;start+=80){
-   const group=selected.slice(start,start+80),found=(await d.prepare(`SELECT id,payload FROM fundamental_snapshots WHERE id IN (${group.map(()=>'?').join(',')})`).bind(...group.map(row=>row.id)).all()).results as any[];
-   const payloadById=new Map(found.map((row:any)=>[String(row.id),String(row.payload)]));
-   for(const item of group){const payload=payloadById.get(item.id);if(!payload)continue;const snapshot=applyFinancingRisk(JSON.parse(payload)),opportunity=evaluateSnapshotOpportunity(snapshot);rows.push({payload:JSON.stringify(snapshot),evaluation:JSON.stringify({opportunity})});}
+   const group=selected.slice(start,start+80),found=(await d.prepare(`SELECT id,payload,evaluation FROM fundamental_snapshots WHERE id IN (${group.map(()=>'?').join(',')})`).bind(...group.map(row=>row.id)).all()).results as any[];
+   const payloadById=new Map(found.map((row:any)=>[String(row.id),{payload:String(row.payload),evaluation:String(row.evaluation)}]));
+   for(const item of group){const saved=payloadById.get(item.id);if(!saved)continue;const snapshot=applyFinancingRisk(JSON.parse(saved.payload));let result:any;try{result=JSON.parse(saved.evaluation)}catch{/* replace malformed evaluation below */}const opportunity=result?.opportunity?.hash===opportunitySpecHash()?result.opportunity:evaluateSnapshotOpportunity(snapshot);rows.push({payload:JSON.stringify(snapshot),evaluation:JSON.stringify({opportunity})});}
   }
   databasePaged=true;
  }
