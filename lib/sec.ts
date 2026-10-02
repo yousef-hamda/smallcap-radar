@@ -3,7 +3,12 @@ import type {Provenance} from './engine';
 // aliases explicit: accepting an IFRS namespace without searching its actual
 // standard concepts silently creates zero-coverage foreign issuers.
 export const US_GAAP_REVENUE_TAGS=['RevenueFromContractWithCustomerExcludingAssessedTax','RevenueFromContractWithCustomerIncludingAssessedTax','Revenues','SalesRevenueNet','SalesRevenueGoodsNet'];
-export const REVENUE_TAGS=[...US_GAAP_REVENUE_TAGS,'Revenue','RevenueFromContractsWithCustomers'];
+// IFRS filers frequently report operating revenue under this standard
+// concept. Prefer it to the broad plural "RevenueFromContractsWithCustomers"
+// fallback, which can describe a narrow contract-revenue line (and is not a
+// valid revenue denominator for banks or other issuers with multiple income
+// streams).
+export const REVENUE_TAGS=[...US_GAAP_REVENUE_TAGS,'RevenueAndOperatingIncome','Revenue','RevenueFromContractsWithCustomers'];
 export const COST_OF_REVENUE_TAGS=['CostOfRevenue','CostOfGoodsAndServicesSold','CostOfGoodsAndServicesSoldDirect','CostOfGoodsAndServicesSoldIncludingDAndA'];
 export const BACKLOG_TAGS=['RemainingPerformanceObligation','RevenueRemainingPerformanceObligation','ContractWithCustomerLiability','ContractWithCustomerLiabilityCurrent','ContractWithCustomerLiabilityNoncurrent'];
 export type Fact={start?:string;end:string;val:number;filed:string;form:string;accn?:string;fy?:number;fp?:string;tag?:string};

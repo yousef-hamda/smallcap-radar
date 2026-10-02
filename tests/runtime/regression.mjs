@@ -482,7 +482,7 @@ test('unified opportunity pages keep incomplete companies in research and never 
  await insertSnapshot('ranked-order',{...base,symbol:'RANK-FAIL',name:'Failed gate fixture',marketCap:5e9,return12m:.4}).run();
  const asOf='2026-09-30T23:00:00Z';
  const annual=(year,revenue,income,cash,capex,rightsStatus='redistribution-permitted')=>{const end=`${year}-12-31`,source={source:'SEC Company Facts · runtime fixture',url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0000000001.json',periodEnd:end,availableAt:`${Number(year)+1}-02-01T00:00:00Z`,retrievedAt:`${Number(year)+1}-02-02T00:00:00Z`,rightsStatus,confidence:'high'};const value=n=>({value:n,unit:'USD',source});return{start:`${year}-01-01`,end,metrics:{revenue:value(revenue),netIncome:value(income),operatingCashFlow:value(cash),capitalExpenditure:value(capex)}}};
- const researched=(symbol,values,rights='redistribution-permitted')=>insertSnapshot('ranked-order',{...base,symbol,asOf,opportunityResearch:{earnings:{providerStatus:'retrieved',coverage:{annualPeriodsFound:values.length,quarterlyPeriodsFound:0,selectedUnit:'USD'},annual:values.map((values,index)=>annual(String(2023+index),...values,rights)),quarterly:[],missing:[],conflicts:[],limitations:[],readyForScoring:false}}});
+ const researched=(symbol,values,rights='redistribution-permitted')=>insertSnapshot('ranked-order',{...base,symbol,asOf,opportunityResearch:{earnings:{providerStatus:'retrieved',coverage:{annualPeriodsFound:values.length,quarterlyPeriodsFound:0,selectedUnit:'USD'},annual:values.map((values,index)=>annual(String(2023+index),...values,rights)),quarterly:[],missing:[],conflicts:[],limitations:[],readyForScoring:false},financialStrength:{providerStatus:'retrieved',industryModel:'industrial-operating-company',metrics:{},missing:[],conflicts:[],limitations:[],readyForScoring:false}}});
  await researched('RANK-STRONG',[[100,10,14,4],[120,18,22,5],[150,30,40,8]]).run();
  await researched('RANK-GROWTH',[[100,20,24,8],[150,30,35,10],[225,45,55,15]]).run();
  await researched('RANK-LOSS',[[100,-5,0,3],[130,-4,2,3],[180,-2,4,4]]).run();
@@ -492,7 +492,7 @@ test('unified opportunity pages keep incomplete companies in research and never 
  const second=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:10,offset:1});assert.equal(second.snapshots.length,6);
  const all=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:10});assert.equal(all.snapshots.length,7);assert(all.snapshots.some(s=>s.symbol==='RANK-FAIL'));
  assert.deepEqual([...first.snapshots,...second.snapshots].map(s=>s.symbol),all.snapshots.map(s=>s.symbol));
- assert.equal(all.snapshots[0].symbol,'RANK-STRONG','highest current profit and FCF margins lead the research shortlist');
+ assert.equal(all.snapshots[0].symbol,'RANK-GROWTH','multi-year positive cash flow/profitability ties are resolved by sourced revenue growth before a single-year margin');assert.deepEqual(all.snapshots.slice(0,2).map(snapshot=>snapshot.symbol).sort(),['RANK-GROWTH','RANK-STRONG']);
  assert.equal(all.snapshots.at(-1).symbol,'RANK-UNVERIFIED','facts without verified SEC reuse provenance are not used to prioritize');
 });
 

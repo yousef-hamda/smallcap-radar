@@ -4,6 +4,7 @@ type AnnualPeriod = NonNullable<Snapshot['opportunityResearch']>['earnings']['an
 type Metric = NonNullable<AnnualPeriod['metrics']['revenue']>;
 
 export type OperatingCandidateSignals = {
+  eligibleForOperatingQueue: boolean;
   hasVerifiedRevenue: boolean;
   annualEvidenceYears: number;
   profitableYears: number;
@@ -14,6 +15,15 @@ export type OperatingCandidateSignals = {
   latestProfitMargin: number | null;
   latestFcfMargin: number | null;
 };
+
+// Annual-only SEC facts are normally 9–12 months behind. Anything older than
+// this is too stale to drive even a research-priority order.
+const MAX_ANNUAL_FACT_AGE_DAYS = 450;
+const PLAUSIBLE_PROFIT_MARGIN_MIN = -1;
+const PLAUSIBLE_PROFIT_MARGIN_MAX = 1;
+const PLAUSIBLE_FCF_MARGIN_MIN = -3;
+const PLAUSIBLE_FCF_MARGIN_MAX = 3;
+const MAX_ANNUAL_REVENUE_GROWTH = 5;
 
 function validSecMetric(metric: Metric | undefined, asOf: string): metric is Metric {
   if (!metric || !Number.isFinite(metric.value) || !metric.unit || !metric.source) return false;
@@ -45,37 +55,63 @@ export function operatingCandidateSignals(snapshot: Snapshot): OperatingCandidat
   // that canonical array order, matching the indexed SQLite JSON expressions.
   const periods = [...(snapshot.opportunityResearch?.earnings.annual ?? [])].slice(-3);
   const valid = (period: AnnualPeriod, id: keyof AnnualPeriod['metrics']) => validSecMetric(period.metrics[id], snapshot.asOf);
-  const comparable = periods.filter(period => valid(period, 'revenue') && valid(period, 'netIncome')
+  const ageDays = (period: AnnualPeriod) => (Date.parse(snapshot.asOf) - Date.parse(`${period.end}T00:00:00Z`)) / 86_400_000;
+  const fresh = (period: AnnualPeriod) => Number.isFinite(ageDays(period)) && ageDays(period) >= 0 && ageDays(period) <= MAX_ANNUAL_FACT_AGE_DAYS;
+  const reasonableProfit = (period: AnnualPeriod) => {
+    const revenue = period.metrics.revenue, income = period.metrics.netIncome;
+    if (!revenue || !income || revenue.value <= 0 || revenue.unit !== income.unit) return false;
+    const margin = income.value / revenue.value;
+    return Number.isFinite(margin) && margin >= PLAUSIBLE_PROFIT_MARGIN_MIN && margin <= PLAUSIBLE_PROFIT_MARGIN_MAX;
+  };
+  const reasonableFcf = (period: AnnualPeriod) => {
+    const revenue = period.metrics.revenue, cashFlow = period.metrics.operatingCashFlow, capex = period.metrics.capitalExpenditure;
+    if (!revenue || !cashFlow || !capex || revenue.value <= 0 || revenue.unit !== cashFlow.unit || cashFlow.unit !== capex.unit) return false;
+    const margin = (cashFlow.value - Math.abs(capex.value)) / revenue.value;
+    return Number.isFinite(margin) && margin >= PLAUSIBLE_FCF_MARGIN_MIN && margin <= PLAUSIBLE_FCF_MARGIN_MAX;
+  };
+  const comparable = periods.filter(period => reasonableProfit(period) && reasonableFcf(period)
+    && valid(period, 'revenue') && valid(period, 'netIncome')
     && valid(period, 'operatingCashFlow') && valid(period, 'capitalExpenditure')
     && period.metrics.revenue!.unit === period.metrics.netIncome!.unit
     && period.metrics.revenue!.unit === period.metrics.operatingCashFlow!.unit
     && period.metrics.revenue!.unit === period.metrics.capitalExpenditure!.unit);
   const latest = periods.at(-1);
-  const latestRevenue = latest && valid(latest, 'revenue') ? latest.metrics.revenue : undefined;
+  const issuerModelVerified = snapshot.opportunityResearch?.financialStrength?.industryModel === 'industrial-operating-company';
+  const latestRevenue = latest && fresh(latest) && valid(latest, 'revenue') ? latest.metrics.revenue : undefined;
   const latestIncome = latest && valid(latest, 'netIncome') ? latest.metrics.netIncome : undefined;
   const latestCashFlow = latest && valid(latest, 'operatingCashFlow') ? latest.metrics.operatingCashFlow : undefined;
   const latestCapex = latest && valid(latest, 'capitalExpenditure') ? latest.metrics.capitalExpenditure : undefined;
-  const latestProfitMargin = latestRevenue && latestIncome && latestRevenue.value > 0
+  const rawProfitMargin = latestRevenue && latestIncome && latestRevenue.value > 0
     && latestRevenue.unit === latestIncome.unit ? latestIncome.value / latestRevenue.value : null;
+  const latestProfitMargin = rawProfitMargin !== null && rawProfitMargin >= PLAUSIBLE_PROFIT_MARGIN_MIN
+    && rawProfitMargin <= PLAUSIBLE_PROFIT_MARGIN_MAX ? rawProfitMargin : null;
   const latestFcf = latestCashFlow && latestCapex && latestCashFlow.unit === latestCapex.unit
     ? latestCashFlow.value - Math.abs(latestCapex.value) : null;
-  const latestFcfMargin = latestRevenue && latestFcf !== null && latestRevenue.value > 0
+  const rawFcfMargin = latestRevenue && latestFcf !== null && latestRevenue.value > 0
     && latestRevenue.unit === latestCashFlow?.unit ? latestFcf / latestRevenue.value : null;
-  const revenues = periods.filter(period => valid(period, 'revenue')).map(period => period.metrics.revenue!);
+  const latestFcfMargin = rawFcfMargin !== null && rawFcfMargin >= PLAUSIBLE_FCF_MARGIN_MIN
+    && rawFcfMargin <= PLAUSIBLE_FCF_MARGIN_MAX ? rawFcfMargin : null;
+  const revenues = periods.filter(period => valid(period, 'revenue') && period.metrics.revenue!.value > 0).map(period => period.metrics.revenue!);
   const lastRevenue = revenues.at(-1);
   const previousRevenue = revenues.at(-2);
-  const revenueGrowth = revenues.length >= 2 && previousRevenue!.value > 0
+  const rawRevenueGrowth = revenues.length >= 2 && previousRevenue!.value > 0
     && lastRevenue!.unit === previousRevenue!.unit
     ? lastRevenue!.value / previousRevenue!.value - 1 : null;
-  const profitPeriods = periods.filter(period => valid(period, 'netIncome'));
-  const fcfPeriods = periods.filter(period => valid(period, 'operatingCashFlow') && valid(period, 'capitalExpenditure')
+  const revenueGrowth = rawRevenueGrowth !== null && rawRevenueGrowth <= MAX_ANNUAL_REVENUE_GROWTH ? rawRevenueGrowth : null;
+  const profitPeriods = periods.filter(period => valid(period, 'revenue') && valid(period, 'netIncome') && reasonableProfit(period));
+  const fcfPeriods = periods.filter(period => valid(period, 'revenue') && period.metrics.revenue!.value > 0 && valid(period, 'operatingCashFlow') && valid(period, 'capitalExpenditure')
     && period.metrics.operatingCashFlow!.unit === period.metrics.capitalExpenditure!.unit);
+  const eligibleForOperatingQueue = issuerModelVerified && !!latestRevenue && latestRevenue.value > 0 && latestProfitMargin !== null;
   return {
-    hasVerifiedRevenue: !!latestRevenue && latestRevenue.value > 0,
+    eligibleForOperatingQueue,
+    hasVerifiedRevenue: eligibleForOperatingQueue,
     annualEvidenceYears: comparable.length,
     profitableYears: profitPeriods.filter(period => period.metrics.netIncome!.value > 0).length,
     yearsWithProfitEvidence: profitPeriods.length,
-    positiveFcfYears: fcfPeriods.filter(period => period.metrics.operatingCashFlow!.value - Math.abs(period.metrics.capitalExpenditure!.value) > 0).length,
+    positiveFcfYears: fcfPeriods.filter(period => {
+      const margin = (period.metrics.operatingCashFlow!.value - Math.abs(period.metrics.capitalExpenditure!.value)) / period.metrics.revenue!.value;
+      return margin > 0 && margin <= PLAUSIBLE_FCF_MARGIN_MAX;
+    }).length,
     yearsWithFcfEvidence: fcfPeriods.length,
     revenueGrowth: Number.isFinite(revenueGrowth) ? revenueGrowth : null,
     latestProfitMargin: Number.isFinite(latestProfitMargin) ? latestProfitMargin : null,
@@ -88,6 +124,7 @@ export function operatingCandidateSignals(snapshot: Snapshot): OperatingCandidat
 const metricValue = (period: number, metric: string) => `json_extract(payload,'$.opportunityResearch.earnings.annual[#-${period}].metrics.${metric}.value')`;
 const metricUnit = (period: number, metric: string) => `json_extract(payload,'$.opportunityResearch.earnings.annual[#-${period}].metrics.${metric}.unit')`;
 const metricSource = (period: number, metric: string, field: string) => `json_extract(payload,'$.opportunityResearch.earnings.annual[#-${period}].metrics.${metric}.source.${field}')`;
+const periodEnd = (period: number) => `json_extract(payload,'$.opportunityResearch.earnings.annual[#-${period}].end')`;
 const sourceIsUsable = (period: number, metric: string) => {
   const source = (field: string) => metricSource(period, metric, field);
   return `(${source('source')} LIKE 'SEC Company Facts%' AND ${source('url')} LIKE 'https://data.sec.gov/api/xbrl/companyfacts/CIK%' AND ${source('rightsStatus')}='redistribution-permitted' AND julianday(${source('availableAt')})<=julianday(json_extract(payload,'$.asOf')) AND julianday(${source('periodEnd')})<=julianday(json_extract(payload,'$.asOf')) AND julianday(${source('retrievedAt')})<=julianday(json_extract(payload,'$.asOf'))) `;
@@ -95,22 +132,29 @@ const sourceIsUsable = (period: number, metric: string) => {
 
 export function operatingCandidateOrderSql() {
   const periods = [1, 2, 3];
+  const industryEligible = `json_extract(payload,'$.opportunityResearch.financialStrength.industryModel')='industrial-operating-company'`;
+  const freshRevenue = (period: number) => `${sourceIsUsable(period, 'revenue')} AND ${metricValue(period, 'revenue')}>0 AND julianday(json_extract(payload,'$.asOf'))-julianday(${periodEnd(period)}) BETWEEN 0 AND ${MAX_ANNUAL_FACT_AGE_DAYS}`;
+  const plausibleHistoricalProfit = (period: number) => `${sourceIsUsable(period, 'revenue')} AND ${sourceIsUsable(period, 'netIncome')} AND ${metricValue(period, 'revenue')}>0 AND ${metricUnit(period, 'netIncome')}=${metricUnit(period, 'revenue')} AND 1.0*${metricValue(period, 'netIncome')}/${metricValue(period, 'revenue')} BETWEEN ${PLAUSIBLE_PROFIT_MARGIN_MIN} AND ${PLAUSIBLE_PROFIT_MARGIN_MAX}`;
+  const plausibleProfit = (period: number) => `${freshRevenue(period)} AND ${sourceIsUsable(period, 'netIncome')} AND ${metricUnit(period, 'netIncome')}=${metricUnit(period, 'revenue')} AND 1.0*${metricValue(period, 'netIncome')}/${metricValue(period, 'revenue')} BETWEEN ${PLAUSIBLE_PROFIT_MARGIN_MIN} AND ${PLAUSIBLE_PROFIT_MARGIN_MAX}`;
   const verifiedIncome = periods.map(period => sourceIsUsable(period, 'netIncome'));
-  const positiveIncome = periods.map((period, index) => `CASE WHEN ${verifiedIncome[index]} AND ${metricValue(period, 'netIncome')}>0 THEN 1 ELSE 0 END`);
-  const incomeCoverage = verifiedIncome.map(valid => `CASE WHEN ${valid} THEN 1 ELSE 0 END`);
-  const verifiedFcf = periods.map(period => sourceIsUsable(period, 'operatingCashFlow') && sourceIsUsable(period, 'capitalExpenditure'));
-  const positiveFcf = periods.map((period, index) => `CASE WHEN ${verifiedFcf[index]} AND ${metricUnit(period, 'operatingCashFlow')}=${metricUnit(period, 'capitalExpenditure')} AND ${metricValue(period, 'operatingCashFlow')}-abs(${metricValue(period, 'capitalExpenditure')})>0 THEN 1 ELSE 0 END`);
-  const fcfCoverage = verifiedFcf.map(valid => `CASE WHEN ${valid} THEN 1 ELSE 0 END`);
+  const positiveIncome = periods.map((period, index) => `CASE WHEN ${index === 0 ? plausibleProfit(period) : plausibleHistoricalProfit(period)} AND ${verifiedIncome[index]} AND ${metricValue(period, 'netIncome')}>0 THEN 1 ELSE 0 END`);
+  const incomeCoverage = periods.map(period => `CASE WHEN ${sourceIsUsable(period, 'revenue')} AND ${sourceIsUsable(period, 'netIncome')} AND ${metricValue(period, 'revenue')}>0 AND ${metricUnit(period, 'netIncome')}=${metricUnit(period, 'revenue')} AND 1.0*${metricValue(period, 'netIncome')}/${metricValue(period, 'revenue')} BETWEEN ${PLAUSIBLE_PROFIT_MARGIN_MIN} AND ${PLAUSIBLE_PROFIT_MARGIN_MAX} THEN 1 ELSE 0 END`);
+  const verifiedFcf = periods.map(period => `(${sourceIsUsable(period, 'operatingCashFlow')} AND ${sourceIsUsable(period, 'capitalExpenditure')})`);
+  const fcfMargin = (period: number) => `1.0*(${metricValue(period, 'operatingCashFlow')}-abs(${metricValue(period, 'capitalExpenditure')}))/${metricValue(period, 'revenue')}`;
+  const plausibleHistoricalFcf = (period: number) => `${sourceIsUsable(period, 'revenue')} AND ${verifiedFcf[periods.indexOf(period)]} AND ${metricValue(period, 'revenue')}>0 AND ${metricUnit(period, 'operatingCashFlow')}=${metricUnit(period, 'capitalExpenditure')} AND ${metricUnit(period, 'operatingCashFlow')}=${metricUnit(period, 'revenue')} AND ${fcfMargin(period)} BETWEEN ${PLAUSIBLE_FCF_MARGIN_MIN} AND ${PLAUSIBLE_FCF_MARGIN_MAX}`;
+  const plausibleFcf = (period: number) => `${freshRevenue(period)} AND ${verifiedFcf[periods.indexOf(period)]} AND ${metricUnit(period, 'operatingCashFlow')}=${metricUnit(period, 'capitalExpenditure')} AND ${metricUnit(period, 'operatingCashFlow')}=${metricUnit(period, 'revenue')} AND ${fcfMargin(period)} BETWEEN ${PLAUSIBLE_FCF_MARGIN_MIN} AND ${PLAUSIBLE_FCF_MARGIN_MAX}`;
+  const positiveFcf = periods.map((period, index) => `CASE WHEN ${index === 0 ? plausibleFcf(period) : plausibleHistoricalFcf(period)} AND ${fcfMargin(period)}>0 THEN 1 ELSE 0 END`);
+  const fcfCoverage = periods.map(period => `CASE WHEN ${plausibleHistoricalFcf(period)} THEN 1 ELSE 0 END`);
   const currentRevenue = metricValue(1, 'revenue'), priorRevenue = metricValue(2, 'revenue');
-  const currentRevenueValid = sourceIsUsable(1, 'revenue'), priorRevenueValid = sourceIsUsable(2, 'revenue');
+  const currentRevenueValid = freshRevenue(1), priorRevenueValid = sourceIsUsable(2, 'revenue');
   const currentIncome = metricValue(1, 'netIncome');
-  const currentCash = metricValue(1, 'operatingCashFlow'), currentCapex = metricValue(1, 'capitalExpenditure');
-  return `CASE WHEN ${currentRevenueValid} AND ${currentRevenue}>0 THEN 1 ELSE 0 END DESC,
-    CASE WHEN ${currentRevenueValid} AND ${sourceIsUsable(1, 'netIncome')} AND ${metricUnit(1, 'netIncome')}=${metricUnit(1, 'revenue')} AND ${currentRevenue}>0 THEN 1.0*${currentIncome}/${currentRevenue} END DESC,
-    CASE WHEN ${sourceIsUsable(1, 'operatingCashFlow')} AND ${sourceIsUsable(1, 'capitalExpenditure')} AND ${metricUnit(1, 'operatingCashFlow')}=${metricUnit(1, 'capitalExpenditure')} AND ${metricUnit(1, 'operatingCashFlow')}=${metricUnit(1, 'revenue')} AND ${currentRevenueValid} AND ${currentRevenue}>0 THEN 1.0*(${currentCash}-abs(${currentCapex}))/${currentRevenue} END DESC,
-    (${positiveIncome.join('+')}) DESC,
-    (${positiveFcf.join('+')}) DESC,
-    CASE WHEN ${currentRevenueValid} AND ${priorRevenueValid} AND ${metricUnit(1, 'revenue')}=${metricUnit(2, 'revenue')} AND ${currentRevenue}>0 AND ${priorRevenue}>0 THEN 1.0*${currentRevenue}/${priorRevenue}-1 END DESC,
-    (${incomeCoverage.join('+')})+(${fcfCoverage.join('+')}) DESC,
+  const growth = `1.0*${currentRevenue}/${priorRevenue}-1`;
+  return `CASE WHEN ${industryEligible} AND ${plausibleProfit(1)} THEN 1 ELSE 0 END DESC,
+    CASE WHEN ${industryEligible} THEN (${positiveFcf.join('+')}) ELSE 0 END DESC,
+    CASE WHEN ${industryEligible} THEN (${positiveIncome.join('+')}) ELSE 0 END DESC,
+    CASE WHEN ${industryEligible} THEN (${incomeCoverage.join('+')})+(${fcfCoverage.join('+')}) ELSE 0 END DESC,
+    CASE WHEN ${industryEligible} AND ${currentRevenueValid} AND ${priorRevenueValid} AND ${metricUnit(1, 'revenue')}=${metricUnit(2, 'revenue')} AND ${currentRevenue}>0 AND ${priorRevenue}>0 AND ${growth}<=${MAX_ANNUAL_REVENUE_GROWTH} THEN ${growth} END DESC,
+    CASE WHEN ${industryEligible} AND ${plausibleFcf(1)} THEN ${fcfMargin(1)} END DESC,
+    CASE WHEN ${industryEligible} AND ${plausibleProfit(1)} THEN 1.0*${currentIncome}/${currentRevenue} END DESC,
     symbol ASC`;
 }

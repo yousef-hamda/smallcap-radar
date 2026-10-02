@@ -2,7 +2,7 @@ import test from 'node:test';import assert from 'node:assert/strict';
 import {SPECS,evaluateStrategy,specHash} from '../../.test-build/engine.mjs';
 import {fixtures} from '../../.test-build/fixtures.mjs';
 import {simulateForwardReturn,horizonDate,pointInTime,firmHoldout,firmBootstrap,bonferroni,splitAdjustedDilution,ma30Weeks,opportunityHistoryMetrics,completedSessionQuote} from '../../.test-build/research.mjs';
-import {trailingAnnual,insiderPurchases,latestInstant} from '../../.test-build/sec.mjs';
+import {trailingAnnual,insiderPurchases,latestInstant,REVENUE_TAGS} from '../../.test-build/sec.mjs';
 import {preliminarySnapshot,parseCompanyFacts,needsCompanyFacts,fetchCompanyFactsFallback,fetchBulkFundamentals} from '../../.test-build/bulk.mjs';
 import {yahooPercentAsRatio,parseYahooDaily,parseCboeDaily,yahooSymbol,yahooBulkQuotes,parseSecFilingNews,parseSecFilingIndex,parseSec8KItemReferences,fetchSec8KItemIndex,selectRecentForm4Filings,fetchInsiderPurchases,fetchJson,enrichSnapshotsWithSecOpportunity,resolveCompanyBySymbol,searchListedCompanies} from '../../.test-build/providers.mjs';
 import {reviewShareSplits} from '../../.test-build/research.mjs';
@@ -631,10 +631,16 @@ test('unified opportunity scores on the fixed denominator and ranks only with ma
 });
 test('SEC operating research priorities use only issuer-linked dated facts and expose missing history',()=>{
  const annual=(year,revenue,income,cash,capex,rightsStatus='redistribution-permitted')=>{const end=`${year}-12-31`,source={source:'SEC Company Facts · annual fixture',url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0000000001.json',periodEnd:end,availableAt:`${Number(year)+1}-02-01T00:00:00Z`,retrievedAt:`${Number(year)+1}-02-02T00:00:00Z`,rightsStatus,confidence:'high'};const value=n=>({value:n,unit:'USD',source});return{start:`${year}-01-01`,end,metrics:{revenue:value(revenue),netIncome:value(income),operatingCashFlow:value(cash),capitalExpenditure:value(capex)}}};
- const snapshot={...opportunitySnapshot,asOf:'2026-09-30T23:00:00Z',opportunityResearch:{earnings:{annual:[annual('2023',100,10,14,4),annual('2024',120,18,22,5),annual('2025',150,30,40,8)]}}};
- const signals=operatingCandidateSignals(snapshot);assert.equal(signals.hasVerifiedRevenue,true);assert.equal(signals.annualEvidenceYears,3);assert.equal(signals.profitableYears,3);assert.equal(signals.positiveFcfYears,3);assert.ok(signals.revenueGrowth>0);assert.equal(signals.latestProfitMargin,.2);assert.equal(signals.latestFcfMargin,32/150);
- const restricted={...snapshot,opportunityResearch:{earnings:{annual:[annual('2025',150,30,40,8,'unknown')]}}};assert.equal(operatingCandidateSignals(restricted).hasVerifiedRevenue,false);assert.equal(operatingCandidateSignals(restricted).annualEvidenceYears,0);
- const order=operatingCandidateOrderSql();assert.match(order,/source\.rightsStatus/);assert.match(order,/redistribution-permitted/);assert.match(order,/symbol ASC/);assert.match(order,/operatingCashFlow/);
+ const snapshot={...opportunitySnapshot,asOf:'2026-09-30T23:00:00Z',opportunityResearch:{earnings:{annual:[annual('2023',100,10,14,4),annual('2024',120,18,22,5),annual('2025',150,30,40,8)]},financialStrength:{industryModel:'industrial-operating-company'}}};
+ const signals=operatingCandidateSignals(snapshot);assert.equal(signals.eligibleForOperatingQueue,true);assert.equal(signals.hasVerifiedRevenue,true);assert.equal(signals.annualEvidenceYears,3);assert.equal(signals.profitableYears,3);assert.equal(signals.positiveFcfYears,3);assert.ok(signals.revenueGrowth>0);assert.equal(signals.latestProfitMargin,.2);assert.equal(signals.latestFcfMargin,32/150);
+ const restricted={...snapshot,opportunityResearch:{earnings:{annual:[annual('2025',150,30,40,8,'unknown')]},financialStrength:{industryModel:'industrial-operating-company'}}};assert.equal(operatingCandidateSignals(restricted).hasVerifiedRevenue,false);assert.equal(operatingCandidateSignals(restricted).annualEvidenceYears,0);
+ const bank={...snapshot,opportunityResearch:{...snapshot.opportunityResearch,financialStrength:{providerStatus:'retrieved'}}};assert.equal(operatingCandidateSignals(bank).eligibleForOperatingQueue,false);
+ const mismatched={...snapshot,opportunityResearch:{...snapshot.opportunityResearch,earnings:{annual:[annual('2023',100,10,14,4),annual('2024',120,18,22,5),annual('2025',0.149,245.796, -26.898,0.149)]}}};const bad=operatingCandidateSignals(mismatched);assert.equal(bad.eligibleForOperatingQueue,false);assert.equal(bad.latestProfitMargin,null);
+ const stale={...snapshot,opportunityResearch:{...snapshot.opportunityResearch,earnings:{annual:[annual('2023',100,10,14,4),annual('2024',120,18,22,5),annual('2024',150,30,40,8)]}}};assert.equal(operatingCandidateSignals(stale).eligibleForOperatingQueue,false);
+ const order=operatingCandidateOrderSql();assert.match(order,/source\.rightsStatus/);assert.match(order,/redistribution-permitted/);assert.match(order,/industrial-operating-company/);assert.match(order,/julianday/);assert.match(order,/BETWEEN -1 AND 1/);assert.match(order,/symbol ASC/);assert.match(order,/operatingCashFlow/);
+});
+test('SEC revenue concepts prefer consolidated operating revenue over narrow contract-revenue fallback',()=>{
+ assert.ok(REVENUE_TAGS.indexOf('RevenueAndOperatingIncome')<REVENUE_TAGS.indexOf('RevenueFromContractsWithCustomers'));
 });
 test('missing, out-of-range, unsourced, stale and future factor evidence never earns points',()=>{
  const evidence=opportunityEvidence();evidence.valuation.score=11;evidence.catalysts.sources=[];evidence.financialStrength.sources=[{...opportunityProvenance,availableAt:'2027-01-01T00:00:00Z'}];
