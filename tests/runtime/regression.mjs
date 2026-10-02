@@ -254,7 +254,9 @@ test('opportunity scan report keeps missing factors in research state with expli
  assert.equal(response.status,200);const payload=await response.json();
  assert.equal(payload.counts.total,1);assert.equal(payload.counts.passed,0);assert.equal(payload.counts.unknown,1);
  assert.equal(payload.rows[0].evaluation.state,'needs-research');assert.equal(payload.rows[0].evaluation.rankingEligible,false);
- assert.equal(payload.blockers.length,8);assert(payload.blockers.every(blocker=>blocker.status==='UNKNOWN'&&blocker.count===1));
+ assert.equal(payload.blockers.filter(blocker=>!blocker.id.startsWith('eligibility-')).length,8);
+ assert(payload.blockers.every(blocker=>blocker.status==='UNKNOWN'&&blocker.count===1));
+ assert.deepEqual(payload.blockers.filter(blocker=>blocker.id.startsWith('eligibility-')).map(blocker=>blocker.id).sort(),['eligibility-liquidity-unknown','eligibility-market-cap-unknown','eligibility-price-unknown','eligibility-security-unknown']);
 });
 test('client API parser translates HTML route failures instead of leaking JSON syntax errors',async()=>{
  const original=globalThis.fetch;
@@ -503,6 +505,7 @@ test('unified opportunity pages keep incomplete companies in research and never 
  assert.equal(all.snapshots.at(-1).symbol,'RANK-UNVERIFIED','facts without verified SEC reuse provenance are not used to prioritize');
 });
 
+
 test('radar pages refresh cached completed-session quotes without exceeding D1 bind limits',async()=>{
  const now='2101-01-01T00:00:00.000Z',symbols=Array.from({length:20},(_,index)=>`PAGE${index}`);
  await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES('large-radar-page',? ,?,'complete','Bulk Quotes/SEC Frames v10 · full',20,20,13,?)").bind(now,now,currentHash()).run();
@@ -511,4 +514,24 @@ test('radar pages refresh cached completed-session quotes without exceeding D1 b
  await db().prepare('INSERT INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind('deep:v11:PAGE0','test',now,JSON.stringify({...quote,symbol:'PAGE0'})).run();
  const result=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:20});
  assert.equal(result.snapshots.length,20);assert.equal(result.snapshots.find(snapshot=>snapshot.symbol==='PAGE0').dailyChange,.125);assert.equal(result.snapshots.find(snapshot=>snapshot.symbol==='PAGE0').price,17);
+});
+
+test('latest scan report uses the same recomputed factor coverage as opportunity ranking',async()=>{
+ const now=new Date().toISOString();
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES('report-current',? ,?,'complete','Bulk Quotes/SEC Frames v10 · full',1,1,13,?)").bind('9999-12-31T00:00:00.000Z',now,currentHash()).run();
+ await insertSnapshot('report-current',{...base,symbol:'REPORT-CURRENT',name:'Synthetic report fixture'}).run();
+ const stored=await db().prepare("SELECT evaluation FROM fundamental_snapshots WHERE run_id='report-current' AND symbol='REPORT-CURRENT'").first();
+ const evaluation=JSON.parse(stored.evaluation),partial=evaluation.opportunity.factors[0];
+ partial.evidenced=true;partial.complete=false;partial.score=7;partial.coveragePct=70;partial.points=partial.weight*.49;partial.sources=[{source:'SEC Company Facts · regression fixture',url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0000000001.json',availableAt:now,periodEnd:now.slice(0,10),retrievedAt:now,rightsStatus:'redistribution-permitted'}];
+ evaluation.opportunity.score=partial.points;evaluation.opportunity.coveragePct=partial.weight*.7;
+ await db().prepare("UPDATE fundamental_snapshots SET evaluation=? WHERE run_id='report-current' AND symbol='REPORT-CURRENT'").bind(JSON.stringify(evaluation)).run();
+ invalidateStateCache();
+ const response=await reportGET(new Request('https://radar.test/api/scan-report?runId=report-current&strategy=opportunity'));
+ assert.equal(response.status,200);const payload=await response.json();
+ assert.equal(payload.run.id,'report-current');assert.equal(payload.counts.total,1);assert.equal(payload.counts.withEvidence,1);
+ assert.equal(payload.rows[0].symbol,'REPORT-CURRENT');assert.equal(payload.blockers.filter(blocker=>!blocker.id.startsWith('eligibility-')).length,8);
+ const eligibility=payload.blockers.filter(blocker=>blocker.id.startsWith('eligibility-'));
+ assert.equal(eligibility.length,4);assert(eligibility.every(blocker=>blocker.count===1&&blocker.status==='UNKNOWN'));
+ for(const factor of payload.rows[0].evaluation.factors)assert.equal(payload.blockers.find(blocker=>blocker.id===factor.id)?.count,factor.complete?0:1);
+ assert.equal(payload.rows[0].evaluation.factors[0].evidenced,true);assert.equal(payload.rows[0].evaluation.factors[0].complete,false);
 });
