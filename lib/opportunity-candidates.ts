@@ -22,8 +22,12 @@ const MAX_ANNUAL_FACT_AGE_DAYS = 450;
 const PLAUSIBLE_PROFIT_MARGIN_MIN = -1;
 const PLAUSIBLE_PROFIT_MARGIN_MAX = 1;
 const PLAUSIBLE_FCF_MARGIN_MIN = -3;
-const PLAUSIBLE_FCF_MARGIN_MAX = 3;
-const MAX_ANNUAL_REVENUE_GROWTH = 5;
+// Ratios outside these broad ranges can be real, but often reflect one-offs,
+// working-capital reversals, extraordinary income, or an incompatible XBRL
+// line. Keep the company visible and show the reported trend; withhold the
+// outlier from automated ordering pending filing-level review.
+const PLAUSIBLE_FCF_MARGIN_MAX = 1;
+const MAX_ANNUAL_REVENUE_GROWTH = 1;
 
 function validSecMetric(metric: Metric | undefined, asOf: string): metric is Metric {
   if (!metric || !Number.isFinite(metric.value) || !metric.unit || !metric.source) return false;
