@@ -43,6 +43,10 @@ The new rubric changed the scan hash. Once the newly started full scan reached h
 
 Deployment `6fedd227-509a-4ca6-a821-f8778e1a7852` (commit `1a05e76`) succeeded. Live radar then showed the active scan at stage 11 but continued to select completed data run `9c059528-f468-4086-8c1e-927456f8599a`: 6,954 rows, 0 ranked, 5,971 needing research, 983 excluded, and 1,706 with provisional evidence. ASTH retained its completed-run research and 10.5 provisional points. A browser check opened the active scan report and showed the Arabic provisional-count notice above its 7,675 preliminary rows. At 2026-10-03T13:18:58Z, the active issuer-enrichment stage had reached 64 of 6,059 jobs, with two failed jobs recorded; its eventual terminal status and final ranking remain unverified. The run previously recorded 218 SEC acquisition failures among 7,108 requests, including one bounded issuer-identity-mismatch batch, but subsequently advanced to stage 11.
 
+## Follow-up verification: stale-run memory
+
+A subsequent direct request for the completed-run report returned HTTP 500. Railway logs showed the Workerd V8 heap exhausting around 80 MB and the process aborting. Code inspection found that the stale-rubric path selected every full snapshot payload into an array before the separate keyset recalculation loop. This duplicated the entire 6,954-row research payload in memory and defeated the intended bounded processing. The unbounded read has been removed for stale runs, and the keyset batch has been reduced from 500 to 100 rows. A runtime test now rejects any recurrence of that unbounded query. Production recovery remains to be verified after deployment.
+
 ## Completion evidence required
 
 For any eventual final ranked stock, the evaluator must show one correct listing/issuer identity, current eligible market data with a documented right for this application and complete provenance, all eight factor calculation traces and original sources, resolved conflicts, and one as-of cut. Its saved evaluation must agree with the live card and report. A completed job counter or an individual sourced profile cannot substitute for those per-stock checks.

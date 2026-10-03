@@ -125,7 +125,9 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
   queryParams=[...params,requested,requested,limit+1,offset];
   databasePaged=true;
  }
- let rows:any[]=queryForPage?(await d.prepare(queryForPage).bind(...queryParams).all()).results.map((r:any)=>{
+ // Stale runs are re-evaluated by the bounded keyset loop below. Reading the
+ // entire full-history payload set here first can exhaust the Worker heap.
+ let rows:any[]=queryForPage&&currentData?(await d.prepare(queryForPage).bind(...queryParams).all()).results.map((r:any)=>{
   // A current run already stores the evaluation produced by this exact
   // strategy hash. Reusing it avoids parsing and scoring every company on
   // every page refresh; stale runs still take the conservative re-evaluation
@@ -141,7 +143,7 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
   if(cached&&cached.expiresAt<=Date.now()){legacyEvaluationCache.delete(String(latest.id));cached=undefined;}
   if(!cached){
    const totals={total:0,opportunityRanked:0,opportunityNeedsResearch:0,opportunityExcluded:0,opportunityWithEvidence:0,opportunityFactorIncomplete:Object.fromEntries(OPPORTUNITY_SPEC.factors.map(factor=>[factor.id,0])) as Record<string,number>,opportunityEligibilityBlockers:{} as Record<string,{status:'FAIL'|'UNKNOWN';count:number}>};
-   const order:LegacyEvaluationRow[]=[];const batchSize=500;let afterSymbol='';
+   const order:LegacyEvaluationRow[]=[];const batchSize=100;let afterSymbol='';
    while(true){
     const batch=(await d.prepare(`SELECT id,symbol,payload,evaluation FROM fundamental_snapshots WHERE run_id=? AND symbol>? ORDER BY symbol ASC LIMIT ?`).bind(latest.id,afterSymbol,batchSize).all()).results as any[];
     if(!batch.length)break;

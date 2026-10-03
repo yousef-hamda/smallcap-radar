@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {sqlite} from './env.mjs';
+import {sqlite,env as runtimeEnv} from './env.mjs';
 import {scanProgress} from '../../.test-build/scan-progress.mjs';
 import {visitor} from '../../.test-build/visitor.mjs';
 import {body as parseBody} from '../../.test-build/http.mjs';
@@ -65,7 +65,14 @@ test('large legacy evaluator backfill persists current-hash rows across keyset b
  const now='2202-01-01T00:00:00.000Z',count=501;
  await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES('legacy-backfill',?,?,'complete','Legacy full scan',?,?,13,'retired-opportunity-hash')").bind(now,now,count,count).run();
  for(let start=0;start<count;start+=100){const batch=[];for(let index=start;index<Math.min(count,start+100);index++){const symbol=`MIGRATE-${String(index).padStart(4,'0')}`,snapshot={...base,symbol,asOf:now};batch.push(db().prepare('INSERT INTO fundamental_snapshots(id,run_id,symbol,as_of,payload,evaluation) VALUES(?,?,?,?,?,?)').bind(`legacy-backfill:${symbol}`,'legacy-backfill',symbol,now,JSON.stringify(snapshot),JSON.stringify({opportunity:{hash:'retired-opportunity-hash'}})));}await db().batch(batch);}
- invalidateStateCache();const first=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:1});
+ const originalPrepare=runtimeEnv.DB.prepare;
+ runtimeEnv.DB.prepare=sql=>{
+  if(/^SELECT payload,evaluation FROM fundamental_snapshots WHERE run_id=\? AND/.test(sql)&&!/LIMIT/.test(sql))throw Error('stale scan attempted an unbounded payload read');
+  return originalPrepare(sql);
+ };
+ let first;
+ try{invalidateStateCache();first=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:1});}
+ finally{runtimeEnv.DB.prepare=originalPrepare;}
  assert.equal(first.summary.total,count);assert.equal(first.snapshots[0].symbol,'MIGRATE-0000');assert.equal(first.page.hasMore,true);
  const persisted=await db().prepare("SELECT evaluation FROM fundamental_snapshots WHERE run_id='legacy-backfill' AND symbol='MIGRATE-0500'").first();
  assert.equal(JSON.parse(persisted.evaluation).opportunity.hash,first.storedEvaluations[0].opportunity.hash);
