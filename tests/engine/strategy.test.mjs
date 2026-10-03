@@ -15,7 +15,7 @@ import {OPPORTUNITY_SPEC} from '../../.test-build/opportunity-spec.mjs';
 import {evaluateOpportunity,isOpportunityProvenanceValid} from '../../.test-build/opportunity-engine.mjs';
 import {operatingCandidateSignals,operatingCandidateOrderSql} from '../../.test-build/opportunity-candidates.mjs';
 import {scoreFairValue,scoreFinancialStrength,scoreFinancialStrengthPartial,scoreCatalysts,scoreEarningsQuality,scoreDownsideRisk,scoreTechnicalTiming,scoreQualitativeFactor} from '../../.test-build/opportunity-scoring.mjs';
-import {scoreOpportunityDossier,evaluateOpportunityDossier,opportunityDossierFromSnapshot} from '../../.test-build/opportunity-dossier.mjs';
+import {scoreOpportunityDossier,evaluateOpportunityDossier,opportunityDossierFromSnapshot,currentOpportunityEvaluation} from '../../.test-build/opportunity-dossier.mjs';
 import {buildTechnicalTimingResearch} from '../../.test-build/opportunity-market.mjs';
 import {buildSecEarningsQualityAssessment,buildSecFinancialStrengthInputs,classifySecCompanyFacts,classifySecIssuerModel} from '../../.test-build/sec-opportunity.mjs';
 import {DATA_FIELD_REGISTRY,sourceRegistrySummary} from '../../.test-build/source-registry.mjs';
@@ -779,6 +779,14 @@ test('dossier orchestrator runs every validated calculator and produces one repr
  const result=evaluateOpportunityDossier(opportunitySnapshot,dossier);
  assert.equal(result.state,'ranked');assert.equal(result.coveragePct,100);assert.equal(result.score,result.factors.reduce((sum,factor)=>sum+factor.points,0));
  assert.deepEqual(result.factors.map(factor=>factor.weight),[25,20,15,12,10,10,5,3]);
+});
+test('stale scan-report scores are rebuilt from the saved dossier instead of dropping its evidence',()=>{
+ const snapshot=opportunitySnapshot,dossier=completeOpportunityDossier();
+ const stale={...evaluateOpportunity(snapshot,{}),hash:'obsolete-rubric'};
+ const recalculated=currentOpportunityEvaluation(snapshot,stale,dossier);
+ const expected=evaluateOpportunityDossier(snapshot,dossier);
+ assert.equal(recalculated.state,'ranked');assert.equal(recalculated.score,expected.score);assert.ok(recalculated.score>0);assert.equal(recalculated.coveragePct,100);
+ assert.equal(currentOpportunityEvaluation(snapshot,recalculated,dossier),recalculated,'current-rubric stored evaluations are reused');
 });
 test('dossier orchestrator does not manufacture missing sections or combine different as-of cuts',()=>{
  const incomplete=completeOpportunityDossier();incomplete.earningsQuality.quarterly=incomplete.earningsQuality.quarterly.slice(1);

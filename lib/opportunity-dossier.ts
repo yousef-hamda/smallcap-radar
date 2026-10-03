@@ -21,7 +21,7 @@ import {
   type TechnicalTimingAssessment,
   type TechnicalTimingScore,
 } from './opportunity-scoring';
-import { OPPORTUNITY_SPEC, type OpportunityFactorId, type OpportunityRiskTolerance } from './opportunity-spec';
+import { OPPORTUNITY_SPEC, opportunitySpecHash, type OpportunityFactorId, type OpportunityRiskTolerance } from './opportunity-spec';
 
 /**
  * Normalized research inputs for the unified score. Each section is populated
@@ -242,4 +242,19 @@ export function evaluateOpportunityDossier(
     }
   }
   return evaluateOpportunity(snapshot, evidence, options);
+}
+
+/** Reuse a persisted score only when it was produced by the current rubric.
+ * For stale/missing scores, rebuild from the snapshot's saved research dossier
+ * instead of silently discarding all evidence and evaluating an empty set. */
+export function currentOpportunityEvaluation(
+  snapshot: Snapshot,
+  saved: unknown,
+  dossier: OpportunityDossier = opportunityDossierFromSnapshot(snapshot),
+): OpportunityEvaluation {
+  if (saved && typeof saved === 'object'
+    && (saved as OpportunityEvaluation).hash === opportunitySpecHash()) {
+    return saved as OpportunityEvaluation;
+  }
+  return evaluateOpportunityDossier(snapshot, dossier);
 }

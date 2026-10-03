@@ -1,6 +1,6 @@
 import {db,ensureSchema,readState} from '@/lib/storage';
 import {json} from '@/lib/http';
-import {evaluateOpportunity} from '@/lib/opportunity-engine';
+import {currentOpportunityEvaluation,opportunityDossierFromSnapshot} from '@/lib/opportunity-dossier';
 import {OPPORTUNITY_SPEC,opportunitySpecHash} from '@/lib/opportunity-spec';
 
 export async function GET(req:Request){
@@ -24,7 +24,7 @@ export async function GET(req:Request){
     if(status!=='FAIL'&&status!=='UNKNOWN')continue;
     blockers.push({id:`eligibility-${id}-${status.toLowerCase()}`,label:`بوابة الأهلية · ${checkLabels[id]??id}`,status,count:Number(value.count)||0});
    }
-   const rows=current.snapshots.map((snapshot:any,index:number)=>({symbol:snapshot.symbol,name:snapshot.name,asOf:snapshot.asOf,evaluation:current.storedEvaluations?.[index]?.opportunity??evaluateOpportunity(snapshot,{})}));
+   const rows=current.snapshots.map((snapshot:any,index:number)=>({symbol:snapshot.symbol,name:snapshot.name,asOf:snapshot.asOf,evaluation:currentOpportunityEvaluation(snapshot,current.storedEvaluations?.[index]?.opportunity,opportunityDossierFromSnapshot(snapshot))}));
    return json({run,strategy,counts:{total,passed,failed,unknown:Math.max(0,total-passed-failed),withEvidence:current.summary.opportunityWithEvidence,stale:current.summary.stale},blockers,rows,page:{offset,limit,hasMore:current.page.hasMore}});
   }
   {
@@ -43,7 +43,7 @@ export async function GET(req:Request){
    const checkLabels:Record<string,string>={security:'نوع الورقة والبورصة', 'market-cap':'القيمة السوقية',liquidity:'سيولة التداول',price:'حداثة السعر','source-conflict':'تعارض المصادر','dossier-as-of':'تطابق توقيت البحث'};
    blockers.push(...eligibilityRows.map(row=>({id:`eligibility-${row.id}-${String(row.status).toLowerCase()}`,label:`بوابة الأهلية · ${checkLabels[row.id]??row.id}`,status:row.status as 'FAIL'|'UNKNOWN',count:Number(row.count)||0})));
    const rows=(await database.prepare('SELECT symbol,payload,evaluation FROM fundamental_snapshots WHERE run_id=? ORDER BY symbol LIMIT ? OFFSET ?').bind(runId,limit+1,offset).all()).results as any[];
-   return json({run,strategy,counts:{total,passed,failed,unknown:Math.max(0,total-passed-failed)},blockers,rows:rows.slice(0,limit).map(row=>{const snapshot=JSON.parse(row.payload),saved=JSON.parse(row.evaluation).opportunity;const evaluation=saved?.hash===opportunitySpecHash()?saved:evaluateOpportunity(snapshot,{});return {symbol:row.symbol,name:snapshot.name,asOf:snapshot.asOf,evaluation};}),page:{offset,limit,hasMore:rows.length>limit}});
+   return json({run,strategy,counts:{total,passed,failed,unknown:Math.max(0,total-passed-failed)},blockers,rows:rows.slice(0,limit).map(row=>{const snapshot=JSON.parse(row.payload),saved=JSON.parse(row.evaluation).opportunity;const evaluation=currentOpportunityEvaluation(snapshot,saved,opportunityDossierFromSnapshot(snapshot));return {symbol:row.symbol,name:snapshot.name,asOf:snapshot.asOf,evaluation};}),page:{offset,limit,hasMore:rows.length>limit}});
   }
  }catch{return json({error:'تعذّر تحميل تقرير الجولة المحفوظة؛ حاول مجددًا'},503);}
 }
