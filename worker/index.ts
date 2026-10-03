@@ -31,7 +31,7 @@ interface ExecutionContext {
 
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options":"nosniff", "X-Frame-Options":"DENY", "Referrer-Policy":"strict-origin-when-cross-origin", "Permissions-Policy":"camera=(), microphone=(), geolocation=(), payment=()" } });
 const delay = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
-const BATON_START_DELAY = 3_000;
+const BATON_START_DELAY = 750;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const pushConfigured=(env:Env)=>Boolean(env.VAPID_PUBLIC_KEY&&env.VAPID_PRIVATE_KEY);
 async function sendCompletionPush(env: Env, run: any) {
