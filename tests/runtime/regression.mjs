@@ -34,6 +34,22 @@ await ensureSchema();
 const base=fixtures[0];
 process.env.SEC_USER_AGENT??='SmallCapRadar/2.2 (contact: tests@example.com)';
 test('an empty database is not mislabeled as a stale snapshot',async()=>{const state=await readState({strategy:'opportunity'});assert.equal(state.dataRun,null);assert.equal(state.summary.stale,false);});
+test('a running scan with partial rows does not replace the last completed full scan across rubric versions',async()=>{
+ const old='2200-01-01T00:00:00.000Z',active='2201-01-01T00:00:00.000Z';
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES('prior-complete',?,?,'complete','Bulk Quotes/SEC Frames · full',1,1,13,'prior-rubric')").bind(old,old).run();
+ await insertSnapshot('prior-complete',{...base,symbol:'PRIOR'}).run();
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES('new-running',?,?,'running','Bulk Quotes/SEC Frames · full',1,1,10,?)").bind(active,active,currentHash()).run();
+ await insertSnapshot('new-running',{...base,symbol:'INCOMPLETE',opportunityResearch:undefined}).run();
+ invalidateStateCache();const state=await readState({strategy:'opportunity',opportunityState:'all',limit:10});
+ assert.equal(state.run.id,'new-running');assert.equal(state.dataRunId,'prior-complete');assert.equal(state.summary.stale,true);
+ assert.deepEqual(state.snapshots.map(snapshot=>snapshot.symbol),['PRIOR']);
+ await db().prepare("UPDATE strategy_runs SET status='complete',stage=13 WHERE id='new-running'").run();
+ invalidateStateCache();const completed=await readState({strategy:'opportunity',opportunityState:'all',limit:10});
+ assert.equal(completed.dataRunId,'new-running');assert.equal(completed.summary.stale,false);
+ assert.deepEqual(completed.snapshots.map(snapshot=>snapshot.symbol),['INCOMPLETE']);
+ await db().prepare("DELETE FROM fundamental_snapshots WHERE run_id IN ('prior-complete','new-running')").run();
+ await db().prepare("DELETE FROM strategy_runs WHERE id IN ('prior-complete','new-running')").run();invalidateStateCache();
+});
 test('legacy scoring snapshots are re-evaluated in bounded batches and preserve their visible evidence queue',async()=>{
  const now='2201-01-01T00:00:00.000Z';await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES('legacy-rating',?,?,'complete','Legacy full scan',2,2,13,'retired-opportunity-hash')").bind(now,now).run();
  await insertSnapshot('legacy-rating',{...base,symbol:'LEGACY-B'}).run();await insertSnapshot('legacy-rating',{...base,symbol:'LEGACY-A'}).run();
