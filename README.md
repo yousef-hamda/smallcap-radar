@@ -1,6 +1,6 @@
 # Small-Cap Radar V2
 
-**Deployment status (2026-10-02):** [Railway app](https://smallcap-radar-production.up.railway.app/) runs commit `b7d7015` on deployment `b58987d4-12c5-45ab-ae3e-7684dbec2381` (SUCCESS). The populated opportunity screen is currently an SEC-backed research-priority queue, not the completed eight-factor investment ranking: the latest stored scan has 0 complete ranks, 5,974 needing research, and 987 excluded. See the [current handoff](HANDOFF.md) for blockers and active scan status. The original ChatGPT Site is a separate historical deployment.
+**Deployment status (2026-10-03):** [Railway app](https://smallcap-radar-production.up.railway.app/) runs commit `4cb8db1` on deployment `287b407b-309a-429e-be84-1b251059a988` (SUCCESS). The latest completed full scan contains 6,954 listings: 0 complete eight-factor ranks, 5,971 needing research, and 983 excluded. A new full scan under the conflict-aware rubric started at 2026-10-03T12:28:43Z and may still be running. The current screen is an SEC-backed research-priority queue, not a completed investment ranking. See the [free-source study and production verification](docs/OPPORTUNITY_FREE_COMPLETION_STUDY_2026_10_03.md). The original ChatGPT Site is a separate historical deployment.
 
 For maintainers, read the [project memory](docs/PROJECT_MEMORY.md), [operations memory](docs/OPERATIONS_MEMORY.md), and [handoff](HANDOFF.md) first. These files record the verified Railway storage/recovery state without secrets.
 
