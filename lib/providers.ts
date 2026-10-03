@@ -20,7 +20,7 @@ export type Company = { cik: number; name: string; ticker: string; exchange: str
 type NasdaqRow = { symbol: string; name?: string; lastsale?: string; marketCap?: string; volume?: string; sector?: string; industry?: string };
 type CachedQuick = { history: NonNullable<Snapshot['history']>; financials: Record<string, number>; provenance: Record<string, Provenance>; issues: string[] };
 type MarketBar = NonNullable<Snapshot['history']>[number];
-type HistoricalResult = { url:string; history:MarketBar[]; splits:{date:string;factor:number}[]|null; source:string; retrievedAt:string; availableAt:string; meta?:any };
+export type HistoricalResult = { url:string; history:MarketBar[]; splits:{date:string;factor:number}[]|null; source:string; retrievedAt:string; availableAt:string; meta?:any };
 
 const NASDAQ_SCREENER = 'https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=10000&download=true';
 const NASDAQ_LISTED='https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt';
@@ -768,7 +768,7 @@ async function attachOpportunityEarnings(snapshot: Snapshot, facts: unknown, pro
 }
 
 /** Attach compact, identity-checked SEC research to an existing scan row. */
-export async function enrichSnapshotsWithSecOpportunity(snapshots: Snapshot[]): Promise<{
+export async function enrichSnapshotsWithSecOpportunity(snapshots: Snapshot[], marketResearch?: { bySymbol?: Map<string, HistoricalResult>; benchmark?: HistoricalResult | null }): Promise<{
   providerStatus: 'retrieved' | 'unavailable' | 'empty' | 'invalid';
   retryable: boolean;
   requests: number;
@@ -777,7 +777,12 @@ export async function enrichSnapshotsWithSecOpportunity(snapshots: Snapshot[]): 
   if (!snapshots.length) return { providerStatus: 'invalid', retryable: false, requests:0, error: 'SEC snapshot batch is empty' };
   const cik = Number(snapshots[0].cik);
   if (!Number.isSafeInteger(cik) || cik <= 0 || snapshots.some(snapshot => Number(snapshot.cik) !== cik)) {
-    await Promise.all(snapshots.map(snapshot => attachOpportunityEarnings(snapshot, null, Error('SEC issuer CIK is missing, invalid, or inconsistent'))));
+    await Promise.all(snapshots.map(async snapshot => {
+      const stock = marketResearch?.bySymbol?.get(snapshot.symbol);
+      if (stock) attachScanMarketResearch(snapshot, stock);
+      await attachOpportunityEarnings(snapshot, null, Error('SEC issuer CIK is missing, invalid, or inconsistent'), marketResearch?.benchmark, stock?.source.includes('Yahoo Finance chart API') && stock.splits !== null);
+      compactTechnicalResearch(snapshot);
+    }));
     return { providerStatus: 'invalid', retryable: false, requests:0, error: 'SEC issuer CIK is missing, invalid, or inconsistent' };
   }
   const url = `https://data.sec.gov/api/xbrl/companyfacts/CIK${String(cik).padStart(10, '0')}.json`;
@@ -786,14 +791,41 @@ export async function enrichSnapshotsWithSecOpportunity(snapshots: Snapshot[]): 
       fetchJson(url, 8_000, 6 * 60 * 60_000, 2),
       fetchJson(submissionsUrlFor(cik), 8_000, 6 * 60 * 60_000, 2).catch(() => null),
     ]);
-    await Promise.all(snapshots.map(snapshot => attachOpportunityEarnings(snapshot, facts, undefined, undefined, false, submissions)));
+    await Promise.all(snapshots.map(async snapshot => {
+      const stock = marketResearch?.bySymbol?.get(snapshot.symbol);
+      if (stock) attachScanMarketResearch(snapshot, stock);
+      await attachOpportunityEarnings(snapshot, facts, undefined, marketResearch?.benchmark, stock?.source.includes('Yahoo Finance chart API') && stock.splits !== null, submissions);
+      compactTechnicalResearch(snapshot);
+    }));
     const providerStatus = classifySecCompanyFacts(facts, cik);
     return { providerStatus, retryable: false, requests:2 };
   } catch (error) {
     const detail = error instanceof Error ? error.message.slice(0, 180) : 'SEC Company Facts request failed';
-    await Promise.all(snapshots.map(snapshot => attachOpportunityEarnings(snapshot, null, Error(detail))));
+    await Promise.all(snapshots.map(async snapshot => {
+      const stock = marketResearch?.bySymbol?.get(snapshot.symbol);
+      if (stock) attachScanMarketResearch(snapshot, stock);
+      await attachOpportunityEarnings(snapshot, null, Error(detail), marketResearch?.benchmark, stock?.source.includes('Yahoo Finance chart API') && stock.splits !== null);
+      compactTechnicalResearch(snapshot);
+    }));
     return { providerStatus: 'unavailable', retryable: !/\bHTTP (400|401|403|404|405|422)\b/.test(detail), requests:2, error: detail };
   }
+}
+
+function attachScanMarketResearch(snapshot: Snapshot, stock: HistoricalResult) {
+  snapshot.history = stock.history;
+  snapshot.splitAdjusted = stock.source.includes('Yahoo Finance chart API') && stock.splits !== null;
+  const last = stock.history.at(-1)?.date ?? stock.availableAt.slice(0, 10);
+  snapshot.provenance.history = {
+    source: stock.source, url: stock.url, periodEnd: last, availableAt: stock.availableAt,
+    retrievedAt: stock.retrievedAt, currency: 'USD', confidence: stock.source.includes('bundled') ? 'low' : 'medium',
+    rightsStatus: 'unknown', tag: 'scan daily market history; reuse rights not verified',
+  };
+}
+
+function compactTechnicalResearch(snapshot: Snapshot) {
+  const research = snapshot.opportunityResearch?.technicalTiming;
+  if (research) delete research.assessment;
+  delete snapshot.history;
 }
 
 export async function enrichSnapshotWithSecOpportunity(snapshot: Snapshot) {

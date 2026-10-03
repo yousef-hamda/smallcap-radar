@@ -19,6 +19,7 @@ import {
   type PartialFinancialStrengthAssessment,
   type QualitativeAssessment,
   type TechnicalTimingAssessment,
+  type TechnicalTimingScore,
 } from './opportunity-scoring';
 import { OPPORTUNITY_SPEC, type OpportunityFactorId, type OpportunityRiskTolerance } from './opportunity-spec';
 
@@ -39,6 +40,8 @@ export type OpportunityDossier = {
   downsideRisk?: DownsideRiskAssessment;
   management?: QualitativeAssessment[];
   technicalTiming?: TechnicalTimingAssessment;
+  /** Compact scan result; keeps derived indicators without persisting hundreds of raw bars per issuer. */
+  technicalTimingScore?: TechnicalTimingScore & { asOf: string };
   researchNotes?: Partial<Record<OpportunityFactorId, string>>;
 };
 
@@ -50,7 +53,7 @@ function assessmentDate(dossier: OpportunityDossier, factor: OpportunityFactorId
     case 'financialStrength': return dossier.financialStrength?.asOf ?? dossier.financialStrengthPartial?.asOf;
     case 'earningsQuality': return dossier.earningsQuality?.asOf ?? dossier.earningsQualityPartial?.asOf;
     case 'downsideRisk': return dossier.downsideRisk?.asOf;
-    case 'technicalTiming': return dossier.technicalTiming?.asOf;
+    case 'technicalTiming': return dossier.technicalTiming?.asOf ?? dossier.technicalTimingScore?.asOf;
   }
 }
 
@@ -103,7 +106,8 @@ export function scoreOpportunityDossier(dossier: OpportunityDossier, horizonMont
         case 'competitivePosition': output.competitivePosition = scoreQualitativeFactor('competitivePosition', dossier.asOf, dossier.competitivePosition ?? []); break;
         case 'downsideRisk': output.downsideRisk = scoreDownsideRisk(dossier.downsideRisk!); break;
         case 'management': output.management = scoreQualitativeFactor('management', dossier.asOf, dossier.management ?? []); break;
-        case 'technicalTiming': output.technicalTiming = scoreTechnicalTiming(dossier.technicalTiming!); break;
+        case 'technicalTiming': output.technicalTiming = dossier.technicalTimingScore
+          ?? scoreTechnicalTiming(dossier.technicalTiming!); break;
       }
       const result = output[factor];
       const acquisitionNote = dossier.researchNotes?.[factor];
@@ -196,6 +200,7 @@ export function opportunityDossierFromSnapshot(snapshot: Snapshot): OpportunityD
       ...financialMetrics,
     } } : {}),
     ...(technicalResearch?.assessment ? { technicalTiming: technicalResearch.assessment } : {}),
+    ...(technicalResearch?.score ? { technicalTimingScore: { ...technicalResearch.score, asOf: technicalResearch.asOf ?? snapshot.asOf } } : {}),
     researchNotes,
   };
 }

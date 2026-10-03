@@ -261,3 +261,11 @@ For this increment, research-needed rows are ordered by SEC operating metrics in
 
 - Final production verification for `e55c6893-3a2d-4239-ad6b-6d10c86877ac`: stage 13 complete, 5,921/5,921 issuer jobs, 17,918 SEC requests, 11,632 success, 365 failed, no run-level error. Radar/report match: 6,954 rows, 0 ranked, 5,971 needs research, 983 excluded, 2,004 provisional-evidence rows. Eight factors incomplete across the universe; price/cap/liquidity UNKNOWN across the universe; security UNKNOWN 697/FAIL 983; source-conflict UNKNOWN 7. This proves zero ranks are not an unfinished scan.
 - Example ASTH: financial strength 70% coverage and earnings quality 85%; no complete valuation, catalyst, competitive, downside, management, or technical dossiers. Yahoo/Nasdaq market sources have rights `unknown` and the evaluator correctly blocks them. Do not relax checks or relabel partial evidence as final ratings. Full rating goal remains unmet pending market-data entitlement and source-backed dossier coverage.
+
+## 2026-10-03 scan-acquisition changes and release checks
+
+- Stage 10 now caches SPY daily history once/day. Stage 11 reads each company's cached market history plus SPY and builds technical timing evidence; durable stock snapshots retain only compact score/counts/provenance/missing state, not the raw arrays. Unknown market reuse rights continue to withhold score.
+- Current root-cause matrix and rollout/test gates: `docs/OPPORTUNITY_FREE_DATA_SOURCE_AUDIT_2026_10_02.md` and `docs/UNIFIED_OPPORTUNITY_ROOT_CAUSE_AND_COMPLETION_PLAN_2026_10_03.md`.
+- Massive grouped daily is technically bulk-scalable; the free personal-use grant bars server/site copy and sharing derived results. Do not deploy it to shared Railway without a written entitlement.
+- Financial Datasets MCP returned no payload because balance is `$0.00`/Unauthorized. Official Scale plan currently costs $2,000/month and includes redistribution; no spend approved or performed.
+- Local checks pass: typecheck, lint, build + 47 root tests, 161 engine tests, 65 runtime tests. Release still requires commit/push and production verification of technical bar counts with rights remaining UNKNOWN. Final ranking stays incomplete until each independent gate and dossier is sourced.

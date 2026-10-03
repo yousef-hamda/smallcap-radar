@@ -598,10 +598,39 @@ test('technical research builds completed multi-timeframe bars and preserves the
  const snapshot={...opportunitySnapshot,asOf,opportunityResearch:{technicalTiming:restricted}};
  const dossier=opportunityDossierFromSnapshot(snapshot),evaluation=evaluateOpportunityDossier(snapshot,dossier);
  const factor=evaluation.factors.find(item=>item.id==='technicalTiming');assert.equal(factor.score,null);assert.match(factor.rationale,/redistribution rights are not verified/);
+ const compactResearch={...restricted};delete compactResearch.assessment;
+ const compactSnapshot={...opportunitySnapshot,asOf,opportunityResearch:{technicalTiming:compactResearch}};
+ const compactEvaluation=evaluateOpportunityDossier(compactSnapshot,opportunityDossierFromSnapshot(compactSnapshot));
+ const compactFactor=compactEvaluation.factors.find(item=>item.id==='technicalTiming');
+ assert.equal(compactFactor.score,null,'compact scans retain the derived score result without persisting raw bars');
+ assert.match(compactFactor.rationale,/redistribution rights are not verified/);
+ assert.equal(compactResearch.dailyBars,restricted.dailyBars);assert.equal(compactResearch.benchmarkBars,restricted.benchmarkBars);
  const licensed=buildTechnicalTimingResearch({...args,rightsStatus:'redistribution-permitted'});
  assert.ok(licensed.score.score>0);assert.equal(licensed.assessment?.daily.at(-1)?.date,dates.at(-1));
  const incomplete=buildTechnicalTimingResearch({...args,history:history.slice(-100),splitAdjusted:false});
  assert.equal(incomplete.score.score,null);assert.ok(incomplete.missing.some(value=>/100\/200/.test(value)));assert.ok(incomplete.missing.some(value=>/split-adjusted/.test(value)));
+});
+test('bulk SEC enrichment reuses cached per-ticker and SPY histories, then persists compact technical evidence only',async()=>{
+ const originalFetch=globalThis.fetch,dates=[];let cursor=new Date('2025-01-01T00:00:00Z');
+ while(dates.length<260){if(![0,6].includes(cursor.getUTCDay()))dates.push(cursor.toISOString().slice(0,10));cursor.setUTCDate(cursor.getUTCDate()+1)}
+ const history=dates.map((date,index)=>({date,close:40*(1.001)**index,volume:250_000}));
+ const benchmarkHistory=dates.map((date,index)=>({date,close:100*(1.0003)**index,volume:1_000_000}));
+ const stock={url:'https://query1.finance.yahoo.com/v8/finance/chart/SCANFIX',history,splits:[],source:'Yahoo Finance chart API · split-adjusted daily history and split events',retrievedAt:'2026-10-03T08:00:00.000Z',availableAt:`${dates.at(-1)}T21:00:00.000Z`};
+ const benchmark={...stock,url:'https://query1.finance.yahoo.com/v8/finance/chart/SPY',history:benchmarkHistory};
+ const snapshot={...opportunitySnapshot,symbol:'SCANFIX',cik:9999999,history:undefined,opportunityResearch:undefined};
+ globalThis.fetch=async url=>String(url).includes('/companyfacts/')
+  ?Response.json({cik:9999999,facts:{}})
+  :Response.json({cik:9999999,filings:{recent:{form:[],filingDate:[],reportDate:[],accessionNumber:[],primaryDocument:[]}}});
+ try{
+  const result=await enrichSnapshotsWithSecOpportunity([snapshot],{bySymbol:new Map([['SCANFIX',stock]]),benchmark});
+  assert.equal(result.providerStatus,'empty');
+  const timing=snapshot.opportunityResearch.technicalTiming;
+  assert.ok(timing.dailyBars>=200);assert.ok(timing.weeklyBars>=30);assert.ok(timing.monthlyBars>=12);assert.ok(timing.benchmarkBars>=64);
+  assert.equal(timing.assessment,undefined,'raw OHLC arrays must not inflate durable screening snapshots');
+  assert.equal(snapshot.history,undefined);
+  assert.equal(timing.score.score,null,'unverified market-data reuse rights keep the factor unscored');
+  assert.ok(timing.missing.some(value=>/redistribution rights are not verified/.test(value)));
+ }finally{globalThis.fetch=originalFetch}
 });
 test('recent SEC filing metadata is surfaced for catalyst research without creating catalyst evidence',()=>{
  const filing={providerStatus:'retrieved',items:[{form:'8-K',filed:'2026-09-20',accession:'0000000001-26-000001',title:'SEC filing: 8-K filed 2026-09-20',url:'https://www.sec.gov/Archives/edgar/data/1/000000000126000001/current.htm'}],source:opportunityProvenance,limitations:['Metadata only; review the filing body.']};

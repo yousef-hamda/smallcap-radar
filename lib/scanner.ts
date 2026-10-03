@@ -231,6 +231,15 @@ export async function processScanBatch(runId: string) {
     const remaining=retrying?queue.slice(HISTORY_BATCH_SIZE):queue;
     const entries=jobs.map((job:any)=>job.company);
     const now = new Date().toISOString();
+    const benchmarkKey=`scan-history:v3:SPY:${now.slice(0,10)}`;
+    let benchmark:Awaited<ReturnType<typeof historicalMarketData>>|null=null;
+    try {
+      const cachedBenchmark=await database.prepare('SELECT retrieved_at,payload FROM raw_cache WHERE key=?').bind(benchmarkKey).first() as any;
+      benchmark=cachedBenchmark&&Date.now()-Date.parse(cachedBenchmark.retrieved_at)<24*60*60_000
+        ?JSON.parse(cachedBenchmark.payload)
+        :await historicalMarketData('SPY',now,550);
+      if(benchmark&&(!cachedBenchmark||cachedBenchmark.retrieved_at!==benchmark.retrievedAt))await database.prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(benchmarkKey,benchmark.source,benchmark.retrievedAt,JSON.stringify(benchmark)).run();
+    } catch(error) { await log(run.id,'history',`SPY benchmark history unavailable for this run: ${error instanceof Error?error.message:'provider request failed'}`); }
     const writes: any[] = [];
     const rows=entries.length?(await database.prepare(`SELECT symbol,payload FROM fundamental_snapshots WHERE run_id=? AND symbol IN (${entries.map(()=>'?').join(',')})`).bind(run.id,...entries.map((c:any)=>c.ticker)).all()).results:[];
     const bySymbol=new Map<string,any>(rows.map((row:any)=>[row.symbol,row]));
@@ -348,16 +357,24 @@ export async function processScanBatch(runId: string) {
     const queue = JSON.parse(run.retry_queue || '[]');
     const jobs = retrying ? queue.slice(0, OPPORTUNITY_BATCH_SIZE) : companies.slice(run.offset, run.offset + OPPORTUNITY_BATCH_SIZE).map((company:any) => ({company,attempt:0}));
     const remaining = retrying ? queue.slice(OPPORTUNITY_BATCH_SIZE) : queue;
-    const tickers = [...new Set(jobs.flatMap((job:any)=>job.company.tickers ?? [job.company.ticker]))];
+    const tickers: string[] = [...new Set<string>(jobs.flatMap((job:any)=>job.company.tickers ?? [job.company.ticker]))];
     const rows = tickers.length ? (await database.prepare(`SELECT symbol,payload FROM fundamental_snapshots WHERE run_id=? AND symbol IN (${tickers.map(()=>'?').join(',')})`).bind(run.id,...tickers).all()).results as any[] : [];
     const bySymbol = new Map<string,any>(rows.map((row:any)=>[row.symbol,row]));
+    const marketBySymbol=new Map<string,Awaited<ReturnType<typeof historicalMarketData>>>();
+    for(const ticker of tickers){
+      const cached=await database.prepare("SELECT payload FROM raw_cache WHERE key LIKE ? ORDER BY retrieved_at DESC LIMIT 1").bind(`scan-history:v3:${ticker}:%`).first() as any;
+      if(cached){try{marketBySymbol.set(ticker,JSON.parse(cached.payload));}catch{/* malformed market cache stays unavailable */}}
+    }
+    let benchmarkResearch:Awaited<ReturnType<typeof historicalMarketData>>|null=null;
+    const benchmarkRow=await database.prepare("SELECT payload FROM raw_cache WHERE key LIKE 'scan-history:v3:SPY:%' ORDER BY retrieved_at DESC LIMIT 1").first() as any;
+    if(benchmarkRow){try{benchmarkResearch=JSON.parse(benchmarkRow.payload);}catch{/* malformed market cache stays unavailable */}}
     const outcomes:any[]=[];
     for(let start=0;start<jobs.length;start+=4)outcomes.push(...await Promise.all(jobs.slice(start,start+4).map(async(job:any)=>{
       const issuerTickers=job.company.tickers ?? [job.company.ticker];
       const missing=issuerTickers.filter((ticker:string)=>!bySymbol.has(ticker));
       const snapshots=issuerTickers.map((ticker:string)=>bySymbol.get(ticker)).filter(Boolean).map((row:any)=>JSON.parse(row.payload));
       if(missing.length||!snapshots.length)return {job,error:`durable scan snapshot is missing for ${missing.slice(0,4).join(', ')||job.company.ticker}`,retryable:false};
-      try{return {job,snapshots,result:await enrichSnapshotsWithSecOpportunity(snapshots)};}
+      try{return {job,snapshots,result:await enrichSnapshotsWithSecOpportunity(snapshots,{bySymbol:marketBySymbol,benchmark:benchmarkResearch})};}
       catch(error){return {job,snapshots,error:error instanceof Error?error.message:'SEC enrichment failed',retryable:true};}
     })));
     const writes:any[]=[];let requests=0,success=0,failed=0,terminalFailed=0;

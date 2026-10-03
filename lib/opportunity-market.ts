@@ -3,6 +3,7 @@ import { scoreTechnicalTiming, type TechnicalBar, type TechnicalTimingAssessment
 
 type DailyRow = NonNullable<Snapshot['history']>[number];
 export type TechnicalResearchState = {
+  asOf: string;
   providerStatus: 'retrieved' | 'unavailable' | 'invalid';
   dailyBars: number;
   weeklyBars: number;
@@ -111,6 +112,7 @@ export function buildTechnicalTimingResearch(input: {
   if (score.score == null && !missing.length) missing.push(score.rationale);
   const providerStatus = dailyRows.length && benchmarkRows.length ? 'retrieved' : 'unavailable';
   return {
+    asOf: input.asOf,
     providerStatus,
     dailyBars: dailyRows.length,
     weeklyBars: weekly.length,
