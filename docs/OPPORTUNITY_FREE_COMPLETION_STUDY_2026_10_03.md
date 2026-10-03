@@ -51,6 +51,8 @@ That cold radar read still took 22 seconds because each write to the new scan in
 
 A four-issuer checkpoint was then tried in deployment `2a1d29b5-0746-4c80-ab85-04a59cb90ad4` (commit `f8464b5`). It did not improve the observed user-facing wait: the second radar read returned HTTP 200 after 37.8 seconds, despite short handler times in Railway logs. The scan advanced from 720 to 748 jobs over roughly three minutes, slower than the preceding eight-issuer run. The four-issuer change is therefore reverted; foreground scheduling during continuous background enrichment remains a measured performance limitation.
 
+With eight-issuer checkpoints restored, deployment `75eaeb72-c28b-46dc-a502-f352f03e84ee` returned the correct completed data but a radar request waited 79.2 seconds and a subsequent status request waited 43.4 seconds. Logged handler times were much shorter, so the delay is largely before request execution while continuous scan batons occupy the single service. The pause before starting each accepted background baton is being increased from 750 ms to 3,000 ms to give queued foreground requests a scheduling window. Its effect on latency and scan completion time is unverified until production measurement.
+
 ## Completion evidence required
 
 For any eventual final ranked stock, the evaluator must show one correct listing/issuer identity, current eligible market data with a documented right for this application and complete provenance, all eight factor calculation traces and original sources, resolved conflicts, and one as-of cut. Its saved evaluation must agree with the live card and report. A completed job counter or an individual sourced profile cannot substitute for those per-stock checks.
