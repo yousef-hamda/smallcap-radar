@@ -81,6 +81,12 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
  const latest=finished||fallback||running;
  const currentData=!!latest&&latest.strategy_hash===currentHash();
  const strategy=options.strategy==='favorites'?'favorites':'opportunity';
+ // A completed scan can predate the strategy run hash while every saved row
+ // has already been rescored with the current factor rubric. Check the saved
+ // evaluation hashes before choosing the expensive legacy backfill path. The
+ // run remains stale as data; only its evaluation can be current.
+ const savedEvaluationCurrent=!!latest&&!currentData&&strategy==='opportunity'&&!(await d.prepare("SELECT 1 AS mismatched FROM fundamental_snapshots WHERE run_id=? AND (CASE WHEN json_valid(evaluation) THEN json_extract(evaluation,'$.opportunity.hash') ELSE NULL END) IS NOT ? LIMIT 1").bind(latest.id,opportunitySpecHash()).first());
+ const currentEvaluation=currentData||savedEvaluationCurrent;
  const limit=Math.max(1,Math.min(250,Math.floor(options.limit??150)));
  const offset=Math.max(0,Math.floor(options.offset??0));
  const fav=options.owner?(await d.prepare(strategy==='favorites'?'SELECT symbol,payload FROM personal_watchlist WHERE owner=? ORDER BY created_at DESC':'SELECT symbol FROM personal_watchlist WHERE owner=? ORDER BY created_at DESC').bind(options.owner).all()).results as any[]:[];
@@ -99,8 +105,8 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
   }
  }
  const portfolioCount=options.owner?Number((await d.prepare("SELECT COUNT(*) AS count FROM (SELECT symbol FROM portfolio_transactions WHERE owner=? GROUP BY symbol HAVING SUM(CASE side WHEN 'buy' THEN quantity ELSE -quantity END)>0.00000001)").bind(options.owner).first() as any)?.count||0):0;
- let summaryRow=currentData?await d.prepare(`SELECT COUNT(*) AS total, SUM(CASE WHEN json_extract(evaluation, '$.opportunity.state')='ranked' THEN 1 ELSE 0 END) AS opportunityRanked, SUM(CASE WHEN json_extract(evaluation, '$.opportunity.state')='needs-research' THEN 1 ELSE 0 END) AS opportunityNeedsResearch, SUM(CASE WHEN json_extract(evaluation, '$.opportunity.state')='excluded' THEN 1 ELSE 0 END) AS opportunityExcluded, SUM(CASE WHEN json_extract(evaluation, '$.opportunity.score')>0 THEN 1 ELSE 0 END) AS opportunityWithEvidence FROM fundamental_snapshots WHERE run_id=?`).bind(latest.id).first() as any: null;
- if(currentData){
+ let summaryRow=currentEvaluation?await d.prepare(`SELECT COUNT(*) AS total, SUM(CASE WHEN json_extract(evaluation, '$.opportunity.state')='ranked' THEN 1 ELSE 0 END) AS opportunityRanked, SUM(CASE WHEN json_extract(evaluation, '$.opportunity.state')='needs-research' THEN 1 ELSE 0 END) AS opportunityNeedsResearch, SUM(CASE WHEN json_extract(evaluation, '$.opportunity.state')='excluded' THEN 1 ELSE 0 END) AS opportunityExcluded, SUM(CASE WHEN json_extract(evaluation, '$.opportunity.score')>0 THEN 1 ELSE 0 END) AS opportunityWithEvidence FROM fundamental_snapshots WHERE run_id=?`).bind(latest.id).first() as any: null;
+ if(currentEvaluation){
  const incomplete=(await d.prepare(`SELECT json_extract(f.value,'$.id') AS id,SUM(CASE WHEN json_extract(f.value,'$.complete')=1 THEN 0 ELSE 1 END) AS count FROM fundamental_snapshots s,json_each(s.evaluation,'$.opportunity.factors') f WHERE s.run_id=? GROUP BY json_extract(f.value,'$.id')`).bind(latest.id).all()).results as any[];
   summaryRow.opportunityFactorIncomplete=Object.fromEntries(OPPORTUNITY_SPEC.factors.map(factor=>[factor.id,Number(incomplete.find(row=>row.id===factor.id)?.count??summaryRow.total)]));
   const blockedChecks=(await d.prepare(`SELECT json_extract(c.value,'$.id') AS id,json_extract(c.value,'$.status') AS status,COUNT(*) AS count FROM fundamental_snapshots s,json_each(s.evaluation,'$.opportunity.checks') c WHERE s.run_id=? AND json_extract(c.value,'$.status') IN ('FAIL','UNKNOWN') GROUP BY json_extract(c.value,'$.id'),json_extract(c.value,'$.status')`).bind(latest.id).all()).results as any[];
@@ -113,7 +119,7 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
  const query=latest&&strategy!=='favorites'?`SELECT payload,evaluation FROM fundamental_snapshots WHERE run_id=? AND (?='' OR instr(lower(symbol),?)>0 OR instr(lower(json_extract(payload,'$.name')),?)>0)`:null;
  const params=latest?[latest.id,search,search,search]:[];
  let databasePaged=false,queryForPage=query,queryParams=params;
- if(query&&currentData){
+ if(query&&currentEvaluation){
   // Current-run evaluations already have the active strategy hash. Filter,
   // sort, and page in SQLite rather than loading the full market universe into
   // the Worker for every page request.
@@ -127,18 +133,18 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
  }
  // Stale runs are re-evaluated by the bounded keyset loop below. Reading the
  // entire full-history payload set here first can exhaust the Worker heap.
- let rows:any[]=queryForPage&&currentData?(await d.prepare(queryForPage).bind(...queryParams).all()).results.map((r:any)=>{
+ let rows:any[]=queryForPage&&currentEvaluation?(await d.prepare(queryForPage).bind(...queryParams).all()).results.map((r:any)=>{
   // A current run already stores the evaluation produced by this exact
   // strategy hash. Reusing it avoids parsing and scoring every company on
   // every page refresh; stale runs still take the conservative re-evaluation
   // path below.
-  if(currentData&&typeof r.evaluation==='string')return {payload:r.payload,evaluation:r.evaluation};
+  if(currentEvaluation&&typeof r.evaluation==='string')return {payload:r.payload,evaluation:r.evaluation};
   const s=applyFinancingRisk(JSON.parse(r.payload));return {payload:JSON.stringify(s),evaluation:JSON.stringify({opportunity:evaluateSnapshotOpportunity(s)})}
  }):[];
  // A scoring-version change must show the last completed run immediately. Re-score
  // it in bounded payload batches, sort compact keys, and fetch only the requested
  // page. Never materialize the entire multi-megabyte market snapshot in Worker memory.
- if(latest&&!currentData&&strategy!=='favorites'){
+ if(latest&&!currentEvaluation&&strategy!=='favorites'){
   let cached=legacyEvaluationCache.get(String(latest.id));
   if(cached&&cached.expiresAt<=Date.now()){legacyEvaluationCache.delete(String(latest.id));cached=undefined;}
   if(!cached){

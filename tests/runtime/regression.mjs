@@ -44,6 +44,7 @@ test('a running scan with partial rows does not replace the last completed full 
  assert.equal(state.run.id,'new-running');assert.equal(state.dataRunId,'prior-complete');assert.equal(state.summary.stale,true);
  assert.deepEqual(state.snapshots.map(snapshot=>snapshot.symbol),['PRIOR']);
  await insertSnapshot('new-running',{...base,symbol:'INCOMPLETE',opportunityResearch:undefined}).run();
+ invalidateStateCache();
  const originalPrepare=runtimeEnv.DB.prepare;
  runtimeEnv.DB.prepare=sql=>{
   if(/^SELECT id,symbol,payload,evaluation FROM fundamental_snapshots/.test(sql))throw Error('unrelated scan write invalidated completed-run ranking cache');
