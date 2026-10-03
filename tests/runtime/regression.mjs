@@ -420,14 +420,15 @@ test('stage11 fetches one SEC Company Facts response per issuer and persists it 
  try{const result=await processScanBatch('sec-research');assert.equal(result.done,true);assert.equal(result.run.stage,13);assert.equal(result.run.sec_requests,2);const stored=sqlite.prepare("SELECT payload,evaluation FROM fundamental_snapshots WHERE run_id='sec-research'").get();const payload=JSON.parse(stored.payload);assert.equal(payload.opportunityResearch.earnings.providerStatus,'retrieved');assert.equal(payload.opportunityResearch.financialStrength.providerStatus,'retrieved');const evaluation=JSON.parse(stored.evaluation).opportunity;assert.equal(evaluation.state,'needs-research');assert.equal(evaluation.rankingEligible,false);assert(evaluation.factors.find(f=>f.id==='earningsQuality').rationale.includes('Synthetic runtime provider fixture'));}
  finally{setOpportunityResearchResult({providerStatus:'retrieved',retryable:false});}
 });
-test('SEC research stage resumes across eight-row pages and records a stable 403 without retrying',async()=>{
+test('SEC research stage resumes across four-row pages and records a stable 403 without retrying',async()=>{
  const now=new Date().toISOString(),companies=Array.from({length:9},(_,index)=>({ticker:`SEC403${index}`,cik:2000+index}));
  await db().prepare('INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,strategy_hash) VALUES(?,?,?,?,?,?,?,?,?)').bind('sec-403-pages','2026-09-20','2026-09-20','running','Bulk Quotes/SEC Frames + Opportunity SEC v12 · full',companies.length,'paged-v1',11,currentHash()).run();
  await db().prepare('INSERT INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind('universe:sec-403-pages:opportunity:0','test',now,JSON.stringify(companies)).run();
  for(const company of companies)await insertSnapshot('sec-403-pages',{...base,symbol:company.ticker,cik:company.cik,asOf:now,securityType:'common',price:10,marketCap:50e6,medianDollarVolume20d:500_000,provenance:{...base.provenance}}).run();
  setOpportunityResearchResult({providerStatus:'unavailable',retryable:false,error:'HTTP 403'});resetOpportunityCalls();
  try{
-  const first=await processScanBatch('sec-403-pages');assert.equal(first.done,false);assert.equal(first.run.offset,8);assert.equal(first.run.retryPending,0);assert.equal(first.run.sec_requests,16);assert.equal(opportunityCalls,8);
+  const first=await processScanBatch('sec-403-pages');assert.equal(first.done,false);assert.equal(first.run.offset,4);assert.equal(first.run.retryPending,0);assert.equal(first.run.sec_requests,8);assert.equal(opportunityCalls,4);
+  const second=await processScanBatch('sec-403-pages');assert.equal(second.done,false);assert.equal(second.run.offset,8);assert.equal(second.run.sec_requests,16);assert.equal(opportunityCalls,8);
   const final=await processScanBatch('sec-403-pages');assert.equal(final.done,true);assert.equal(final.run.stage,13);assert.equal(final.run.status,'partial');assert.equal(final.run.retryPending,0);assert.equal(final.run.sec_failed,9);assert.equal(final.run.sec_requests,18);assert.equal(opportunityCalls,9);assert.match(final.run.error,/SEC/);
  }finally{setOpportunityResearchResult({providerStatus:'retrieved',retryable:false});}
 });
