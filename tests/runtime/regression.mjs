@@ -43,6 +43,14 @@ test('a running scan with partial rows does not replace the last completed full 
  invalidateStateCache();const state=await readState({strategy:'opportunity',opportunityState:'all',limit:10});
  assert.equal(state.run.id,'new-running');assert.equal(state.dataRunId,'prior-complete');assert.equal(state.summary.stale,true);
  assert.deepEqual(state.snapshots.map(snapshot=>snapshot.symbol),['PRIOR']);
+ await insertSnapshot('new-running',{...base,symbol:'INCOMPLETE',opportunityResearch:undefined}).run();
+ const originalPrepare=runtimeEnv.DB.prepare;
+ runtimeEnv.DB.prepare=sql=>{
+  if(/^SELECT id,symbol,payload,evaluation FROM fundamental_snapshots/.test(sql))throw Error('unrelated scan write invalidated completed-run ranking cache');
+  return originalPrepare(sql);
+ };
+ try{const unchanged=await readState({strategy:'opportunity',opportunityState:'all',limit:10});assert.equal(unchanged.dataRunId,'prior-complete');}
+ finally{runtimeEnv.DB.prepare=originalPrepare;}
  await db().prepare("UPDATE strategy_runs SET status='complete',stage=13 WHERE id='new-running'").run();
  invalidateStateCache();const completed=await readState({strategy:'opportunity',opportunityState:'all',limit:10});
  assert.equal(completed.dataRunId,'new-running');assert.equal(completed.summary.stale,false);
