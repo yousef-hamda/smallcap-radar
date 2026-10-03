@@ -250,8 +250,8 @@ export async function processScanBatch(runId: string) {
       let snapshot = JSON.parse(row.payload);
       if (!historyCandidate(snapshot)) return { snapshot, company, skipped: true };
       snapshot.dataIssues=(snapshot.dataIssues??[]).filter((issue:string)=>!issue.startsWith('تعذّر تحميل تاريخ'));
+      const cacheKey=`scan-history:v3:${company.ticker}:${now.slice(0,10)}`;
       try {
-        const cacheKey=`scan-history:v3:${company.ticker}:${now.slice(0,10)}`;
         const cached=await database.prepare('SELECT retrieved_at,payload FROM raw_cache WHERE key=?').bind(cacheKey).first() as any;
         const historical:Awaited<ReturnType<typeof historicalMarketData>>=cached&&Date.parse(now)-Date.parse(cached.retrieved_at)<24*60*60_000?JSON.parse(cached.payload):await historicalMarketData(company.ticker, now, 550);
         if(!cached||cached.retrieved_at!==historical.retrievedAt)await database.prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(cacheKey,historical.source,historical.retrievedAt,JSON.stringify(historical)).run();
@@ -305,11 +305,20 @@ export async function processScanBatch(runId: string) {
         snapshot.dataIssues = [...(snapshot.dataIssues ?? []), `تعذّر تحميل تاريخ الارتداد: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`];
         await log(run.id,'history',`${company.ticker}: ${snapshot.dataIssues.at(-1)}`);
       }
-      return { snapshot, company, failed: snapshot.dataIssues?.some((issue: string) => issue.startsWith('تعذّر تحميل تاريخ')) === true };
+      const failed=snapshot.dataIssues?.some((issue: string) => issue.startsWith('تعذّر تحميل تاريخ')) === true;
+      return { snapshot, company, failed, cacheKey: failed ? undefined : cacheKey };
     })));
     const historyFailed = outcomes.filter(outcome => outcome?.failed).length;
     for (const [index,outcome] of outcomes.entries()) {
       if(outcome.snapshot&&!outcome.skipped)writes.push(insertSnapshot(run.id,outcome.snapshot));
+      // The current-day cache is the only dated history row read by a new
+      // scan. Issuer enrichment reads the latest row for this ticker. Keep
+      // that row and reclaim older daily copies before the next scan grows
+      // the persistent SQLite volume again.
+      if(outcome.cacheKey){
+        const prefix=`scan-history:v3:${outcome.company.ticker}:`;
+        writes.push(database.prepare('DELETE FROM raw_cache WHERE key>=? AND key<? AND key<>?').bind(prefix,`${prefix}\uffff`,outcome.cacheKey));
+      }
       if(outcome.failed&&jobs[index].attempt<2)remaining.push({...jobs[index],attempt:jobs[index].attempt+1});
     }
     const offset = retrying?run.offset:run.offset + entries.length;

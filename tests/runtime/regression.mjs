@@ -400,11 +400,15 @@ test('history completion queues all CIK-linked common stocks for SEC research an
  const snapshots=companies.map((company,index)=>({...base,symbol:company.ticker,cik:company.cik,asOf:now,securityType:index===3?'etf':'common',price:index===4?null:10,marketCap:index===4?null:50e6,medianDollarVolume20d:index===2?149_999:index===4?null:150_000,provenance:{...base.provenance}}));
  await db().prepare('INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,strategy_hash) VALUES(?,?,?,?,?,?,?,?,?)').bind('opportunity-queue','2026-09-20','2026-09-20','running','Bulk Quotes/SEC Frames + Opportunity SEC v12 · full',5,'paged-v1',10,currentHash()).run();
  await db().prepare('INSERT INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind('universe:opportunity-queue:history:0','test',now,JSON.stringify(companies)).run();
+ const previousDay=new Date(Date.parse(now)-86_400_000).toISOString().slice(0,10);
+ await db().prepare('INSERT INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(`scan-history:v3:SEC-ELIGIBLE:${previousDay}`,'test',now,JSON.stringify({history:[]})).run();
  for(const snapshot of snapshots)await insertSnapshot('opportunity-queue',snapshot).run();
  setHistoryResult({history:[{date:now.slice(0,10),close:10,volume:100}],splits:[],source:'TEST_ONLY',url:'https://example.test',availableAt:now,retrievedAt:now});
  setOpportunityResearchResult(new Error('transient SEC outage'));resetOpportunityCalls();
  try{
   const prepared=await processScanBatch('opportunity-queue');assert.equal(prepared.run.stage,11);assert.equal(prepared.run.total,3);
+  assert.equal(await db().prepare('SELECT key FROM raw_cache WHERE key=?').bind(`scan-history:v3:SEC-ELIGIBLE:${previousDay}`).first(),null);
+  assert(await db().prepare('SELECT key FROM raw_cache WHERE key=?').bind(`scan-history:v3:SEC-ELIGIBLE:${now.slice(0,10)}`).first());
   const queue=await db().prepare("SELECT payload FROM raw_cache WHERE key='universe:opportunity-queue:opportunity:0'").first();assert.deepEqual(JSON.parse(queue.payload).map(row=>row.tickers),[['SEC-ALIAS','SEC-ELIGIBLE'],['SEC-LOW-LIQUIDITY'],['SEC-NO-QUOTE']]);
   const failedAttempt=await processScanBatch('opportunity-queue');assert.equal(failedAttempt.done,false);assert.equal(failedAttempt.run.retryPending,3);
   setOpportunityResearchResult({providerStatus:'retrieved',retryable:false});
