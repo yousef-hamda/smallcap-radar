@@ -265,6 +265,28 @@ test('scan report retains needs-research rows, validates paging and never promot
  assert.equal((await reportGET(new Request(url.replace('scan-test','absent')))).status,404);
  assert.equal((await reportGET(new Request(url+'&offset=25'))).status,200);
 });
+test('historical scan report counts the same saved rubric states it displays',async()=>{
+ const created='2026-01-01T00:00:00.000Z';
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES('report-retired',?,?,'complete','retired full scan',2,2,13,'retired-rubric')").bind(created,created).run();
+ await insertSnapshot('report-retired',{...base,symbol:'RETIRED-A'}).run();
+ await insertSnapshot('report-retired',{...base,symbol:'RETIRED-B'}).run();
+ const conflictRow=await db().prepare("SELECT payload FROM fundamental_snapshots WHERE run_id='report-retired' AND symbol='RETIRED-B'").first();
+ const conflictSnapshot=JSON.parse(conflictRow.payload);conflictSnapshot.opportunityResearch={earnings:{conflicts:['competing revenue concepts']}};
+ await db().prepare("UPDATE fundamental_snapshots SET payload=? WHERE run_id='report-retired' AND symbol='RETIRED-B'").bind(JSON.stringify(conflictSnapshot)).run();
+ for(const [symbol,state] of [['RETIRED-A','needs-research'],['RETIRED-B','excluded']]){
+  const row=await db().prepare('SELECT evaluation FROM fundamental_snapshots WHERE run_id=? AND symbol=?').bind('report-retired',symbol).first();
+  const saved=JSON.parse(row.evaluation);saved.opportunity.hash='retired-rubric';saved.opportunity.state=state;
+  await db().prepare('UPDATE fundamental_snapshots SET evaluation=? WHERE run_id=? AND symbol=?').bind(JSON.stringify(saved),'report-retired',symbol).run();
+ }
+ const response=await reportGET(new Request('https://radar.test/api/scan-report?runId=report-retired&strategy=opportunity'));
+ assert.equal(response.status,200);const report=await response.json();
+ assert.deepEqual(report.counts,{total:2,passed:0,failed:1,unknown:1,withEvidence:0});
+ assert.deepEqual(report.rows.map(row=>row.evaluation.state),['needs-research','excluded']);
+ assert.equal(report.blockers.find(blocker=>blocker.id==='sec-concept-conflict')?.count,1);
+ await db().prepare("DELETE FROM fundamental_snapshots WHERE run_id='report-retired'").run();
+ await db().prepare("DELETE FROM strategy_runs WHERE id='report-retired'").run();
+ invalidateStateCache();
+});
 test('opportunity scan report keeps missing factors in research state with explicit blockers',async()=>{
  const response=await reportGET(new Request('https://radar.test/api/scan-report?runId=scan-test&strategy=opportunity'));
  assert.equal(response.status,200);const payload=await response.json();

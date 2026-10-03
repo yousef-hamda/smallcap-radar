@@ -55,6 +55,15 @@ function validSecMetric(metric: Metric | undefined, asOf: string): metric is Met
  * facts. It is intentionally not the fixed eight-factor investment score.
  */
 export function operatingCandidateSignals(snapshot: Snapshot): OperatingCandidateSignals {
+  if ((snapshot.opportunityResearch?.earnings.conflicts?.length ?? 0) > 0
+    || (snapshot.sourceConflicts?.length ?? 0) > 0) {
+    return {
+      eligibleForOperatingQueue: false, hasVerifiedRevenue: false,
+      annualEvidenceYears: 0, profitableYears: 0, yearsWithProfitEvidence: 0,
+      positiveFcfYears: 0, yearsWithFcfEvidence: 0,
+      revenueGrowth: null, latestProfitMargin: null, latestFcfMargin: null,
+    };
+  }
   // The SEC adapter persists periods in ascending fiscal-end order; consume
   // that canonical array order, matching the indexed SQLite JSON expressions.
   const periods = [...(snapshot.opportunityResearch?.earnings.annual ?? [])].slice(-3);
@@ -136,7 +145,7 @@ const sourceIsUsable = (period: number, metric: string) => {
 
 export function operatingCandidateOrderSql() {
   const periods = [1, 2, 3];
-  const industryEligible = `json_extract(payload,'$.opportunityResearch.financialStrength.industryModel')='industrial-operating-company'`;
+  const industryEligible = `json_extract(payload,'$.opportunityResearch.financialStrength.industryModel')='industrial-operating-company' AND COALESCE(json_array_length(payload,'$.opportunityResearch.earnings.conflicts'),0)=0 AND COALESCE(json_array_length(payload,'$.sourceConflicts'),0)=0`;
   const freshRevenue = (period: number) => `${sourceIsUsable(period, 'revenue')} AND ${metricValue(period, 'revenue')}>0 AND julianday(json_extract(payload,'$.asOf'))-julianday(${periodEnd(period)}) BETWEEN 0 AND ${MAX_ANNUAL_FACT_AGE_DAYS}`;
   const plausibleHistoricalProfit = (period: number) => `${sourceIsUsable(period, 'revenue')} AND ${sourceIsUsable(period, 'netIncome')} AND ${metricValue(period, 'revenue')}>0 AND ${metricUnit(period, 'netIncome')}=${metricUnit(period, 'revenue')} AND 1.0*${metricValue(period, 'netIncome')}/${metricValue(period, 'revenue')} BETWEEN ${PLAUSIBLE_PROFIT_MARGIN_MIN} AND ${PLAUSIBLE_PROFIT_MARGIN_MAX}`;
   const plausibleProfit = (period: number) => `${freshRevenue(period)} AND ${sourceIsUsable(period, 'netIncome')} AND ${metricUnit(period, 'netIncome')}=${metricUnit(period, 'revenue')} AND 1.0*${metricValue(period, 'netIncome')}/${metricValue(period, 'revenue')} BETWEEN ${PLAUSIBLE_PROFIT_MARGIN_MIN} AND ${PLAUSIBLE_PROFIT_MARGIN_MAX}`;

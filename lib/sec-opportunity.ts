@@ -365,9 +365,10 @@ export function buildSecFinancialStrengthInputs(
     'SEC Company Facts standard concepts do not guarantee unrestricted-cash classification or complete foreign-filer coverage.',
     'The solvency formula is not suitable for banks, insurers, REITs, utilities, or issuers without a verified operating-company model classification.',
   ];
+  const upstreamConflicts = (earnings.conflicts ?? []).filter(conflict => /\b(operatingCashFlow|capitalExpenditure|operatingIncome)\b/.test(conflict));
   const ids: FinancialMetricId[] = ['unrestrictedCash', 'totalDebt', 'freeCashFlowTtm', 'operatingIncomeTtm', 'interestExpenseTtm', 'debtDueWithin24Months'];
   if (industryModel !== 'industrial-operating-company') missing.push('industry model: a sourced operating-company classification is required; financial institutions, REITs and other specialized balance sheets need a separate formula');
-  const complete = industryModel === 'industrial-operating-company' && ids.every(id => !!metrics[id]) && new Set(balanceDates).size === 1 && unit === 'USD'
+  const complete = industryModel === 'industrial-operating-company' && upstreamConflicts.length === 0 && ids.every(id => !!metrics[id]) && new Set(balanceDates).size === 1 && unit === 'USD'
     && ids.every(id => Date.parse(asOf) - Date.parse(metrics[id]!.source.periodEnd) <= 400 * 86_400_000)
     && ids.every(id => isOpportunityProvenanceValid(metrics[id]!.source, asOf));
   if (unit !== 'USD') missing.push(`financial-strength scoring: reported currency ${unit} has no audited conversion to USD`);
@@ -375,7 +376,7 @@ export function buildSecFinancialStrengthInputs(
     unrestrictedCash: metrics.unrestrictedCash!, totalDebt: metrics.totalDebt!, freeCashFlowTtm: metrics.freeCashFlowTtm!,
     operatingIncomeTtm: metrics.operatingIncomeTtm!, interestExpenseTtm: metrics.interestExpenseTtm!, debtDueWithin24Months: metrics.debtDueWithin24Months!,
   } : undefined;
-  return { ...(assessment ? { assessment } : {}), ...(industryModel ? { industryModel } : {}), metrics, missing: [...new Set(missing)], conflicts: [], limitations };
+  return { ...(assessment ? { assessment } : {}), ...(industryModel ? { industryModel } : {}), metrics, missing: [...new Set(missing)], conflicts: upstreamConflicts, limitations };
 }
 
 /**

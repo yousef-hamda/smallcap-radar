@@ -671,7 +671,7 @@ test('SEC operating research priorities use only issuer-linked dated facts and e
  const growthOutlier={...snapshot,opportunityResearch:{...snapshot.opportunityResearch,earnings:{annual:[annual('2023',100,10,14,4),annual('2024',120,18,22,5),annual('2025',400,80,90,8)]}}};const growthSignals=operatingCandidateSignals(growthOutlier);assert.equal(growthSignals.eligibleForOperatingQueue,true);assert.equal(growthSignals.revenueGrowth,null);
  const fcfOutlier={...snapshot,opportunityResearch:{...snapshot.opportunityResearch,earnings:{annual:[annual('2023',100,10,14,4),annual('2024',120,18,22,5),annual('2025',150,30,170,8)]}}};const fcfSignals=operatingCandidateSignals(fcfOutlier);assert.equal(fcfSignals.eligibleForOperatingQueue,true);assert.equal(fcfSignals.latestFcfMargin,null);assert.equal(fcfSignals.positiveFcfYears,2);
  const stale={...snapshot,opportunityResearch:{...snapshot.opportunityResearch,earnings:{annual:[annual('2023',100,10,14,4),annual('2024',120,18,22,5),annual('2024',150,30,40,8)]}}};assert.equal(operatingCandidateSignals(stale).eligibleForOperatingQueue,false);
- const order=operatingCandidateOrderSql();assert.match(order,/source\.rightsStatus/);assert.match(order,/redistribution-permitted/);assert.match(order,/industrial-operating-company/);assert.match(order,/julianday/);assert.match(order,/BETWEEN -1 AND 1/);assert.match(order,/BETWEEN -3 AND 1/);assert.match(order,/<=1 THEN/);assert.match(order,/symbol ASC/);assert.match(order,/operatingCashFlow/);
+ const order=operatingCandidateOrderSql();assert.match(order,/source\.rightsStatus/);assert.match(order,/redistribution-permitted/);assert.match(order,/industrial-operating-company/);assert.match(order,/opportunityResearch\.earnings\.conflicts/);assert.match(order,/sourceConflicts/);assert.match(order,/julianday/);assert.match(order,/BETWEEN -1 AND 1/);assert.match(order,/BETWEEN -3 AND 1/);assert.match(order,/<=1 THEN/);assert.match(order,/symbol ASC/);assert.match(order,/operatingCashFlow/);
 });
 test('SEC revenue concepts prefer consolidated operating revenue over narrow contract-revenue fallback',()=>{
  assert.ok(REVENUE_TAGS.indexOf('RevenueAndOperatingIncome')<REVENUE_TAGS.indexOf('RevenueFromContractsWithCustomers'));
@@ -805,6 +805,17 @@ test('snapshot SEC earnings history contributes only the quantified earnings sub
  const result=evaluateOpportunityDossier(snapshot,dossier),factor=result.factors.find(item=>item.id==='earningsQuality');
  assert.ok(factor.score>0);assert.equal(factor.evidenced,true);assert.equal(factor.complete,false);assert.equal(factor.coveragePct,85);assert.equal(factor.points,Math.round(factor.score/10*12*.85*100)/100);assert.equal(factor.sources.length,66);assert.match(factor.rationale,/GAAP\/non-GAAP and one-off reviews remain unscored/);assert.equal(result.state,'needs-research');
 });
+test('unresolved SEC concept conflicts withhold provisional earnings points and operating priority signals',()=>{
+ const history=earningsInput();
+ const adapt=periods=>periods.map(period=>({start:period.revenue.source.periodStart,end:period.revenue.source.periodEnd,metrics:{revenue:period.revenue,netIncome:period.netIncome,operatingIncome:period.operatingIncome,operatingCashFlow:period.operatingCashFlow,capitalExpenditure:period.capitalExpenditure,stockBasedCompensation:period.stockBasedCompensation}}));
+ const snapshot={...opportunitySnapshot,opportunityResearch:{earnings:{providerStatus:'retrieved',coverage:{annualPeriodsFound:3,quarterlyPeriodsFound:8,selectedUnit:'USD'},annual:adapt(history.annual),quarterly:adapt(history.quarterly),missing:[],conflicts:['competing revenue concepts report different values'],limitations:[],readyForScoring:false}}};
+ const evaluation=evaluateOpportunityDossier(snapshot,opportunityDossierFromSnapshot(snapshot));
+ const factor=evaluation.factors.find(item=>item.id==='earningsQuality');
+ assert.equal(factor.score,null);assert.equal(factor.points,0);assert.equal(factor.coveragePct,0);
+ assert.match(factor.rationale,/competing revenue concepts/);
+ const signals=operatingCandidateSignals(snapshot);
+ assert.equal(signals.eligibleForOperatingQueue,false);assert.equal(signals.revenueGrowth,null);
+});
 test('SEC financial-strength adapter derives only aligned debt, maturity, interest and four-quarter cash-flow inputs',()=>{
  const asOf='2026-09-30T12:00:00.000Z',cik=1234567;
  const ends=['2025-09-30','2025-12-31','2026-03-31','2026-06-30'];
@@ -823,6 +834,8 @@ test('SEC financial-strength adapter derives only aligned debt, maturity, intere
  const result=buildSecFinancialStrengthInputs(cik,payload,asOf,'2026-09-30T11:00:00.000Z',earnings,'industrial-operating-company');
  assert.equal(result.assessment?.totalDebt.value,400);assert.equal(result.assessment?.debtDueWithin24Months.value,180);assert.equal(result.assessment?.freeCashFlowTtm.value,400);assert.equal(result.assessment?.operatingIncomeTtm.value,320);assert.equal(result.assessment?.interestExpenseTtm.value,48);
  assert.equal(result.missing.length,0);assert.equal(scoreFinancialStrength(result.assessment).score,8.8);
+ const conflicted=buildSecFinancialStrengthInputs(cik,payload,asOf,'2026-09-30T11:00:00.000Z',{...earnings,conflicts:['competing operatingCashFlow concepts report different values']},'industrial-operating-company');
+ assert.equal(conflicted.assessment,undefined);assert.equal(conflicted.conflicts.length,1);
  const partialAssessment={industryModel:'industrial-operating-company',asOf,unrestrictedCash:result.metrics.unrestrictedCash,totalDebt:result.metrics.totalDebt,freeCashFlowTtm:result.metrics.freeCashFlowTtm,operatingIncomeTtm:result.metrics.operatingIncomeTtm,debtDueWithin24Months:result.metrics.debtDueWithin24Months};
  const partialScore=scoreFinancialStrengthPartial(partialAssessment);assert.equal(partialScore.coveragePct,70);assert.ok(partialScore.score>0);assert.match(partialScore.rationale,/70%.*unavailable dimensions remain uncovered/);
  const partialSnapshot={...opportunitySnapshot,opportunityResearch:{financialStrength:{providerStatus:'retrieved',industryModel:'industrial-operating-company',metrics:{...partialAssessment},missing:['interest is missing'],conflicts:[],limitations:[],readyForScoring:false}}};

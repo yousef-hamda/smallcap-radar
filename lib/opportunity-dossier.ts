@@ -43,6 +43,8 @@ export type OpportunityDossier = {
   /** Compact scan result; keeps derived indicators without persisting hundreds of raw bars per issuer. */
   technicalTimingScore?: TechnicalTimingScore & { asOf: string };
   researchNotes?: Partial<Record<OpportunityFactorId, string>>;
+  /** Unresolved source conflicts carried from acquisition into factor scoring. */
+  researchConflicts?: Partial<Record<OpportunityFactorId, string[]>>;
 };
 
 function assessmentDate(dossier: OpportunityDossier, factor: OpportunityFactorId): string | undefined {
@@ -79,6 +81,14 @@ export function scoreOpportunityDossier(dossier: OpportunityDossier, horizonMont
     'valuation', 'catalysts', 'financialStrength', 'earningsQuality',
     'competitivePosition', 'downsideRisk', 'management', 'technicalTiming',
   ] as const) {
+    const unresolved = dossier.researchConflicts?.[factor] ?? [];
+    if (unresolved.length) {
+      output[factor] = {
+        ...missingEvidence(factor, 'Source concepts conflict and require filing-level reconciliation before this factor can contribute points.'),
+        conflicts: unresolved.slice(0, 20),
+      };
+      continue;
+    }
     const date = assessmentDate(dossier, factor);
     if (!date) {
       output[factor] = missingEvidence(factor, dossier.researchNotes?.[factor] ?? 'This research section has not been supplied.');
@@ -201,6 +211,13 @@ export function opportunityDossierFromSnapshot(snapshot: Snapshot): OpportunityD
     } } : {}),
     ...(technicalResearch?.assessment ? { technicalTiming: technicalResearch.assessment } : {}),
     ...(technicalResearch?.score ? { technicalTimingScore: { ...technicalResearch.score, asOf: technicalResearch.asOf ?? snapshot.asOf } } : {}),
+    researchConflicts: {
+      earningsQuality: research?.conflicts ?? [],
+      financialStrength: [
+        ...(financialResearch?.conflicts ?? []),
+        ...(research?.conflicts ?? []).filter(conflict => /\b(operatingCashFlow|capitalExpenditure|operatingIncome)\b/.test(conflict)),
+      ],
+    },
     researchNotes,
   };
 }

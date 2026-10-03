@@ -1,0 +1,42 @@
+# Opportunity ranking: free-source study and execution record
+
+Date: 2026-10-03. Production data cut: completed run `9c059528-f468-4086-8c1e-927456f8599a`, 2026-10-03T11:44:47Z. The product is a shared Railway-hosted stock research site. Its final rank requires all eight fixed-weight factors and passing identity, price, capitalization, and liquidity evidence checks.
+
+## Outcome criterion
+
+The problem is complete only when a live finished scan produces independently auditable, current, source-authorized eight-factor evaluations for its ranked stocks; the saved per-stock evidence, report counts, and displayed ordering must agree. A positive provisional subtotal or reachable endpoint does not satisfy this criterion. The weights remain 25/20/15/12/10/10/5/3; missing or conflicted evidence remains uncovered.
+
+## Free-source findings
+
+| Source or technique | What it can contribute | Why it does not finish the hosted ranking |
+|---|---|---|
+| [SEC EDGAR Company Facts and Submissions](https://www.sec.gov/search-filings/edgar-application-programming-interfaces) | Free, no-key, issuer-linked standard US-GAAP/IFRS facts and filing metadata, with nightly bulk files. | SEC states Company Facts covers standard-taxonomy, entity-level concepts; custom facts, share-class valuation, filing footnote judgments, competitor quality, and current market bars are outside the feed. The production scan has 6,531 listings with a retrieved Company Facts status, yet zero full eight-factor dossiers. |
+| [SEC original filings and exhibits](https://www.sec.gov/edgar/search/) | Primary source for contracts, debt terms, dilution, risks, management, controls, and accounting notes. | Content is issuer-specific and unstructured. A form or item-number index is not evidence of binding status, materiality, pricing-in, a completed risk search, or a scored governance judgment. The scan stores no filing index or reviewed assessments. |
+| [IEX direct market data](https://iextrading.com/apiexhibita/) | IEX says a direct consumer can redistribute its API data for free under its developer terms. | IEX explicitly says the data does not reflect other exchanges and is a reference point rather than a trading-decision basis. A single-exchange volume cannot establish consolidated 20-session dollar liquidity for this mixed-exchange universe. Its historical files are large exchange-event feeds, not a ready consolidated OHLCV service. |
+| [Alpaca free market data](https://docs.alpaca.markets/us/v1.1/docs/about-market-data-api) | Account-authenticated IEX real-time data and historical data subject to plan limits. | The free feed is single-exchange for current data; a separate [Alpaca customer agreement](https://files.alpaca.markets/disclosures/alpaca_customer_agreement_v20200403.pdf) says not to reproduce/distribute/commercially exploit market data without written consent. An API key and a free request quota are not a grant to this hosted audience. |
+| [Massive/Polygon market terms](https://polygon.io/terms/market_data_terms.pdf) | A technically useful free grouped daily endpoint exists. | The individual grant prohibits transfer of market data and derived charts, analytics, or research to third parties without express rights. That includes a shared cached ranking. |
+| [Nasdaq Trader daily lists](https://beta.nasdaqtrader.com/Trader.aspx?id=DailyListPD) | Listing and corporate-action discovery. | Official price/fundamental daily files are a separate secured product, with distributor obligations. A public symbol directory does not provide the needed market bars or share-class bridge. |
+| [FINRA Equity Query API terms](https://developer.finra.org/specific-terms-equity-data) | Selected official short-interest and related equity records can be redistributed to end users under explicit no-charge, attribution, and end-user conditions. | It does not supply all-exchange OHLCV, current market capitalization, borrow costs, or all eight risk reviews. Dataset-specific credentials and coverage remain necessary. |
+| GitHub packages and MCP wrappers | Can automate retrieval, parsing, validation, and local calculation under their software licenses. | A software license does not grant a public-use license to a market dataset fetched by that software. None of the inspected wrappers solves the missing issuer judgments. |
+
+The [existing detailed source audit](OPPORTUNITY_FREE_DATA_SOURCE_AUDIT_2026_10_02.md) also examines Market Data, Twelve Data, Alpha Vantage, FINRA, and others. This study found no verified zero-cost feed that simultaneously provides broad consolidated US prices and volume, full-history capacity, and rights to store, derive, and display the data in this shared app. This is a finding about the sources and terms inspected, not a claim that no future free grant could exist.
+
+## Production baseline
+
+- 6,954 stored listings represent 5,921 distinct CIKs; 5,274 are identified as common stock. Zero are fully ranked; 5,971 need research; 983 are excluded security types.
+- All eight factors are incomplete for all 6,954. The scan has compact earnings, financial, and timing research in every row, but no saved full dossier or scan filing index.
+- 3,754 rows have three annual and eight quarterly SEC periods; only 1,633 earn 85%-covered provisional earnings-quality points. Some 720 scored earnings rows carry unresolved SEC concept conflicts in the acquisition record.
+- All 6,954 have a stored price, 6,358 have market cap, and 6,501 have 20-session median dollar volume. The durable market provenance has no verified reuse right; the stored market-cap provenance has no canonical URL. Every market evidence gate is therefore UNKNOWN.
+- A previous completed report mixed current-hash summary counts with historical saved blockers and recalculated rows. It reported zero exclusions while displaying excluded warrants and a blocker count of 983.
+
+## Execution sequence and state
+
+1. **Independent source and production audit — completed.** The production database and public API were cross-checked by run ID; issuer samples, factor coverage, provenance, and historical-report disagreement were measured. Provider findings were checked against the primary documents above.
+2. **Evidence integrity — implemented locally.** Unresolved SEC concept conflicts now travel from stored research to factor scoring. Earnings points are withheld; cash-flow or operating-income conflicts also withhold financial-strength points. Conflicted rows cannot gain SEC operating-priority signals from those facts. The rubric version changes so older saved evaluations are recalculated.
+3. **Report consistency — implemented locally.** Historical reports aggregate and display the same saved rubric evaluations. The report separately counts rows with SEC concept conflicts.
+4. **Verification and release — local checks complete; production comparison pending.** Typecheck, lint, verified build, all 163 engine checks, 66 runtime checks, and 47 root tests passed. Deployment and comparison against the saved production run remain to be recorded.
+5. **Full investment ranking — unfulfilled.** No entitled broad market feed or source-reviewed valuation, catalysts, full downside, competition, and management dossiers were established. These are independent blockers after the integrity changes. No rank or source-rights state may be manufactured from partial SEC facts.
+
+## Completion evidence required
+
+For any eventual final ranked stock, the evaluator must show one correct listing/issuer identity, current eligible market data with a documented right for this application and complete provenance, all eight factor calculation traces and original sources, resolved conflicts, and one as-of cut. Its saved evaluation must agree with the live card and report. A completed job counter or an individual sourced profile cannot substitute for those per-stock checks.
