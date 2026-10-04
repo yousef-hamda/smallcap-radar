@@ -22,6 +22,7 @@ import {
   type TechnicalTimingScore,
 } from './opportunity-scoring';
 import { OPPORTUNITY_SPEC, opportunitySpecHash, type OpportunityFactorId, type OpportunityRiskTolerance } from './opportunity-spec';
+import { proxyOpportunityEvidence } from './opportunity-proxies';
 
 /**
  * Normalized research inputs for the unified score. Each section is populated
@@ -239,7 +240,15 @@ export function evaluateOpportunityDossier(
       checks: [...result.checks, { id: 'dossier-as-of', status: 'UNKNOWN', role: 'evidence', explanation: 'Snapshot and dossier as-of timestamps must match exactly.' }],
     };
   }
-  const evidence = scoreOpportunityDossier(dossier, options.horizonMonths);
+  const dossierEvidence = scoreOpportunityDossier(dossier, options.horizonMonths);
+  const proxyEvidence = proxyOpportunityEvidence(snapshot);
+  const evidence = { ...dossierEvidence };
+  for (const [factor, candidate] of Object.entries(proxyEvidence) as Array<[OpportunityFactorId, OpportunityEvidence]>) {
+    const existing = evidence[factor];
+    // A reviewed dossier outranks an automated proxy. Proxies fill only the
+    // previously unscored qualitative factors.
+    if (!existing || existing.score == null) evidence[factor] = candidate;
+  }
   const valuation = dossier.valuation;
   if (valuation) {
     const quote = snapshot.provenance.price;
