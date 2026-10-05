@@ -1217,7 +1217,7 @@ test('growth model derives comparable observed revenue growth with source values
  const asOf='2026-10-03T12:00:00Z';
  const period=(end,value)=>({metrics:{revenue:{value,unit:'USD',source:{...opportunityProvenance,periodEnd:end,availableAt:'2026-08-01T00:00:00Z',retrievedAt:asOf}}}});
  const snapshot={symbol:'GROWTH',name:'Observed growth fixture',asOf,provenance:{},opportunityResearch:{earnings:{annual:[period('2024-12-31',100),period('2025-12-31',140)],quarterly:[],conflicts:[]}}};
- const result=evaluateOpportunity(snapshot),factor=result.factors.find(item=>item.id==='catalysts');assert.ok(factor.score>0);assert.ok(factor.calculation.inputs.some(input=>input.name==='derived-observed-revenue-growth'));
+ const result=evaluateOpportunity(snapshot),factor=result.factors.find(item=>item.id==='catalysts');assert.ok(factor.score>0);assert.equal(factor.calculation.inputs.find(input=>input.name==='derived-observed-revenue-growth').value,140/100-1);
  const conflicted={...snapshot,opportunityResearch:{earnings:{...snapshot.opportunityResearch.earnings,conflicts:['revenue concepts disagree']}}};assert.equal(evaluateOpportunity(conflicted).factors.find(item=>item.id==='catalysts').score,0);
  const mixed={...snapshot,opportunityResearch:{earnings:{...snapshot.opportunityResearch.earnings,annual:[period('2024-12-31',100),{metrics:{revenue:{...period('2025-12-31',140).metrics.revenue,unit:'EUR'}}}]}}};assert.equal(evaluateOpportunity(mixed).factors.find(item=>item.id==='catalysts').score,0);
 });

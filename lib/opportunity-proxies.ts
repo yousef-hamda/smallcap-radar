@@ -140,7 +140,9 @@ function deriveRevenueGrowth(snapshot: Snapshot) {
   if(value===null&&annual.length>=2){
     const last=annual.at(-1)!,prior=annual.at(-2)!;
     const years=(Date.parse(last.source.periodEnd)-Date.parse(prior.source.periodEnd))/(365.25*86_400_000);
-    if(years>=0.75&&years<=1.25&&last.unit===prior.unit){selected=[prior,last];value=(last.value/prior.value)**(1/years)-1;method='annual-revenue-CAGR-between-adjacent-disclosures';}
+    // Adjacent reported fiscal years are comparable without normalizing by
+    // exponentiation, whose final bits depend on the runtime's math library.
+    if(years>=0.9&&years<=1.1&&last.unit===prior.unit){selected=[prior,last];value=last.value/prior.value-1;method='latest-reported-annual-revenue / prior-reported-annual-revenue - 1';}
   }
   if(value===null||!finite(value)||!selected.length)return null;
   const latest=selected.at(-1)!;

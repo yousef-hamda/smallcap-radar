@@ -254,7 +254,7 @@ export function evaluateOpportunityDossier(
       // visible and continues to withhold source-reviewed coverage.
       evidence[factor] = {
         ...candidate,
-        ...(existing?.rationale ? { rationale: `${existing.rationale} ${candidate.rationale}` } : {}),
+        ...(existing?.rationale ? { rationale: `Source-review result: ${existing.rationale} Final model rating: ${candidate.rationale}` } : {}),
         ...(existing?.conflicts?.length ? { conflicts: existing.conflicts.filter(conflict=>!conflict.startsWith('qualitative dimension not reviewed:')) } : {}),
       };
     }

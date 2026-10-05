@@ -108,7 +108,7 @@ export function buildTechnicalTimingResearch(input: {
   if (!input.benchmarkSource) missing.push('Benchmark price-history source metadata is unavailable.');
   if (benchmarkRows.length < 64) missing.push(`Only ${benchmarkRows.length}/64 completed benchmark bars are available.`);
   if (!input.splitAdjusted) missing.push('Verified split-adjusted price history is unavailable.');
-  if (!['public-domain', 'redistribution-permitted', 'licensed'].includes(rightsStatus)) missing.push('Price-history redistribution rights are not verified; the technical factor remains unscored.');
+  if (!['public-domain', 'redistribution-permitted', 'licensed'].includes(rightsStatus)) missing.push('Price-history redistribution rights are not verified; a source-reviewed technical assessment is unavailable.');
   if (score.score == null && !missing.length) missing.push(score.rationale);
   const providerStatus = dailyRows.length && benchmarkRows.length ? 'retrieved' : 'unavailable';
   return {
