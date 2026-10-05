@@ -10,6 +10,7 @@ const base=process.argv[3]??`http://127.0.0.1:${process.env.PORT??8080}`;
 const database=new DatabaseSync(databasePath,{readOnly:true});
 const run=database.prepare("SELECT id FROM strategy_runs r WHERE status IN ('complete','partial') AND (stage>=13 OR source='import') AND EXISTS(SELECT 1 FROM fundamental_snapshots s WHERE s.run_id=r.id) ORDER BY CASE WHEN source LIKE '%· full' THEN 0 ELSE 1 END,CASE WHEN status='complete' THEN 0 ELSE 1 END,created_at DESC LIMIT 1").get();
 const rows=database.prepare('SELECT s.symbol,s.evaluation,r.score,r.rank_position,r.evaluation_hash FROM fundamental_snapshots s JOIN opportunity_rankings r ON r.run_id=s.run_id AND r.symbol=s.symbol WHERE s.run_id=? ORDER BY r.rank_position').all(run.id);
+const factorGrades=new Map();
 const total=database.prepare('SELECT COUNT(*) AS n FROM fundamental_snapshots WHERE run_id=?').get(run.id).n;
 assert.equal(rows.length,total);
 const bySymbol=new Map();const weights=[25,20,15,12,10,10,5,3];
@@ -17,12 +18,14 @@ for(const [index,row] of rows.entries()){
  const evaluation=JSON.parse(row.evaluation).opportunity;
  assert.equal(evaluation.state,'ranked');assert.equal(evaluation.rankingEligible,true);assert.equal(evaluation.factors.length,8);assert.equal(evaluation.score,row.score);assert.equal(evaluation.evaluationHash,row.evaluation_hash);assert.equal(row.rank_position,index+1);
  for(const [factorIndex,factor] of evaluation.factors.entries()){
+  const signal=factorGrades.get(factor.id)??new Set();signal.add(factor.score);factorGrades.set(factor.id,signal);
   assert.equal(factor.weight,weights[factorIndex]);assert.ok(Number.isFinite(factor.score)&&factor.score>=0&&factor.score<=10);assert.ok(Math.abs(factor.points-factor.score*factor.weight/10)<1e-8);assert.ok(factor.calculation?.inputs?.length);
  }
  assert.equal(evaluation.score,Math.round(evaluation.factors.reduce((sum,factor)=>sum+Math.round(factor.score*100)*factor.weight,0)/10)/100);
  if(index){const previous=rows[index-1];assert.ok(previous.score>row.score||(previous.score===row.score&&previous.symbol<row.symbol));}
  bySymbol.set(row.symbol,{evaluation,rank:row.rank_position});
 }
+for(const [id,values]of factorGrades){assert.ok(values.size>1,`${id}: no signal variation in the complete production universe`);assert.ok([...values].some(value=>value>0),`${id}: all grades are zero`);}
 async function get(path){const response=await fetch(`${base}${path}`,{signal:AbortSignal.timeout(120000)});assert.equal(response.status,200,path);return response.json();}
 const radarSeen=new Set(),reportSeen=new Set(),profileSeen=new Set();
 function match(symbol,evaluation,rank){const saved=bySymbol.get(symbol);assert.ok(saved,symbol);assert.deepEqual(evaluation,saved.evaluation,symbol);assert.equal(rank,saved.rank,symbol);}

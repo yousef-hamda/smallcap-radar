@@ -1,6 +1,6 @@
 # Historical proxy method
 
-Superseded by [the complete ranking contract](COMPLETE_RANKING_AUDIT_2026_10_05.md). Version 1.0.1 grades every listing and uses fixed model component denominators; evidence completeness no longer filters rankings. The details below describe the former implementation only.
+Superseded by [the complete ranking contract](COMPLETE_RANKING_AUDIT_2026_10_05.md). Version 1.0.2 grades every listing and uses fixed model component denominators; evidence completeness no longer filters rankings. The details below describe the former implementation only.
 
 # Deterministic proxy grades for non-numeric factors
 

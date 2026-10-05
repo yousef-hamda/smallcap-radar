@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    ".verification/**",
+    "output/playwright/**",
   ]),
   {
     files: ["app/**/*.{ts,tsx}", "lib/**/*.ts"],

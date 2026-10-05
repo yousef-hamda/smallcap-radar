@@ -1203,3 +1203,21 @@ test('weighted rating rounds exact half cents upward using integer arithmetic',(
   assert.equal(opportunityWeightedScore(factors),Math.round(hundredths*25/10)/100);
  }
 });
+
+test('valuation uses fresh market availability with fiscal-period ratio provenance and derives supported FCF yield',()=>{
+ const asOf='2026-10-03T12:00:00Z',financial={...opportunityProvenance,periodEnd:'2026-06-30',availableAt:'2026-10-02T20:00:00Z',retrievedAt:asOf};
+ const quote={...financial,periodEnd:'2026-10-02'};
+ const snapshot={...opportunitySnapshot,asOf,ps:2,price:10,fcf:10,revenue:100,provenance:{...opportunitySnapshot.provenance,ps:financial,price:quote,fcf:financial,revenue:financial}};
+ const evaluation=evaluateOpportunityDossier(snapshot,opportunityDossierFromSnapshot(snapshot)),factor=evaluation.factors.find(item=>item.id==='valuation');
+ assert.ok(factor.score>5);assert.ok(factor.points>12.5);assert.ok(factor.calculation.inputs.some(input=>input.name.includes('fcf-yield-from-margin')));
+ const stale={...snapshot,provenance:{...snapshot.provenance,price:{...quote,periodEnd:'2026-09-01'}}};
+ assert.equal(evaluateOpportunityDossier(stale,opportunityDossierFromSnapshot(stale)).factors.find(item=>item.id==='valuation').score,0);
+});
+test('growth model derives comparable observed revenue growth with source values and blocks source conflicts',()=>{
+ const asOf='2026-10-03T12:00:00Z';
+ const period=(end,value)=>({metrics:{revenue:{value,unit:'USD',source:{...opportunityProvenance,periodEnd:end,availableAt:'2026-08-01T00:00:00Z',retrievedAt:asOf}}}});
+ const snapshot={symbol:'GROWTH',name:'Observed growth fixture',asOf,provenance:{},opportunityResearch:{earnings:{annual:[period('2024-12-31',100),period('2025-12-31',140)],quarterly:[],conflicts:[]}}};
+ const result=evaluateOpportunity(snapshot),factor=result.factors.find(item=>item.id==='catalysts');assert.ok(factor.score>0);assert.ok(factor.calculation.inputs.some(input=>input.name==='derived-observed-revenue-growth'));
+ const conflicted={...snapshot,opportunityResearch:{earnings:{...snapshot.opportunityResearch.earnings,conflicts:['revenue concepts disagree']}}};assert.equal(evaluateOpportunity(conflicted).factors.find(item=>item.id==='catalysts').score,0);
+ const mixed={...snapshot,opportunityResearch:{earnings:{...snapshot.opportunityResearch.earnings,annual:[period('2024-12-31',100),{metrics:{revenue:{...period('2025-12-31',140).metrics.revenue,unit:'EUR'}}}]}}};assert.equal(evaluateOpportunity(mixed).factors.find(item=>item.id==='catalysts').score,0);
+});

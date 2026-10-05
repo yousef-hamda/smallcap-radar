@@ -38,7 +38,7 @@ test('qualitative opportunity proxies produce auditable bounded grades without c
  const now='2200-01-01T00:00:00.000Z';
  const snapshot={...base,asOf:now,evSales:2,revenueGrowth:0.2,grossMargin:0.4,operatingMarginTrend:0.03,cash:100,debt:50,dilution:0.02,price:12,low52w:8,high52w:16,ma30w:10,return12m:0.15,nextEarnings:'2200-02-01',provenance:Object.fromEntries(['evSales','revenueGrowth','grossMargin','operatingMarginTrend','cash','debt','dilution','price','low52w','high52w','ma30w','return12m'].map(key=>[key,{source:'SEC EDGAR Company Facts',url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0000000000.json',periodEnd:now.slice(0,10),availableAt:now,retrievedAt:now,rightsStatus:'public-domain',confidence:'high'}]))};
  const evidence=proxyOpportunityEvidence(snapshot);
- for(const id of ['valuation','competitivePosition','downsideRisk','technicalTiming']){assert(evidence[id]);assert(Number(evidence[id].score)>=0&&Number(evidence[id].score)<=10);assert(evidence[id].calculation?.rubricId===`${id}-model-v2`);}
+ for(const id of ['valuation','competitivePosition','downsideRisk','technicalTiming']){assert(evidence[id]);assert(Number(evidence[id].score)>=0&&Number(evidence[id].score)<=10);assert(evidence[id].calculation?.rubricId===`${id}-model-v3`);}
  assert.equal(evidence.valuation.coveragePct,80);assert.equal(evidence.valuation.confidence,'low');
 });
 test('an empty database is not mislabeled as a stale snapshot',async()=>{const state=await readState({strategy:'opportunity'});assert.equal(state.dataRun,null);assert.equal(state.summary.stale,false);});

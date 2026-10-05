@@ -1,6 +1,6 @@
 import type { Snapshot, Provenance } from './engine';
 import type { OpportunityEvidenceSet } from './opportunity-engine';
-import { usableEvidence } from './evidence';
+import { derivedEvidence, usableEvidence } from './evidence';
 import { OPPORTUNITY_SPEC, type OpportunityFactorId } from './opportunity-spec';
 
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
@@ -11,15 +11,25 @@ type Component = { name: string; weight: number; grade: number | null; keys: str
  * These are model estimates, not assertions of fair value, a moat, or reviewed governance. */
 export function proxyOpportunityEvidence(snapshot: Snapshot): OpportunityEvidenceSet {
   const output: OpportunityEvidenceSet = {};
+  const derivedGrowth = deriveRevenueGrowth(snapshot);
+  const growthTrace = derivedGrowth?.inputs ?? [];
   const observation = (key: string): number | null => {
-    const value = snapshot[key as keyof Snapshot], source = snapshot.provenance?.[key];
+    const value = key==='revenueGrowth' && !finite(snapshot.revenueGrowth) ? derivedGrowth?.value : snapshot[key as keyof Snapshot];
+    const source = key==='revenueGrowth' && !finite(snapshot.revenueGrowth) ? derivedGrowth?.source : snapshot.provenance?.[key];
     if (!finite(value) || !source || !usableEvidence(source, snapshot.asOf)
       || !Number.isFinite(Date.parse(source.retrievedAt)) || Date.parse(source.retrievedAt) > Date.parse(snapshot.asOf)) return null;
     try { if (new URL(source.url!).protocol !== 'https:') return null; } catch { return null; }
     // Retain original rights metadata. Using an observed value in a model does
     // not certify its source, freshness or redistribution entitlement.
     const age = (Date.parse(snapshot.asOf) - Date.parse(source.periodEnd)) / 86_400_000;
-    if (!Number.isFinite(age) || age < 0 || age > (['price','ma30w','low52w','high52w','return12m','ps','evSales','fcfYield'].includes(key) ? 7 : 400)) return null;
+    if (!Number.isFinite(age) || age < 0 || age > (['price','ma30w','low52w','high52w','return12m'].includes(key) ? 7 : 400)) return null;
+    // Compound pricing ratios carry a fiscal period, not a quote period.
+    // Require both a usable financial period and a fresh market dependency.
+    if(['ps','evSales','fcfYield'].includes(key)){
+      const marketAge=(Date.parse(snapshot.asOf)-Date.parse(source.availableAt))/86_400_000;
+      const price=observation('price');
+      if(marketAge>7 || price===null || price<=0)return null;
+    }
     return value;
   };
   const component = (name: string, weight: number, keys: string[], calculate: (...values: number[]) => number): Component => {
@@ -32,24 +42,28 @@ export function proxyOpportunityEvidence(snapshot: Snapshot): OpportunityEvidenc
     const coveragePct = usable.reduce((sum, item) => sum + item.weight, 0);
     const sources: Provenance[] = [...new Map(usable.flatMap(item => item.keys.flatMap(key => {
       const source = snapshot.provenance?.[key];
+      if(key==='revenueGrowth'&&derivedGrowth&&!finite(snapshot.revenueGrowth))return derivedGrowth.sources.map(item=>[JSON.stringify(item),item] as const);
       return source ? [[JSON.stringify(source), source] as const] : [];
     }))).values()];
     output[id] = {
       score: Math.round(usable.reduce((sum, item) => sum + item.grade! * item.weight / 100, 0) * 100) / 100,
       proxy: true, coveragePct, confidence: 'low', sources, conflicts,
       rationale: `${rationale} Model components use a fixed denominator; missing components earn zero. Input coverage ${coveragePct}%; this is a model rating, not a qualitative review.${conflicts.length ? ' Unresolved snapshot conflicts withhold model points.' : ''}`,
-      calculation: { rubricId: `${id}-model-v2`, inputs: components.flatMap(item => [
+      calculation: { rubricId: `${id}-model-v3`, inputs: [...components.flatMap(item => [
         { name: `${item.name}:weight`, value: item.weight },
         { name: `${item.name}:grade`, value: conflicts.length ? 'withheld-conflict' : item.grade ?? 'missing-zero' },
         ...item.keys.map((key, index) => ({ name: `${item.name}:${key}`, value: item.values[index] })),
-      ]) },
+      ]), ...(components.some(item=>item.keys.includes('revenueGrowth')) ? growthTrace : [])] },
     };
   };
-  const multiple = observation('evSales') !== null ? 'evSales' : 'ps';
+  const evSales=observation('evSales');
+  const multiple = evSales!==null&&evSales>0 ? 'evSales' : 'ps';
   set('valuation', 'Relative valuation uses sales multiples, FCF yield and growth; no fair value is invented.', [
-    component('sales-multiple', 70, [multiple], value => value < 0 ? 0 : value <= 1 ? 9 : value <= 3 ? 7.5 : value <= 6 ? 5.5 : value <= 10 ? 3.5 : 1.5),
-    component('fcf-yield', 20, ['fcfYield'], value => value <= 0 ? 0 : clamp(value * 100)),
-    component('growth', 10, ['revenueGrowth'], value => value <= 0 ? 0 : clamp(value * 25)),
+    component('sales-multiple', 70, [multiple], value => value <= 0 ? 0 : value <= 1 ? 9 : value <= 3 ? 7.5 : value <= 6 ? 5.5 : value <= 10 ? 3.5 : 1.5),
+    observation('fcfYield')!==null
+      ? component('fcf-yield',20,['fcfYield'],value=>clamp(value*100))
+      : component('fcf-yield-from-margin-and-sales-multiple',20,['fcf','revenue','ps'],(fcf,sales,ps)=>sales>0&&ps>0?clamp(fcf/sales/ps*100):0),
+    component('growth', 10, ['revenueGrowth',multiple], (growth,pricing) => pricing>0?clamp(growth*25):0),
   ]);
   const earningsDate = Date.parse(snapshot.nextEarnings ?? '');
   const inHorizon = Number.isFinite(earningsDate) && earningsDate > Date.parse(snapshot.asOf)
@@ -98,4 +112,44 @@ export function proxyOpportunityEvidence(snapshot: Snapshot): OpportunityEvidenc
     component('cash-conversion', 30, ['fcf','netIncome'], (fcf, profit) => profit > 0 ? clamp(fcf / profit * 8) : 0),
   ]);
   return output;
+}
+
+
+/** Reproducible observed growth: eight adjacent quarters, otherwise annual
+ * disclosures. This is operating momentum, never a promised future event. */
+function deriveRevenueGrowth(snapshot: Snapshot) {
+  const research=snapshot.opportunityResearch?.earnings;
+  if(!research || (research.conflicts??[]).length)return null;
+  type Metric={value:number;unit:string;source:Provenance};
+  const metrics=(periods:typeof research.annual):Metric[]=>Array.isArray(periods)?periods.flatMap(period=>{
+    const metric=period?.metrics?.revenue;
+    if(!metric||!finite(metric.value)||metric.value<=0||!metric.unit||!usableEvidence(metric.source,snapshot.asOf)
+      ||!Number.isFinite(Date.parse(metric.source.retrievedAt))||Date.parse(metric.source.retrievedAt)>Date.parse(snapshot.asOf))return [];
+    try{if(new URL(metric.source.url!).protocol!=='https:')return [];}catch{return [];}
+    return [metric];
+  }).sort((a,b)=>Date.parse(a.source.periodEnd)-Date.parse(b.source.periodEnd)):[];
+  const quarters=metrics(research.quarterly),annual=metrics(research.annual);
+  let selected:Metric[]=[],value:number|null=null,method='';
+  if(quarters.length>=8){
+    const last=quarters.slice(-8);
+    const adjacent=last.every((item,index)=>index===0||((Date.parse(item.source.periodEnd)-Date.parse(last[index-1].source.periodEnd))/86_400_000>=60&&(Date.parse(item.source.periodEnd)-Date.parse(last[index-1].source.periodEnd))/86_400_000<=120));
+    if(adjacent&&new Set(last.map(item=>item.unit)).size===1){
+      selected=last;value=last.slice(4).reduce((sum,item)=>sum+item.value,0)/last.slice(0,4).reduce((sum,item)=>sum+item.value,0)-1;method='latest-four-quarter-revenue / prior-four-quarter-revenue - 1';
+    }
+  }
+  if(value===null&&annual.length>=2){
+    const last=annual.at(-1)!,prior=annual.at(-2)!;
+    const years=(Date.parse(last.source.periodEnd)-Date.parse(prior.source.periodEnd))/(365.25*86_400_000);
+    if(years>=0.75&&years<=1.25&&last.unit===prior.unit){selected=[prior,last];value=(last.value/prior.value)**(1/years)-1;method='annual-revenue-CAGR-between-adjacent-disclosures';}
+  }
+  if(value===null||!finite(value)||!selected.length)return null;
+  const latest=selected.at(-1)!;
+  if((Date.parse(snapshot.asOf)-Date.parse(latest.source.periodEnd))/86_400_000>400)return null;
+  const source=derivedEvidence('Observed SEC revenue growth', [...selected].reverse().map(item=>item.source),snapshot.asOf,method);
+  if(!source)return null;
+  return {value,source,sources:selected.map(item=>item.source),inputs:[
+    {name:'observed-growth-method',value:method},
+    ...selected.flatMap((item,index)=>[{name:`growth-revenue-${index}:value`,value:item.value,unit:item.unit},{name:`growth-revenue-${index}:period`,value:item.source.periodEnd}]),
+    {name:'derived-observed-revenue-growth',value},
+  ]};
 }

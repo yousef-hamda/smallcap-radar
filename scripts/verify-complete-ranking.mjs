@@ -6,6 +6,7 @@ import {evaluateOpportunityDossier,opportunityDossierFromSnapshot} from '../.tes
 import {isCurrentOpportunityEvaluation} from '../.test-build/opportunity-engine.mjs';
 import {applyFinancingRisk} from '../.test-build/financing-risk.mjs';
 const file=process.argv[2];if(!file)throw Error('Usage: node scripts/verify-complete-ranking.mjs universe.json [--stored]');
+const factorDetails={};
 const input=JSON.parse(fs.readFileSync(file,'utf8')),rows=[];
 for(const row of input.rows){
  const snapshot=applyFinancingRisk(JSON.parse(row.payload));
@@ -14,8 +15,9 @@ for(const row of input.rows){
  assert.equal(evaluation.score,Math.round(evaluation.factors.reduce((sum,factor)=>sum+Math.round(factor.score*100)*factor.weight,0)/10)/100,`${row.symbol}: exact arithmetic`);
  assert.deepEqual(evaluation,evaluateOpportunityDossier(structuredClone(snapshot),opportunityDossierFromSnapshot(structuredClone(snapshot))),row.symbol);
  if(process.argv.includes('--stored'))assert.deepEqual(evaluation,JSON.parse(row.evaluation).opportunity,`${row.symbol}: persisted evaluator parity`);
+ for(const factor of evaluation.factors){const detail=factorDetails[factor.id]??={numeric:0,positive:0,min:10,max:0};detail.numeric++;detail.positive+=factor.score>0;detail.min=Math.min(detail.min,factor.score);detail.max=Math.max(detail.max,factor.score);}
  rows.push({symbol:row.symbol,score:evaluation.score,hash:evaluation.evaluationHash,type:snapshot.securityType});
 }
 rows.sort((a,b)=>b.score-a.score||(a.symbol<b.symbol?-1:a.symbol>b.symbol?1:0));
 assert.equal(new Set(rows.map(row=>row.symbol)).size,rows.length);
-console.log(JSON.stringify({runId:input.runId,total:rows.length,missingFactors:0,missingFinalGrades:0,sorted:rows.length,positive:rows.filter(row=>row.score>0).length,zero:rows.filter(row=>row.score===0).length,types:[...new Set(rows.map(row=>row.type))],top:rows.slice(0,10),bottom:rows.slice(-3)},null,2));
+console.log(JSON.stringify({runId:input.runId,total:rows.length,factorDetails,missingFactors:0,missingFinalGrades:0,sorted:rows.length,positive:rows.filter(row=>row.score>0).length,zero:rows.filter(row=>row.score===0).length,types:[...new Set(rows.map(row=>row.type))],top:rows.slice(0,10),bottom:rows.slice(-3)},null,2));

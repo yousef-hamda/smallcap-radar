@@ -201,7 +201,8 @@ export function evaluateOpportunity(
       && coverageValid
       && candidate!.rationale.trim().length > 0
       && calculationValid
-      && sources.length > 0;
+      && sources.length > 0
+      && (!proxy || sources.length === (candidate?.sources ?? []).length);
     // A reviewed partial assessment is normalized to the full factor once.
     // Model grades already use their complete fixed component denominator.
     const model = models[spec.id]!;
