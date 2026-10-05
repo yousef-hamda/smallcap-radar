@@ -105,7 +105,7 @@ test('company profile consumes only the canonical Opportunity evaluation',async(
  const source=await readFile(path.join(root,'app/company-sheet.tsx'),'utf8');
  const route=await readFile(path.join(root,'app/api/company/route.ts'),'utf8');
  assert.match(source,/opportunityEvaluation\.factors\.map/);
- assert.match(source,/opportunityEvaluation\.score>0\?opportunityEvaluation\.score\.toFixed\(1\):'—'/);
+ assert.match(source,/opportunityEvaluation\.score\.toFixed\(1\)/);
  assert.match(source,/أدلة القوة المالية والسيولة/);assert.match(source,/unrestrictedCash/);assert.match(source,/النقص يمنع احتساب العامل/);
  assert.doesNotMatch(source,/evaluateStrategy|SPECS\.(core|bounce)|فرص الارتداد|القيمة الأساسية/);
  assert.match(route,/evaluateOpportunityDossier\(snapshot,opportunityDossierFromSnapshot\(snapshot\)\)/);

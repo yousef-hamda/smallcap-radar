@@ -788,10 +788,17 @@ test('stale scan-report scores are rebuilt from the saved dossier instead of dro
  assert.equal(recalculated.state,'ranked');assert.equal(recalculated.score,expected.score);assert.ok(recalculated.score>0);assert.equal(recalculated.coveragePct,100);
  assert.equal(currentOpportunityEvaluation(snapshot,recalculated,dossier),recalculated,'current-rubric stored evaluations are reused');
 });
+test('dossier evaluation always produces a complete algorithmic 100-point grade',()=>{
+ const evaluation=evaluateOpportunityDossier(opportunitySnapshot,{asOf:opportunitySnapshot.asOf});
+ assert.equal(evaluation.score>=0,true);assert.equal(evaluation.algorithmicCoveragePct,100);
+ assert.equal(evaluation.factors.every(factor=>typeof factor.score==='number' && factor.score>=0 && factor.score<=10),true);
+ assert.equal(evaluation.factors.reduce((sum,factor)=>sum+factor.points,0),evaluation.score);
+ assert.equal(evaluation.rankingEligible,false,'source safety and evidence gates remain separate from the algorithmic grade');
+});
 test('dossier orchestrator does not manufacture missing sections or combine different as-of cuts',()=>{
  const incomplete=completeOpportunityDossier();incomplete.earningsQuality.quarterly=incomplete.earningsQuality.quarterly.slice(1);
  const partial=evaluateOpportunityDossier(opportunitySnapshot,incomplete);
- assert.equal(partial.state,'needs-research');assert.equal(partial.factors.find(factor=>factor.id==='earningsQuality').score,null);assert.equal(partial.rankingEligible,false);
+ assert.equal(partial.state,'needs-research');assert.equal(partial.factors.find(factor=>factor.id==='earningsQuality').score,0);assert.equal(partial.factors.find(factor=>factor.id==='earningsQuality').proxy,true);assert.equal(partial.rankingEligible,false);
  const mismatched=completeOpportunityDossier();mismatched.catalysts={...mismatched.catalysts,asOf:'2026-09-29T12:00:00.000Z'};
  const result=evaluateOpportunityDossier(opportunitySnapshot,mismatched);
  assert.equal(result.state,'needs-research');assert.equal(result.factors.find(factor=>factor.id==='catalysts').score,0);assert.equal(result.factors.find(factor=>factor.id==='catalysts').proxy,true);assert.match(result.factors.find(factor=>factor.id==='catalysts').rationale,/timestamp does not match/);
@@ -811,7 +818,7 @@ test('unresolved SEC concept conflicts withhold provisional earnings points and 
  const snapshot={...opportunitySnapshot,opportunityResearch:{earnings:{providerStatus:'retrieved',coverage:{annualPeriodsFound:3,quarterlyPeriodsFound:8,selectedUnit:'USD'},annual:adapt(history.annual),quarterly:adapt(history.quarterly),missing:[],conflicts:['competing revenue concepts report different values'],limitations:[],readyForScoring:false}}};
  const evaluation=evaluateOpportunityDossier(snapshot,opportunityDossierFromSnapshot(snapshot));
  const factor=evaluation.factors.find(item=>item.id==='earningsQuality');
- assert.equal(factor.score,null);assert.equal(factor.points,0);assert.equal(factor.coveragePct,0);
+ assert.equal(factor.score,0);assert.equal(factor.proxy,true);assert.equal(factor.points,0);assert.equal(factor.coveragePct,0);
  assert.match(factor.rationale,/competing revenue concepts/);
  const signals=operatingCandidateSignals(snapshot);
  assert.equal(signals.eligibleForOperatingQueue,false);assert.equal(signals.revenueGrowth,null);
@@ -849,7 +856,7 @@ test('SEC financial-strength adapter derives only aligned debt, maturity, intere
  const snapshot={...opportunitySnapshot,opportunityResearch:{financialStrength:{providerStatus:'retrieved',metrics:unclassified.metrics,missing:unclassified.missing,conflicts:[],limitations:unclassified.limitations,readyForScoring:false}}};
  const dossier=opportunityDossierFromSnapshot(snapshot);assert.equal(dossier.financialStrength,undefined);
  const evaluation=evaluateOpportunityDossier(snapshot,dossier),factor=evaluation.factors.find(item=>item.id==='financialStrength');
- assert.equal(factor.score,null);assert.equal(factor.evidenced,false);assert.match(factor.rationale,/6\/6 available/);assert.match(factor.rationale,/operating-company classification/);
+ assert.equal(factor.score,0);assert.equal(factor.proxy,true);assert.equal(factor.evidenced,false);assert.match(factor.rationale,/6\/6 available/);assert.match(factor.rationale,/operating-company classification/);
 });
 test('dossier withholds fair value when its reference price or trading session differs from the screened quote',()=>{
  const roundingOnly=completeOpportunityDossier();roundingOnly.valuation={...roundingOnly.valuation,currentPrice:{...roundingOnly.valuation.currentPrice,value:10.01}};

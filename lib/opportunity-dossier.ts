@@ -258,6 +258,27 @@ export function evaluateOpportunityDossier(
       };
     }
   }
+  // Direct financial and earnings factors also receive a bounded zero proxy
+  // when their reviewed sections are absent or incomplete. This guarantees a
+  // deterministic overall 100-point algorithmic grade for every snapshot;
+  // source-reviewed coverage remains separately zero and ranking gates remain
+  // unchanged.
+  for (const factor of ['financialStrength', 'earningsQuality'] as const) {
+    const existing = evidence[factor];
+    if (!existing || existing.score == null) {
+      evidence[factor] = {
+        score: 0,
+        proxy: true,
+        coveragePct: 0,
+        rationale: `${existing?.rationale ?? 'No complete source-reviewed factor assessment is available.'} Deterministic fallback proxy score is zero; it is not a filing-level review.`,
+        sources: [],
+        confidence: 'low',
+        calculation: { rubricId: 'proxy-v1', inputs: [{ name: 'fallback', value: 'no-complete-reviewed-assessment' }] },
+        ...(existing?.conflicts?.length ? { conflicts: [...existing.conflicts] } : {}),
+      };
+    }
+  }
+
   const valuation = dossier.valuation;
   if (valuation) {
     const quote = snapshot.provenance.price;

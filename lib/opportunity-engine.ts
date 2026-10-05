@@ -7,8 +7,10 @@ export type OpportunityEvidence = {
   score: number | null;
   /** A deterministic subtotal based on available snapshot fields, not a reviewed dossier. */
   proxy?: boolean;
-  /** Share of this factor's fixed weight backed by evidence (0–100). */
+  /** Share of this factor's fixed weight backed by source-reviewed evidence (0–100). */
   coveragePct?: number;
+  /** Whether the algorithm produced a bounded grade for the factor (0–100). */
+  algorithmicCoveragePct?: number;
   rationale: string;
   sources: Provenance[];
   confidence?: 'low' | 'medium' | 'high';
@@ -31,6 +33,7 @@ export type OpportunityEvaluation = {
   score: number;
   evidencedWeight: number;
   coveragePct: number;
+  algorithmicCoveragePct: number;
   confidence: 'low' | 'medium' | 'high';
   rankingEligible: boolean;
   factors: Array<{
@@ -42,6 +45,7 @@ export type OpportunityEvaluation = {
     evidenced: boolean;
     complete: boolean;
     coveragePct: number;
+    algorithmicCoveragePct: number;
     confidence: 'low' | 'medium' | 'high';
     rationale: string;
     sources: Provenance[];
@@ -195,6 +199,7 @@ export function evaluateOpportunity(
       && calculationValid
       && sources.length > 0;
     const score = evidenced || proxy ? clamp(candidate!.score!, 0, 10) : null;
+    const algorithmicCoveragePct = score == null ? 0 : 100;
     const coveragePct = evidenced ? rawCoverage : 0;
     const points = score == null ? 0 : proxy && !evidenced
       ? score / 10 * spec.weight
@@ -210,6 +215,7 @@ export function evaluateOpportunity(
       evidenced,
       complete,
       coveragePct,
+      algorithmicCoveragePct,
       // Missing confidence on otherwise auditable evidence is uncertainty, not
       // proof of low-quality evidence. It can never contribute to high overall
       // confidence, but it may support medium confidence for a complete rank.
@@ -223,6 +229,7 @@ export function evaluateOpportunity(
   });
 
   const coveragePct = evidencedWeight;
+  const algorithmicCoveragePct = Math.round(factors.reduce((total, factor) => total + (factor.algorithmicCoveragePct * factor.weight / 100), 0) * 100) / 100;
   const requiredFactorsPresent = OPPORTUNITY_SPEC.requiredRankedFactors.every(id => factors.find(factor => factor.id === id)?.complete);
   const rankingEligible = !hardFailure
     && !hardUnknown
@@ -258,6 +265,7 @@ export function evaluateOpportunity(
     score,
     evidencedWeight,
     coveragePct,
+    algorithmicCoveragePct,
     confidence,
     rankingEligible,
     factors,
