@@ -794,7 +794,7 @@ test('dossier orchestrator does not manufacture missing sections or combine diff
  assert.equal(partial.state,'needs-research');assert.equal(partial.factors.find(factor=>factor.id==='earningsQuality').score,null);assert.equal(partial.rankingEligible,false);
  const mismatched=completeOpportunityDossier();mismatched.catalysts={...mismatched.catalysts,asOf:'2026-09-29T12:00:00.000Z'};
  const result=evaluateOpportunityDossier(opportunitySnapshot,mismatched);
- assert.equal(result.state,'needs-research');assert.equal(result.factors.find(factor=>factor.id==='catalysts').score,null);assert.match(result.factors.find(factor=>factor.id==='catalysts').rationale,/timestamp does not match/);
+ assert.equal(result.state,'needs-research');assert.equal(result.factors.find(factor=>factor.id==='catalysts').score,0);assert.equal(result.factors.find(factor=>factor.id==='catalysts').proxy,true);assert.match(result.factors.find(factor=>factor.id==='catalysts').rationale,/timestamp does not match/);
  assert.equal(evaluateOpportunityDossier({...opportunitySnapshot,asOf:'2026-09-30T12:00:01.000Z'},completeOpportunityDossier()).rankingEligible,false);
 });
 test('snapshot SEC earnings history contributes only the quantified earnings subtotal while review points remain uncovered',()=>{
@@ -856,24 +856,24 @@ test('dossier withholds fair value when its reference price or trading session d
  assert.equal(evaluateOpportunityDossier(opportunitySnapshot,roundingOnly).factors.find(factor=>factor.id==='valuation').evidenced,true,'one-cent formatting difference is tolerated');
  const differentPrice=completeOpportunityDossier();differentPrice.valuation={...differentPrice.valuation,currentPrice:{...differentPrice.valuation.currentPrice,value:10.2}};
  const priceMismatch=evaluateOpportunityDossier(opportunitySnapshot,differentPrice);
- assert.equal(priceMismatch.factors.find(factor=>factor.id==='valuation').score,null);
+ assert.equal(priceMismatch.factors.find(factor=>factor.id==='valuation').proxy,true);assert.ok(priceMismatch.factors.find(factor=>factor.id==='valuation').score>=0);
  assert.match(priceMismatch.factors.find(factor=>factor.id==='valuation').conflicts.join(' '),/differs from the screened quote/);
  const differentSession=completeOpportunityDossier();differentSession.valuation={...differentSession.valuation,currentPrice:{...differentSession.valuation.currentPrice,source:{...differentSession.valuation.currentPrice.source,periodEnd:'2026-09-28'}}};
  const sessionMismatch=evaluateOpportunityDossier(opportunitySnapshot,differentSession);
- assert.equal(sessionMismatch.factors.find(factor=>factor.id==='valuation').score,null);
+ assert.equal(sessionMismatch.factors.find(factor=>factor.id==='valuation').proxy,true);assert.ok(sessionMismatch.factors.find(factor=>factor.id==='valuation').score>=0);
  assert.match(sessionMismatch.factors.find(factor=>factor.id==='valuation').conflicts.join(' '),/session differs/);
 });
 test('dossier orchestrator requires catalyst assessment to match the selected horizon',()=>{
  const dossier=completeOpportunityDossier();dossier.catalysts={...dossier.catalysts,horizonMonths:12};
  const result=evaluateOpportunityDossier(opportunitySnapshot,dossier,{horizonMonths:6});
- assert.equal(result.state,'needs-research');assert.equal(result.factors.find(factor=>factor.id==='catalysts').score,null);
+ assert.equal(result.state,'needs-research');assert.equal(result.factors.find(factor=>factor.id==='catalysts').score,0);assert.equal(result.factors.find(factor=>factor.id==='catalysts').proxy,true);
  const aligned=completeOpportunityDossier();aligned.catalysts={...aligned.catalysts,horizonMonths:12};
  assert.equal(evaluateOpportunityDossier(opportunitySnapshot,aligned,{horizonMonths:12}).factors.find(factor=>factor.id==='catalysts').evidenced,true);
 });
 test('dossier orchestrator contains malformed section payloads as unscored research gaps',()=>{
  const dossier=completeOpportunityDossier();dossier.valuation={...dossier.valuation,methods:null};
  const result=evaluateOpportunityDossier(opportunitySnapshot,dossier);
- assert.equal(result.state,'needs-research');assert.equal(result.factors.find(factor=>factor.id==='valuation').score,null);
+ assert.equal(result.state,'needs-research');assert.equal(result.factors.find(factor=>factor.id==='valuation').score,0);assert.equal(result.factors.find(factor=>factor.id==='valuation').proxy,true);
  assert.match(result.factors.find(factor=>factor.id==='valuation').rationale,/calculator input error/);
 });
 

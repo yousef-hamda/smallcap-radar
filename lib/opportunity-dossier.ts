@@ -247,7 +247,16 @@ export function evaluateOpportunityDossier(
     const existing = evidence[factor];
     // A reviewed dossier outranks an automated proxy. Proxies fill only the
     // previously unscored qualitative factors.
-    if ((!existing || existing.score == null) && !(existing?.conflicts?.length)) evidence[factor] = candidate;
+    if (!existing || existing.score == null) {
+      // A proxy can provide a bounded provisional number even when reviewed
+      // evidence has conflicts. Preserve the conflict on the proxy so it stays
+      // visible and continues to block evidenced coverage and ranking.
+      evidence[factor] = {
+        ...candidate,
+        ...(existing?.rationale ? { rationale: `${existing.rationale} ${candidate.rationale}` } : {}),
+        ...(existing?.conflicts?.length ? { conflicts: [...existing.conflicts] } : {}),
+      };
+    }
   }
   const valuation = dossier.valuation;
   if (valuation) {
@@ -258,13 +267,19 @@ export function evaluateOpportunityDossier(
       && Math.abs(snapshot.price! - valuationQuote.value) <= tolerance;
     const sameSession = !!quote?.periodEnd && quote.periodEnd === valuationQuote.source.periodEnd;
     if (!samePrice || !sameSession) {
-      evidence.valuation = {
-        score: null,
-        rationale: 'Fair-value quote does not reconcile to the snapshot completed-session price and date.',
-        sources: [],
-        confidence: 'low',
-        conflicts: [!sameSession ? 'valuation price session differs from the screened quote' : 'valuation price differs from the screened quote beyond rounding tolerance'],
-      };
+      const conflict = !sameSession ? 'valuation price session differs from the screened quote' : 'valuation price differs from the screened quote beyond rounding tolerance';
+      const proxy = evidence.valuation;
+      evidence.valuation = proxy?.proxy
+        ? { ...proxy, rationale: `${proxy.rationale} Fair-value quote does not reconcile to the snapshot completed-session price and date.`, conflicts: [...(proxy.conflicts ?? []), conflict] }
+        : proxy?.score != null
+          ? { ...proxy, proxy: true, rationale: `${proxy.rationale} Fair-value quote does not reconcile to the snapshot completed-session price and date.`, conflicts: [...(proxy.conflicts ?? []), conflict] }
+          : {
+            score: null,
+            rationale: 'Fair-value quote does not reconcile to the snapshot completed-session price and date.',
+            sources: [],
+            confidence: 'low',
+            conflicts: [conflict],
+          };
     }
   }
   return evaluateOpportunity(snapshot, evidence, options);
