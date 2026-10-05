@@ -293,10 +293,10 @@ export function evaluateOpportunityDossier(
 export function currentOpportunityEvaluation(
   snapshot: Snapshot,
   saved: unknown,
-  dossier: OpportunityDossier = opportunityDossierFromSnapshot(snapshot),
+  dossier?: OpportunityDossier,
 ): OpportunityEvaluation {
   if (isCurrentOpportunityEvaluation(saved) && saved.asOf === snapshot.asOf) {
     return saved as OpportunityEvaluation;
   }
-  return evaluateOpportunityDossier(snapshot, dossier);
+  return evaluateOpportunityDossier(snapshot, dossier ?? opportunityDossierFromSnapshot(snapshot));
 }

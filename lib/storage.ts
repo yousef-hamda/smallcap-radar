@@ -8,17 +8,25 @@ import {OPPORTUNITY_SPEC,opportunitySpecHash} from './opportunity-spec';
 import {secUserAgentCacheVersion} from './sec-user-agent';
 export const db=()=>{const d=(env as any).DB;if(!d)throw Error('قاعدة البيانات غير متاحة');return d;};
 let schemaPromise:Promise<void>|null=null;
-type StateCacheEntry={expiresAt:number;value:any};
+type StateCacheEntry={expiresAt:number;value:any;bytes:number};
 const stateCache=new Map<string,StateCacheEntry>();
 const runSummaryCache=new Map<string,any>();
 const runCoverageCache=new Map<string,any>();
 const STATE_CACHE_TTL=5_000;
 const STATE_CACHE_LIMIT=64;
+const STATE_CACHE_BYTES=4*1024*1024;
 function evaluateSnapshotOpportunity(snapshot:Snapshot){return evaluateOpportunityDossier(snapshot,opportunityDossierFromSnapshot(snapshot));}
 export function invalidateStateCache(){stateCache.clear();runSummaryCache.clear();runCoverageCache.clear();}
 function rememberState(key:string,value:any){
- if(stateCache.size>=STATE_CACHE_LIMIT)stateCache.delete(stateCache.keys().next().value!);
- stateCache.set(key,{expiresAt:Date.now()+STATE_CACHE_TTL,value});
+ const bytes=JSON.stringify(value).length*2;
+ // Production payloads exceed 335 MB. Bound page-cache memory by bytes as
+ // well as entry count so traversing the whole universe cannot fill the heap.
+ if(bytes>STATE_CACHE_BYTES)return;
+ let used=[...stateCache.values()].reduce((sum,entry)=>sum+entry.bytes,0);
+ while(stateCache.size&&(stateCache.size>=STATE_CACHE_LIMIT||used+bytes>STATE_CACHE_BYTES)){
+  const oldest=stateCache.keys().next().value!;used-=stateCache.get(oldest)!.bytes;stateCache.delete(oldest);
+ }
+ stateCache.set(key,{expiresAt:Date.now()+STATE_CACHE_TTL,value,bytes});
 }
 export async function ensureSchema(){
  if(schemaPromise)return schemaPromise;

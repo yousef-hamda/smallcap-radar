@@ -7,7 +7,7 @@ import {Progress} from '@/components/ui/progress';
 import {Dialog,DialogContent,DialogTitle,DialogDescription,DialogClose} from '@/components/ui/dialog';
 import type {Snapshot} from '@/lib/engine';
 import {type OpportunityEvaluation,type OpportunityState} from '@/lib/opportunity-engine';
-import {currentOpportunityEvaluation,opportunityDossierFromSnapshot} from '@/lib/opportunity-dossier';
+import {currentOpportunityEvaluation} from '@/lib/opportunity-dossier';
 import {OPPORTUNITY_SPEC} from '@/lib/opportunity-spec';
 import {operatingCandidateSignals} from '@/lib/opportunity-candidates';
 import {OPPORTUNITY_SEC_PROGRESS_DETAIL,scanProgress,type ScanRun} from '@/lib/scan-progress';
@@ -56,7 +56,7 @@ export default function RadarApp(){
    }
    setData(payload);if(version===favoriteVersion.current&&!favoritePending.current)setFavorites(payload.favorites);setPortfolioCount(payload.portfolioCount??0);setHasMore(payload.page.hasMore);cursor.current=offset+snapshots.length;setError('');
    if(view==='opportunity'||view==='favorites')setRankBySymbol(old=>{const next=append?{...old}:{};snapshots.forEach((snapshot,index)=>{next[snapshot.symbol]=payload.rankPositions?.[index]??offset+index+1});return next});
-   if(view==='opportunity'||view==='favorites')setOpportunityBySymbol(old=>{const next=append?{...old}:{};snapshots.forEach((snapshot,index)=>{next[snapshot.symbol]=currentOpportunityEvaluation(snapshot,payload.storedEvaluations?.[index]?.opportunity,opportunityDossierFromSnapshot(snapshot))});return next});
+   if(view==='opportunity'||view==='favorites')setOpportunityBySymbol(old=>{const next=append?{...old}:{};snapshots.forEach((snapshot,index)=>{next[snapshot.symbol]=currentOpportunityEvaluation(snapshot,payload.storedEvaluations?.[index]?.opportunity)});return next});
    setRows(old=>append?[...old,...snapshots.filter(s=>!old.some(p=>p.symbol===s.symbol))]:snapshots);
    void saveOffline({savedAt:new Date().toISOString(),run:payload.dataRun,snapshots:payload.snapshots}).catch(()=>{});
   }catch(e){if(!controller.signal.aborted)setError(e instanceof Error?e.message:'تعذّر تحميل البيانات');}
@@ -128,7 +128,7 @@ export default function RadarApp(){
  }
  async function openCompany(s:Snapshot){
   selection.current?.abort();const controller=new AbortController();selection.current=controller;
-  setSelected(s);setSelectedOpportunity(currentOpportunityEvaluation(s,opportunityBySymbol[s.symbol],opportunityDossierFromSnapshot(s)));setDetailLoading(true);setDetailError('');
+  setSelected(s);setSelectedOpportunity(currentOpportunityEvaluation(s,opportunityBySymbol[s.symbol]));setDetailLoading(true);setDetailError('');
   try{const p=await request<{snapshot:Snapshot;evaluation:OpportunityEvaluation}>(`/api/company?symbol=${encodeURIComponent(s.symbol)}`,{signal:controller.signal});if(!controller.signal.aborted){syncCardQuote(p.snapshot);setSelected(p.snapshot);setSelectedOpportunity(p.evaluation)}}
   catch(e){if(!controller.signal.aborted)setDetailError(e instanceof Error?e.message:'تعذّر تحديث الملف')}
   finally{if(!controller.signal.aborted)setDetailLoading(false)}
@@ -161,9 +161,9 @@ export default function RadarApp(){
    }else {await request('/api/push/test',post({endpoint:subscription!.endpoint}));setNotice('قبل مزود الإشعارات رسالة الاختبار؛ تأكد من وصولها على جهازك.');}
   }catch(e){setError(e instanceof Error?e.message:'تعذّر إرسال الإشعار')}finally{setNotificationBusy(false)}
  }
- function exportData(){const blob=new Blob([JSON.stringify({run:data?.dataRun,strategy:OPPORTUNITY_SPEC,state:opportunityState,results:rows.map(s=>({snapshot:s,rank:rankBySymbol[s.symbol],evaluation:currentOpportunityEvaluation(s,opportunityBySymbol[s.symbol],opportunityDossierFromSnapshot(s))}))},null,2)],{type:'application/json'});const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='radar-opportunity-results.json';a.click();URL.revokeObjectURL(url)}
+ function exportData(){const blob=new Blob([JSON.stringify({run:data?.dataRun,strategy:OPPORTUNITY_SPEC,state:opportunityState,results:rows.map(s=>({snapshot:s,rank:rankBySymbol[s.symbol],evaluation:currentOpportunityEvaluation(s,opportunityBySymbol[s.symbol])}))},null,2)],{type:'application/json'});const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='radar-opportunity-results.json';a.click();URL.revokeObjectURL(url)}
  async function importFile(file?:File){if(!file)return;setBusy(true);try{if(file.size>4_000_000)throw Error('الحد الأقصى 4 MB');const value=JSON.parse(await file.text());const records=Array.isArray(value)?value:Array.isArray(value.results)?value.results.map((row:{snapshot:Snapshot})=>row.snapshot):value.snapshots;await request('/api/radar',post({action:'import',records}));await refresh();setNotice('حُفظت اللقطة وأُعيد تقييمها.')}catch(e){setError(String(e))}finally{setBusy(false)}}
- const evaluated=useMemo(()=>rows.map(s=>({s,e:currentOpportunityEvaluation(s,opportunityBySymbol[s.symbol],opportunityDossierFromSnapshot(s))})),[rows,opportunityBySymbol]);
+ const evaluated=useMemo(()=>rows.map(s=>({s,e:currentOpportunityEvaluation(s,opportunityBySymbol[s.symbol])})),[rows,opportunityBySymbol]);
  // Keep the API state filter invariant at the rendering boundary too.
  const visibleEvaluated=useMemo(()=>view==='favorites'?evaluated:view==='opportunity'?evaluated.filter(({e})=>e.state===opportunityState):[],[evaluated,view,opportunityState]);
  return <div className="radar-app" dir="rtl">
