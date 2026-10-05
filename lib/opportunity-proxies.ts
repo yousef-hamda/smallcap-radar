@@ -35,6 +35,7 @@ function evidence(
   const sources = sourceFor(snapshot, keys);
   return {
     score: clamp(score),
+    proxy: true,
     coveragePct,
     rationale: `${rationale} Deterministic proxy score; it is not a filing-level qualitative review.`,
     sources,
@@ -98,6 +99,19 @@ export function proxyOpportunityEvidence(snapshot: Snapshot): OpportunityEvidenc
   if (finite(snapshot.price) && finite(snapshot.low52w) && finite(snapshot.high52w) && snapshot.high52w > snapshot.low52w) { technicalKeys.push('price', 'low52w', 'high52w'); const position = (snapshot.price - snapshot.low52w) / (snapshot.high52w - snapshot.low52w); technical += clamp((position - 0.5) * 4, -2, 2); }
   if (finite(snapshot.return12m)) { technicalKeys.push('return12m'); technical += clamp(snapshot.return12m * 4, -2, 2); }
   if (technicalKeys.length) output.technicalTiming = evidence(technical, technicalKeys.length, 3, technicalKeys, snapshot, 'Technical proxy combines price versus 30-week average, 52-week range position, and trailing return.', technicalKeys.map(key => ({ name: key, value: Number(snapshot[key]) })));
+
+  // Every factor receives a deterministic worst-case proxy when no usable
+  // input exists. This supplies a numeric provisional grade without claiming
+  // that evidence was found; the evaluator keeps its evidence coverage at 0.
+  const fallback: Array<[keyof OpportunityEvidenceSet, string]> = [
+    ['valuation', 'No valuation inputs are available; provisional proxy is zero.'],
+    ['catalysts', 'No dated growth or catalyst inputs are available; provisional proxy is zero.'],
+    ['competitivePosition', 'No margin or growth inputs are available; provisional proxy is zero.'],
+    ['downsideRisk', 'No balance-sheet or financing-risk inputs are available; provisional proxy is zero.'],
+    ['management', 'No alignment or execution inputs are available; provisional proxy is zero.'],
+    ['technicalTiming', 'No permitted technical inputs are available; provisional proxy is zero.'],
+  ];
+  for (const [id, rationale] of fallback) if (!output[id]) output[id] = evidence(0, 0, 3, [], snapshot, rationale, []);
 
   return output;
 }

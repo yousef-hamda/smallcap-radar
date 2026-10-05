@@ -5,6 +5,8 @@ import { INVESTABLE_EXCHANGES } from './strategy-spec';
 
 export type OpportunityEvidence = {
   score: number | null;
+  /** A deterministic subtotal based on available snapshot fields, not a reviewed dossier. */
+  proxy?: boolean;
   /** Share of this factor's fixed weight backed by evidence (0–100). */
   coveragePct?: number;
   rationale: string;
@@ -45,6 +47,7 @@ export type OpportunityEvaluation = {
     sources: Provenance[];
     calculation?: OpportunityEvidence['calculation'];
     conflicts: string[];
+    proxy?: boolean;
   }>;
   checks: Array<{ id: string; status: Status; role: 'eligibility' | 'evidence'; explanation: string }>;
   reason: string;
@@ -181,6 +184,8 @@ export function evaluateOpportunity(
       && candidate.calculation.inputs.every(input => !!input.name.trim() && (typeof input.value === 'string' || finite(input.value)));
     const rawCoverage = candidate?.coveragePct ?? 100;
     const coverageValid = finite(rawCoverage) && rawCoverage > 0 && rawCoverage <= 100;
+    const proxy = candidate?.proxy === true && finite(candidate?.score)
+      && candidate!.score! >= 0 && candidate!.score! <= 10;
     const evidenced = conflicts.length === 0
       && finite(candidate?.score)
       && candidate!.score >= 0
@@ -189,9 +194,11 @@ export function evaluateOpportunity(
       && candidate!.rationale.trim().length > 0
       && calculationValid
       && sources.length > 0;
-    const score = evidenced ? clamp(candidate!.score!, 0, 10) : null;
+    const score = evidenced || proxy ? clamp(candidate!.score!, 0, 10) : null;
     const coveragePct = evidenced ? rawCoverage : 0;
-    const points = score == null ? 0 : score / 10 * spec.weight * coveragePct / 100;
+    const points = score == null ? 0 : proxy && !evidenced
+      ? score / 10 * spec.weight
+      : score / 10 * spec.weight * coveragePct / 100;
     const complete = evidenced && coveragePct === 100;
     if (evidenced) evidencedWeight += spec.weight * coveragePct / 100;
     return {
@@ -211,6 +218,7 @@ export function evaluateOpportunity(
       sources,
       ...(calculationValid ? { calculation: candidate!.calculation } : {}),
       conflicts,
+      ...(proxy ? { proxy: true } : {}),
     };
   });
 

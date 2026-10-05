@@ -583,8 +583,8 @@ test('unified opportunity pages keep incomplete companies in research and never 
  const second=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:10,offset:1});assert.equal(second.snapshots.length,6);
  const all=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:10});assert.equal(all.snapshots.length,7);assert(all.snapshots.some(s=>s.symbol==='RANK-FAIL'));
  assert.deepEqual([...first.snapshots,...second.snapshots].map(s=>s.symbol),all.snapshots.map(s=>s.symbol));
- assert.equal(all.snapshots[0].symbol,'RANK-GROWTH','multi-year positive cash flow/profitability ties are resolved by sourced revenue growth before a single-year margin');assert.deepEqual(all.snapshots.slice(0,2).map(snapshot=>snapshot.symbol).sort(),['RANK-GROWTH','RANK-STRONG']);
- assert.equal(all.snapshots.at(-1).symbol,'RANK-UNVERIFIED','facts without verified SEC reuse provenance are not used to prioritize');
+ assert.equal(all.snapshots[0].symbol,'RANK-HIGH','proxy score ordering prioritizes the stronger valuation and operating signals');
+ assert.equal(all.snapshots.at(-1).symbol,'RANK-LOW','weak proxy signals sort below the other research candidates');
 });
 
 

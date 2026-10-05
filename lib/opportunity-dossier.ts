@@ -247,7 +247,7 @@ export function evaluateOpportunityDossier(
     const existing = evidence[factor];
     // A reviewed dossier outranks an automated proxy. Proxies fill only the
     // previously unscored qualitative factors.
-    if (!existing || existing.score == null) evidence[factor] = candidate;
+    if ((!existing || existing.score == null) && !(existing?.conflicts?.length)) evidence[factor] = candidate;
   }
   const valuation = dossier.valuation;
   if (valuation) {

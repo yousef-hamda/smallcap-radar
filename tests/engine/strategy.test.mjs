@@ -597,13 +597,13 @@ test('technical research builds completed multi-timeframe bars and preserves the
  assert.equal(restricted.score.score,null);assert.ok(restricted.missing.some(value=>/redistribution rights are not verified/.test(value)));
  const snapshot={...opportunitySnapshot,asOf,opportunityResearch:{technicalTiming:restricted}};
  const dossier=opportunityDossierFromSnapshot(snapshot),evaluation=evaluateOpportunityDossier(snapshot,dossier);
- const factor=evaluation.factors.find(item=>item.id==='technicalTiming');assert.equal(factor.score,null);assert.match(factor.rationale,/redistribution rights are not verified/);
+ const factor=evaluation.factors.find(item=>item.id==='technicalTiming');assert.equal(factor.score,0);assert.equal(factor.proxy,true);assert.match(factor.rationale,/(redistribution rights are not verified|No permitted technical inputs are available)/);
  const compactResearch={...restricted};delete compactResearch.assessment;
  const compactSnapshot={...opportunitySnapshot,asOf,opportunityResearch:{technicalTiming:compactResearch}};
  const compactEvaluation=evaluateOpportunityDossier(compactSnapshot,opportunityDossierFromSnapshot(compactSnapshot));
  const compactFactor=compactEvaluation.factors.find(item=>item.id==='technicalTiming');
- assert.equal(compactFactor.score,null,'compact scans retain the derived score result without persisting raw bars');
- assert.match(compactFactor.rationale,/redistribution rights are not verified/);
+ assert.equal(compactFactor.score,0,'compact scans receive a zero proxy without persisting raw bars');assert.equal(compactFactor.proxy,true);
+ assert.match(compactFactor.rationale,/(redistribution rights are not verified|No permitted technical inputs are available)/);
  assert.equal(compactResearch.dailyBars,restricted.dailyBars);assert.equal(compactResearch.benchmarkBars,restricted.benchmarkBars);
  const licensed=buildTechnicalTimingResearch({...args,rightsStatus:'redistribution-permitted'});
  assert.ok(licensed.score.score>0);assert.equal(licensed.assessment?.daily.at(-1)?.date,dates.at(-1));
@@ -636,7 +636,7 @@ test('recent SEC filing metadata is surfaced for catalyst research without creat
  const filing={providerStatus:'retrieved',items:[{form:'8-K',filed:'2026-09-20',accession:'0000000001-26-000001',title:'SEC filing: 8-K filed 2026-09-20',url:'https://www.sec.gov/Archives/edgar/data/1/000000000126000001/current.htm'}],source:opportunityProvenance,limitations:['Metadata only; review the filing body.']};
  const snapshot={...opportunitySnapshot,opportunityResearch:{secFilings:filing}},dossier=opportunityDossierFromSnapshot(snapshot),evaluation=evaluateOpportunityDossier(snapshot,dossier);
  assert.equal(dossier.catalysts,undefined);assert.match(dossier.researchNotes.catalysts,/discovery aid only/);
- const factor=evaluation.factors.find(item=>item.id==='catalysts');assert.equal(factor.score,null);assert.match(factor.rationale,/No catalyst score may be inferred/);
+ const factor=evaluation.factors.find(item=>item.id==='catalysts');assert.equal(factor.score,0);assert.equal(factor.proxy,true);assert.match(factor.rationale,/(No catalyst score may be inferred|No dated growth or catalyst inputs are available)/);
 });
 test('qualitative competitive and management factors require five sourced dimensions and expose analyst judgment',()=>{
  const competitiveIds=['product-differentiation','customer-evidence','switching-advantage','competitive-durability','substitution-risk'];const assessments=competitiveIds.map((id,index)=>({id,score:6+index%3,rationale:`Reviewed source-backed assessment: ${id}`,sources:[opportunityProvenance]}));

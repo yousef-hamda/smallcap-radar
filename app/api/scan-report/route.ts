@@ -34,7 +34,7 @@ export async function GET(req:Request){
    const counts=await database.prepare(`SELECT COUNT(*) AS total,
     SUM(CASE WHEN json_extract(evaluation,'$.opportunity.state')='ranked' THEN 1 ELSE 0 END) AS passed,
     SUM(CASE WHEN json_extract(evaluation,'$.opportunity.state')='excluded' THEN 1 ELSE 0 END) AS failed,
-    SUM(CASE WHEN json_extract(evaluation,'$.opportunity.score')>0 THEN 1 ELSE 0 END) AS withEvidence
+    SUM(CASE WHEN EXISTS(SELECT 1 FROM json_each(evaluation,'$.opportunity.factors') f WHERE json_extract(f.value,'$.evidenced')=1) THEN 1 ELSE 0 END) AS withEvidence
     FROM fundamental_snapshots WHERE run_id=?`).bind(runId).first() as any;
    const total=Number(counts?.total||0),passed=Number(counts?.passed||0),failed=Number(counts?.failed||0);
    const missingRows=(await database.prepare(`SELECT json_extract(f.value,'$.id') AS id,
