@@ -1,0 +1,258 @@
+{
+  "verifiedAtUTC": "2026-10-05T22:33:17.272621+00:00",
+  "productionURL": "https://smallcap-radar-production.up.railway.app/",
+  "deploymentId": "e5b84029-4167-4170-b7c3-9f7c3cdca494",
+  "applicationCommit": "434b3a3ce7227760e4970734c13812efd98c3abd",
+  "rubricVersion": "1.0.3-deterministic-universe-ranking",
+  "rubricHash": "b657e2a5",
+  "fixedWeights": [
+    25,
+    20,
+    15,
+    12,
+    10,
+    10,
+    5,
+    3
+  ],
+  "completeUniverse": {
+    "total": 6954,
+    "numericFactorGrades": 55632,
+    "missingFactorScores": 0,
+    "missingFinalGrades": 0,
+    "includedInSorting": 6954,
+    "rankMin": 1,
+    "rankMax": 6954,
+    "positiveFinalGrades": 6359,
+    "zeroFinalGrades": 595,
+    "uniqueEvaluationHashes": 6954,
+    "uniqueSnapshotHashes": 6954,
+    "types": {
+      "common": 5274,
+      "adr": 315,
+      "unit": 296,
+      "warrant": 374,
+      "right": 107,
+      "unknown": 382,
+      "preferred": 129,
+      "fund": 66,
+      "debt": 11
+    }
+  },
+  "factorDetails": {
+    "valuation": {
+      "numeric": 6954,
+      "positive": 4106,
+      "min": 0,
+      "max": 9.3
+    },
+    "catalysts": {
+      "numeric": 6954,
+      "positive": 2980,
+      "min": 0,
+      "max": 8
+    },
+    "financialStrength": {
+      "numeric": 6954,
+      "positive": 3021,
+      "min": 0,
+      "max": 10
+    },
+    "earningsQuality": {
+      "numeric": 6954,
+      "positive": 1719,
+      "min": 0,
+      "max": 10
+    },
+    "competitivePosition": {
+      "numeric": 6954,
+      "positive": 2912,
+      "min": 0,
+      "max": 7
+    },
+    "downsideRisk": {
+      "numeric": 6954,
+      "positive": 4646,
+      "min": 0,
+      "max": 7
+    },
+    "management": {
+      "numeric": 6954,
+      "positive": 4431,
+      "min": 0,
+      "max": 4
+    },
+    "technicalTiming": {
+      "numeric": 6954,
+      "positive": 5936,
+      "min": 0,
+      "max": 10
+    }
+  },
+  "canonicalRunId": "9c059528-f468-4086-8c1e-927456f8599a",
+  "snapshotAsOfMin": "2026-10-03T09:14:52.690Z",
+  "snapshotAsOfMax": "2026-10-03T11:44:47.862Z",
+  "orderedGradeHashSHA256": "4439aad5ffdd92a8755827889f5f8f7df94f5c1151be4f2fd369931ca7b38b64",
+  "productionAPI": {
+    "result": "PASS",
+    "runId": "9c059528-f468-4086-8c1e-927456f8599a",
+    "total": 6954,
+    "missingFactors": 0,
+    "missingFinalGrades": 0,
+    "sorted": 6954,
+    "radar": 6954,
+    "reports": 6954,
+    "profiles": 6954,
+    "rankMin": 1,
+    "rankMax": 6954,
+    "version": "1.0.3-deterministic-universe-ranking",
+    "rubricHash": "b657e2a5",
+    "positive": 6359,
+    "zero": 595,
+    "top": [
+      {
+        "symbol": "AII",
+        "score": 67.34,
+        "rank": 1
+      },
+      {
+        "symbol": "XYF",
+        "score": 64.12,
+        "rank": 2
+      },
+      {
+        "symbol": "CGEN",
+        "score": 62.18,
+        "rank": 3
+      },
+      {
+        "symbol": "CELH",
+        "score": 61.26,
+        "rank": 4
+      },
+      {
+        "symbol": "SLDE",
+        "score": 61.04,
+        "rank": 5
+      },
+      {
+        "symbol": "MNDY",
+        "score": 59.44,
+        "rank": 6
+      },
+      {
+        "symbol": "BUSEP",
+        "score": 58.74,
+        "rank": 7
+      },
+      {
+        "symbol": "OFAL",
+        "score": 58.46,
+        "rank": 8
+      },
+      {
+        "symbol": "CNX",
+        "score": 57.42,
+        "rank": 9
+      },
+      {
+        "symbol": "PAYS",
+        "score": 57.13,
+        "rank": 10
+      }
+    ],
+    "reload": "PASS"
+  },
+  "fullBrowser": {
+    "backgroundRefresh": "PASS",
+    "result": "PASS",
+    "rendered": 6954,
+    "apiGrades": 6954,
+    "factorGrades": 55632,
+    "mismatches": 0,
+    "examples": [],
+    "first": "AII",
+    "last": "ZNB",
+    "zeroGrades": 595,
+    "hasMore": false,
+    "viewportWidth": 1440,
+    "documentWidth": 1440
+  },
+  "mobile": {
+    "result": "PASS",
+    "viewport": "390x844",
+    "overflow": false,
+    "reload": {
+      "width": 390,
+      "document": 390,
+      "cards": 40,
+      "first": "AII",
+      "score": "67.34"
+    },
+    "pagination": {
+      "cards": 80,
+      "ranks": "1\u201380"
+    }
+  },
+  "profileAndReportUI": {
+    "result": "PASS",
+    "profiles": [
+      {
+        "symbol": "AII",
+        "score": "67.34",
+        "factors": 8
+      },
+      {
+        "symbol": "ZNB",
+        "score": "0.00",
+        "factors": 8
+      }
+    ],
+    "report": {
+      "firstPage": 25,
+      "firstPageFactors": 200,
+      "secondPageFirstRank": 26
+    },
+    "pageErrors": [],
+    "width": {
+      "viewport": 390,
+      "document": 390
+    }
+  },
+  "sourceResearchFindingsSeparateFromRanking": {
+    "needs-research": 5971,
+    "excluded": 983
+  },
+  "testResults": {
+    "engine": {
+      "passed": 171,
+      "failed": 0
+    },
+    "runtimeAPI": {
+      "passed": 70,
+      "failed": 0
+    },
+    "repositoryUI": {
+      "passed": 48,
+      "failed": 0
+    },
+    "research": {
+      "passed": 5,
+      "failed": 0
+    },
+    "database": {
+      "passed": 4,
+      "failed": 0
+    },
+    "build": "PASS",
+    "typecheck": "PASS",
+    "lint": "PASS",
+    "whitespace": "PASS"
+  },
+  "githubCI": {
+    "conclusion": "success",
+    "url": "https://github.com/yousef-hamda/smallcap-radar/actions/runs/37381110911",
+    "headSha": "434b3a3ce7227760e4970734c13812efd98c3abd"
+  },
+  "remainingRequiredFailures": []
+}

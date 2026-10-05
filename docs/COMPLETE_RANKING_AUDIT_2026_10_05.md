@@ -65,7 +65,7 @@ State caches are bounded by serialized bytes as well as entry count. Summary/sou
 | `npm run lint` | Passed, no errors/warnings after ignoring local verification artifacts |
 | `git diff --check` | Passed |
 | `verify-complete-ranking.mjs` on all original production payloads | 6,954 complete deterministic ratings; no missing factors/finals |
-| GitHub Verify radar for deployed code `325c579` | Run `37379031180`, success (Node 24 / Linux) |
+| GitHub Verify radar for deployed code `434b3a3` | Run `37381110911`, success (Node 24 / Linux) |
 
 Meaningful acceptance coverage includes all nine stock types, 256 missing-factor combinations per type, empty/partial/malformed data, stale/future/invalid provenance, actual conflicts versus absent qualitative review, fixed weights, exact half-cent rounding, saved-corruption repair, materialization revision triggers, search ranks, API/report/profile parity, pagination, reloads, scan completion, favorites and Arabic rendering. Runtime integration checks a 260-listing universe on every surface. Production verification below uses every real listing rather than a sample.
 
@@ -74,3 +74,80 @@ Earlier failed checks were resolved: lint variable declarations, malformed histo
 The exhaustive report traversal exposed a repeated full-payload conflict-count query. It now caches the count by run mutation revision, with bounded entries; a regression verifies reuse and update/delete invalidation. Report UI calls these source and safety findings independently of final grades. The first exhaustive browser run reached all 6,954 rows but its ten-minute background refresh then collapsed the list to 40 rows just before validation. Automatic Opportunity refresh now updates scan metadata only, preserving all loaded canonical pages. Active scan completion and explicit refresh still replace the snapshot. Final browser verification explicitly invokes the ten-minute callback and checks row retention.
 
 Mobile profile navigation exposed an invisible full-card button covered by factor boxes. The ticker is now a visible semantic button with focus indication; copy/favorite controls retain their independent actions. The corrected production path is checked against canonical positive and zero-grade profiles.
+
+## Waves 6–7: final production verification
+
+Verified against final Railway deployment **`e5b84029-4167-4170-b7c3-9f7c3cdca494`**, SUCCESS, application commit **`434b3a3ce7227760e4970734c13812efd98c3abd`**. Active rubric **`1.0.3-deterministic-universe-ranking`**, hash **`b657e2a5`**. All application changes are committed and pushed to `origin/master`; this final verification/handoff record is committed after observing the deployment.
+
+| Acceptance measurement | Result |
+|---|---:|
+| Complete production listings | 6,954 |
+| Numeric factor grades | 55,632 |
+| Missing factor grades | 0 |
+| Missing final grades | 0 |
+| Saved complete evaluations | 6,954 |
+| Unique evaluation / snapshot hashes | 6,954 / 6,954 |
+| Included in final sorting | 6,954 |
+| Gap-free rank range | 1–6,954 |
+| Positive / zero final grades | 6,359 / 595 |
+| Persisted-versus-evaluator deep comparisons | 6,954 passed |
+| Deployed radar rows checked against persistence | 6,954 passed |
+| Deployed scan-report rows checked against persistence | 6,954 passed |
+| Deployed company-profile responses checked against persistence | 6,954 passed |
+| Public browser ranking rows / factors checked against their API grades | 6,954 / 55,632 passed |
+| Display/sort/arithmetic/rank mismatches | 0 |
+
+Every factor has varied positive observed signals; none is accidentally always zero. Numeric counts per factor are all 6,954. Positive counts/ranges: valuation 4,106 (0–9.30); catalysts 2,980 (0–8); financial strength 3,021 (0–10); earnings quality 1,719 (0–10); competitive position 2,912 (0–7); downside risk 4,646 (0–7); management 4,431 (0–4); technical timing 5,936 (0–10). All nine listing types remain present. Source research findings are separately preserved as 5,971 requiring review and 983 with safety exclusions; the primary final-ranked count is 6,954, with zero research-only or excluded membership in final sorting.
+
+The production service verifier reads the durable SQLite evaluations/rank table and traverses every deployed radar, report and profile handler; repeated reads agree. A separate full replay compares every saved evaluation—including all traces and hashes—to the evaluator on macOS Node 22.21 versus production Linux Node 22.23.2. GitHub CI also passes on Linux Node 24. Ordered `(symbol, grade, evaluationHash, snapshotHash)` SHA-256 is `4439aad5ffdd92a8755827889f5f8f7df94f5c1151be4f2fd369931ca7b38b64`.
+
+Playwright drove the public UI through all 174 actual ranking pages (40 rows per page, final page 34), verifying every displayed final grade, every factor grade, exact fixed-weight arithmetic and global rank. It retained all 595 zero grades and ended at #6,954 ZNB / 0.00. The ten-minute background callback was explicitly invoked; all loaded rows remained. Desktop width 1,440 and mobile width 390 have no horizontal overflow. Mobile reload retained the same first grade (AII 67.34), pagination retained ranks 1–80, actual ticker opening showed AII 67.34 and ZNB 0.00 with eight matching factors, and report pages showed canonical grades/ranks. No page errors occurred in profile/report checks. Every production financial-strength and technical source section (6,954 each) has valid arrays/objects for the corresponding UI path. Screenshots remain in ignored `output/playwright/`.
+
+The backfill was completed without requiring a scan. Persistence was checked after explicit service restarts and replacement deployments. The final deployment was then queried in full; it reuses the durable complete grades/ranks. Data snapshot dates remain 2026-10-03 (09:14:52–11:44:47 UTC); no claim of refreshed live quotes or complete qualitative research is made. Missing factual fields remain missing and missing model components earn zero. Source confidence/rights/safety limitations remain visible. The rating is the actual final comparative mathematical grade, not a probability or an independently validated prediction.
+
+Machine-readable final counts, factor statistics, API/browser/reload results, CI identity and deployment identity are in [the verification record](COMPLETE_RANKING_PRODUCTION_VERIFICATION_2026_10_06.json). **Remaining required scoring/ranking failures: none.**
+
+## Changed files
+
+- `.gitignore`
+- `HANDOFF.md`
+- `README.md`
+- `app/api/company/route.ts`
+- `app/api/export/route.ts`
+- `app/api/scan-report/route.ts`
+- `app/company-sheet.tsx`
+- `app/globals.css`
+- `app/page.tsx`
+- `app/scan-report.tsx`
+- `db/schema.ts`
+- `docs/ACCEPTANCE.md`
+- `docs/COMPLETE_RANKING_AUDIT_2026_10_05.md`
+- `docs/COMPLETE_RANKING_MODEL_2026_10_06.md`
+- `docs/COMPLETE_RANKING_PRODUCTION_VERIFICATION_2026_10_06.json`
+- `docs/FREE_DATA_COVERAGE_AND_PROVIDER_PLAN_2026_09_29.md`
+- `docs/OPERATIONS_MEMORY.md`
+- `docs/OPPORTUNITY_FREE_COMPLETION_STUDY_2026_10_03.md`
+- `docs/OPPORTUNITY_FREE_DATA_SOURCE_AUDIT_2026_10_02.md`
+- `docs/PROJECT_MEMORY.md`
+- `docs/QUALITATIVE_FACTOR_PROXY_METHOD_2026_10_05.md`
+- `docs/UNIFIED_OPPORTUNITY_CATEGORY_PLAN_2026_09_30.md`
+- `docs/UNIFIED_OPPORTUNITY_ROOT_CAUSE_AND_COMPLETION_PLAN_2026_10_03.md`
+- `docs/UNIFIED_OPPORTUNITY_SCORING_RUBRIC_2026_09_30.md`
+- `drizzle/0009_complete_universe_ranking.sql`
+- `drizzle/meta/0009_snapshot.json`
+- `drizzle/meta/_journal.json`
+- `eslint.config.mjs`
+- `lib/opportunity-dossier.ts`
+- `lib/opportunity-engine.ts`
+- `lib/opportunity-market.ts`
+- `lib/opportunity-proxies.ts`
+- `lib/opportunity-spec.ts`
+- `lib/source-registry.ts`
+- `lib/storage.ts`
+- `scripts/test-engine.mjs`
+- `scripts/verify-complete-ranking.mjs`
+- `scripts/verify-production-ranking.mjs`
+- `tests/engine/strategy.test.mjs`
+- `tests/runtime/regression.mjs`
+- `tests/test_database.py`
+- `tests/ui-components.test.mjs`

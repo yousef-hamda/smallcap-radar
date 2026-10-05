@@ -1,6 +1,8 @@
-# Current acceptance contract
+# Current acceptance contract — production verified 2026-10-06
 
 The complete mathematical ranking requirements in [the 2026-10-05 audit](COMPLETE_RANKING_AUDIT_2026_10_05.md) supersede earlier requirements that used source completeness as a ranking filter. All eight grades and the final grade are required for every listing. Evidence sufficiency and investment safety remain separate findings. Entries below are historical.
+
+Final deployment `e5b84029-4167-4170-b7c3-9f7c3cdca494` / rubric `1.0.3-deterministic-universe-ranking` passed all current checks: 6,954 saved/API/report/profile/UI ratings; 55,632 numeric factors; zero missing factors/final grades; 6,954 sorted listings. [Machine-readable evidence](COMPLETE_RANKING_PRODUCTION_VERIFICATION_2026_10_06.json). No required ranking/scoring acceptance failure remains.
 
 # Acceptance ledger — 2026-09-10
 
