@@ -19,7 +19,7 @@ for(const [index,row] of rows.entries()){
  for(const [factorIndex,factor] of evaluation.factors.entries()){
   assert.equal(factor.weight,weights[factorIndex]);assert.ok(Number.isFinite(factor.score)&&factor.score>=0&&factor.score<=10);assert.ok(Math.abs(factor.points-factor.score*factor.weight/10)<1e-8);assert.ok(factor.calculation?.inputs?.length);
  }
- assert.equal(evaluation.score,Math.round(evaluation.factors.reduce((sum,factor)=>sum+factor.score*factor.weight/10,0)*100)/100);
+ assert.equal(evaluation.score,Math.round(evaluation.factors.reduce((sum,factor)=>sum+Math.round(factor.score*100)*factor.weight,0)/10)/100);
  if(index){const previous=rows[index-1];assert.ok(previous.score>row.score||(previous.score===row.score&&previous.symbol<row.symbol));}
  bySymbol.set(row.symbol,{evaluation,rank:row.rank_position});
 }

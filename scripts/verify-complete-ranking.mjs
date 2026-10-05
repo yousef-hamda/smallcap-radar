@@ -11,6 +11,7 @@ for(const row of input.rows){
  const snapshot=applyFinancingRisk(JSON.parse(row.payload));
  const evaluation=evaluateOpportunityDossier(snapshot,opportunityDossierFromSnapshot(snapshot));
  assert.ok(isCurrentOpportunityEvaluation(evaluation),row.symbol);
+ assert.equal(evaluation.score,Math.round(evaluation.factors.reduce((sum,factor)=>sum+Math.round(factor.score*100)*factor.weight,0)/10)/100,`${row.symbol}: exact arithmetic`);
  assert.deepEqual(evaluation,evaluateOpportunityDossier(structuredClone(snapshot),opportunityDossierFromSnapshot(structuredClone(snapshot))),row.symbol);
  if(process.argv.includes('--stored'))assert.deepEqual(evaluation,JSON.parse(row.evaluation).opportunity,`${row.symbol}: persisted evaluator parity`);
  rows.push({symbol:row.symbol,score:evaluation.score,hash:evaluation.evaluationHash,type:snapshot.securityType});

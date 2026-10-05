@@ -12,7 +12,7 @@ import {parseYahooIntraday} from '../../.test-build/chart-data.mjs';
 import {parseOfficialDirectory,classifyListedSecurity} from '../../.test-build/directory.mjs';
 import {applyFinancingRisk} from '../../.test-build/financing-risk.mjs';
 import {OPPORTUNITY_SPEC} from '../../.test-build/opportunity-spec.mjs';
-import {evaluateOpportunity,isOpportunityProvenanceValid} from '../../.test-build/opportunity-engine.mjs';
+import {opportunityWeightedScore, evaluateOpportunity,isOpportunityProvenanceValid} from '../../.test-build/opportunity-engine.mjs';
 import {operatingCandidateSignals,operatingCandidateOrderSql} from '../../.test-build/opportunity-candidates.mjs';
 import {scoreFairValue,scoreFinancialStrength,scoreFinancialStrengthPartial,scoreCatalysts,scoreEarningsQuality,scoreDownsideRisk,scoreTechnicalTiming,scoreQualitativeFactor} from '../../.test-build/opportunity-scoring.mjs';
 import {scoreOpportunityDossier,evaluateOpportunityDossier,opportunityDossierFromSnapshot,currentOpportunityEvaluation} from '../../.test-build/opportunity-dossier.mjs';
@@ -777,7 +777,7 @@ test('dossier orchestrator runs every validated calculator and produces one repr
  assert.deepEqual(Object.keys(evidence).sort(),OPPORTUNITY_SPEC.factors.map(factor=>factor.id).sort());
  for(const factor of OPPORTUNITY_SPEC.factors){assert.ok(evidence[factor.id].calculation?.rubricId,`${factor.id} calculation trace`);assert.ok(evidence[factor.id].sources.length,`${factor.id} sourced evidence`)}
  const result=evaluateOpportunityDossier(opportunitySnapshot,dossier);
- assert.equal(result.state,'ranked');assert.equal(result.coveragePct,100);assert.equal(result.score,Math.round(result.factors.reduce((sum,factor)=>sum+factor.points,0)*100)/100);
+ assert.equal(result.state,'ranked');assert.equal(result.coveragePct,100);assert.equal(result.score,opportunityWeightedScore(result.factors));
  assert.deepEqual(result.factors.map(factor=>factor.weight),[25,20,15,12,10,10,5,3]);
 });
 test('stale scan-report scores are rebuilt from the saved dossier instead of dropping its evidence',()=>{
@@ -1160,8 +1160,8 @@ test('complete rating covers all listing types and every subset of the eight fac
    const result=evaluateOpportunity(snapshot,evidence);
    assert.equal(result.state,'ranked');assert.equal(result.rankingEligible,true);assert.equal(result.algorithmicCoveragePct,100);
    assert.equal(result.factors.length,8);assert.ok(result.evaluationHash);
-   for(const factor of result.factors){assert.ok(Number.isFinite(factor.score)&&factor.score>=0&&factor.score<=10);assert.equal(factor.points,Math.round(factor.score*factor.weight*100)/1000);assert.ok(factor.calculation.inputs.length>0);}
-   assert.equal(result.score,Math.round(result.factors.reduce((sum,factor)=>sum+factor.points,0)*100)/100);
+   for(const factor of result.factors){assert.ok(Number.isFinite(factor.score)&&factor.score>=0&&factor.score<=10);assert.equal(factor.points,Math.round(factor.score*100)*factor.weight/1000);assert.ok(factor.calculation.inputs.length>0);}
+   assert.equal(result.score,opportunityWeightedScore(result.factors));
    assert.deepEqual(result,evaluateOpportunity(structuredClone(snapshot),structuredClone(evidence)));
   }
  }
@@ -1190,4 +1190,16 @@ test('missing qualitative review dimensions do not suppress observable business 
  const conflicted=evaluateOpportunityDossier(conflict,opportunityDossierFromSnapshot(conflict));
  assert.equal(conflicted.factors.find(factor=>factor.id==='competitivePosition').score,0);
  assert.equal(conflicted.state,'ranked');
+});
+
+test('weighted rating rounds exact half cents upward using integer arithmetic',()=>{
+ const factors=OPPORTUNITY_SPEC.factors.map(factor=>({...factor,score:0}));
+ factors[0].score=2.006; // incoming calculator grades are normalized by evaluator
+ const evidence=opportunityEvidence();evidence.valuation.score=2.01;for(const factor of OPPORTUNITY_SPEC.factors.slice(1))evidence[factor.id].score=0;
+ const result=evaluateOpportunity(opportunitySnapshot,evidence);
+ assert.equal(result.score,5.03);assert.equal(result.factors[0].points,5.025);
+ for(let hundredths=0;hundredths<=1000;hundredths++){
+  factors[0].score=hundredths/100;
+  assert.equal(opportunityWeightedScore(factors),Math.round(hundredths*25/10)/100);
+ }
 });

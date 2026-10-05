@@ -1,6 +1,6 @@
 # Small-Cap Radar V2
 
-**Current rating contract (2026-10-05):** rubric `1.0.0-complete-universe-ranking` grades every production listing and orders the complete universe by its final fixed-weight 100-point rating. Evidence coverage, confidence and safety findings remain visible alongside the rating. Local replay covers all 6,954 production records (zero missing factors/final scores); deployment verification is recorded in the [ranking audit](docs/COMPLETE_RANKING_AUDIT_2026_10_05.md). Historical release and zero-ranking notes below are superseded by this contract.
+**Current rating contract (2026-10-05):** rubric `1.0.1-exact-universe-ranking` grades every production listing and orders the complete universe by its final fixed-weight 100-point rating. Evidence coverage, confidence and safety findings remain visible alongside the rating. Local replay covers all 6,954 production records (zero missing factors/final scores); deployment verification is recorded in the [ranking audit](docs/COMPLETE_RANKING_AUDIT_2026_10_05.md). Historical release and zero-ranking notes below are superseded by this contract.
 
 For maintainers, read the [project memory](docs/PROJECT_MEMORY.md), [operations memory](docs/OPERATIONS_MEMORY.md), and [handoff](HANDOFF.md) first. These files record the verified Railway storage/recovery state without secrets.
 

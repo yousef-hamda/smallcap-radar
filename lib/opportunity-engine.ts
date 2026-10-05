@@ -206,11 +206,12 @@ export function evaluateOpportunity(
     // Model grades already use their complete fixed component denominator.
     const model = models[spec.id]!;
     const useReviewed = evidenced && !proxy;
-    const score = Math.round((useReviewed ? candidate!.score! * rawCoverage / 100
-      : proxy && conflicts.length === 0 ? candidate!.score! : conflicts.length ? 0 : model.score!) * 100) / 100;
+    const score = useReviewed
+      ? Math.round(Math.round(candidate!.score! * 100) * Math.round(rawCoverage * 100) / 10000) / 100
+      : Math.round((proxy && conflicts.length === 0 ? candidate!.score! : conflicts.length ? 0 : model.score!) * 100) / 100;
     const algorithmicCoveragePct = 100;
     const coveragePct = evidenced ? rawCoverage : 0;
-    const points = score / 10 * spec.weight;
+    const points = Math.round(score * 100) * spec.weight / 1000;
     const complete = evidenced && !proxy && coveragePct === 100;
     if (evidenced) evidencedWeight += spec.weight * coveragePct / 100;
     return {
@@ -218,7 +219,7 @@ export function evaluateOpportunity(
       label: spec.label,
       weight: spec.weight,
       score,
-      points: Math.round(points * 1000) / 1000,
+      points,
       evidenced,
       complete,
       coveragePct,
@@ -246,7 +247,7 @@ export function evaluateOpportunity(
   const researchState: OpportunityState = hardFailure ? 'excluded' : sourceEligible ? 'ranked' : 'needs-research';
   const rankingEligible = true;
   const state: OpportunityState = 'ranked';
-  const score = Math.round(factors.reduce((total, factor) => total + factor.points, 0) * 100) / 100;
+  const score = opportunityWeightedScore(factors);
   const requiredFactorConfidence = factors
     .filter(factor => (OPPORTUNITY_SPEC.requiredRankedFactors as readonly string[]).includes(factor.id))
     .map(factor => factor.confidence);
@@ -307,9 +308,15 @@ export function isCurrentOpportunityEvaluation(value: unknown): value is Opportu
       const factor = matches[0];
       return matches.length === 1 && factor.weight === spec.weight && finite(factor.score)
         && factor.score >= 0 && factor.score <= 10 && finite(factor.points)
-        && Math.abs(factor.points - Math.round(factor.score * spec.weight * 100) / 1000) < 1e-8
+        && Math.abs(factor.points - Math.round(factor.score * 100) * spec.weight / 1000) < 1e-8
         && !!factor.calculation?.rubricId && factor.calculation.inputs.length > 0;
-    }) && Math.abs(evaluation.score - Math.round(evaluation.factors.reduce((sum, factor) => sum + factor.points, 0) * 100) / 100) < 1e-8;
+    }) && Math.abs(evaluation.score - opportunityWeightedScore(evaluation.factors)) < 1e-8;
 }
 
 export function opportunitySnapshotHash(snapshot: Snapshot) { return evaluationFingerprint(snapshot); }
+
+/** Factor grades have hundredth precision. Sum integer thousandths and round
+ * once to a final hundredth, avoiding floating point half-cent errors. */
+export function opportunityWeightedScore(factors: Array<{score:number;weight:number}>) {
+  return Math.round(factors.reduce((sum,factor)=>sum+Math.round(factor.score*100)*factor.weight,0)/10)/100;
+}
