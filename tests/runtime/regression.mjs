@@ -38,8 +38,8 @@ test('qualitative opportunity proxies produce auditable bounded grades without c
  const now='2200-01-01T00:00:00.000Z';
  const snapshot={...base,asOf:now,evSales:2,revenueGrowth:0.2,grossMargin:0.4,operatingMarginTrend:0.03,cash:100,debt:50,dilution:0.02,price:12,low52w:8,high52w:16,ma30w:10,return12m:0.15,nextEarnings:'2200-02-01',provenance:Object.fromEntries(['evSales','revenueGrowth','grossMargin','operatingMarginTrend','cash','debt','dilution','price','low52w','high52w','ma30w','return12m'].map(key=>[key,{source:'SEC EDGAR Company Facts',url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0000000000.json',periodEnd:now.slice(0,10),availableAt:now,retrievedAt:now,rightsStatus:'public-domain',confidence:'high'}]))};
  const evidence=proxyOpportunityEvidence(snapshot);
- for(const id of ['valuation','competitivePosition','downsideRisk','technicalTiming']){assert(evidence[id]);assert(Number(evidence[id].score)>=0&&Number(evidence[id].score)<=10);assert(evidence[id].calculation?.rubricId==='proxy-v1');}
- assert.equal(evidence.valuation.coveragePct,67);assert.equal(evidence.valuation.confidence,'low');
+ for(const id of ['valuation','competitivePosition','downsideRisk','technicalTiming']){assert(evidence[id]);assert(Number(evidence[id].score)>=0&&Number(evidence[id].score)<=10);assert(evidence[id].calculation?.rubricId===`${id}-model-v2`);}
+ assert.equal(evidence.valuation.coveragePct,80);assert.equal(evidence.valuation.confidence,'low');
 });
 test('an empty database is not mislabeled as a stale snapshot',async()=>{const state=await readState({strategy:'opportunity'});assert.equal(state.dataRun,null);assert.equal(state.summary.stale,false);});
 test('a running scan with partial rows does not replace the last completed full scan across rubric versions',async()=>{
@@ -71,7 +71,7 @@ test('legacy scoring snapshots are re-evaluated in bounded batches and preserve 
  const now='2201-01-01T00:00:00.000Z';await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES('legacy-rating',?,?,'complete','Legacy full scan',2,2,13,'retired-opportunity-hash')").bind(now,now).run();
  await insertSnapshot('legacy-rating',{...base,symbol:'LEGACY-B'}).run();await insertSnapshot('legacy-rating',{...base,symbol:'LEGACY-A'}).run();
  invalidateStateCache();const result=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:1});
- assert.equal(result.summary.stale,true);assert.equal(result.summary.total,2);assert.equal(result.summary.opportunityNeedsResearch,2);assert.equal(result.snapshots.length,1);assert.equal(result.snapshots[0].symbol,'LEGACY-A');assert.equal(result.page.hasMore,true);
+ assert.equal(result.summary.stale,true);assert.equal(result.summary.total,2);assert.equal(result.summary.opportunityRanked,2);assert.equal(result.snapshots.length,1);assert.equal(result.snapshots[0].symbol,'LEGACY-A');assert.equal(result.page.hasMore,true);
  const persisted=await db().prepare("SELECT evaluation FROM fundamental_snapshots WHERE run_id='legacy-rating' AND symbol='LEGACY-A'").first();
  assert.equal(JSON.parse(persisted.evaluation).opportunity.hash,result.storedEvaluations[0].opportunity.hash);
  invalidateStateCache();const resumed=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:1});
@@ -221,9 +221,9 @@ test('stage9 persists rows and hands every in-range category row to history scor
  await db().prepare('INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,strategy_hash) VALUES(?,?,?,?,?,?,?,?,?)').bind('scan-test','2026-09-08T00:00:00Z','2026-09-08T00:00:00Z','running','Bulk Quotes/SEC Frames v7 · full',1,JSON.stringify([{ticker:'TEST',name:'Synthetic test only',cik:99,exchange:'Nasdaq',marketCap:1e9,price:10}]),9,currentHash()).run();
  const result=await processScanBatch('scan-test');assert.equal(result.done,false);assert.equal(result.run.stage,10);assert.equal(result.run.offset,0);assert.equal(result.run.total,1);assert.equal(result.run.processed,1);assert.equal(result.run.status,'running');
  assert.equal((await db().prepare("SELECT COUNT(*) AS n FROM fundamental_snapshots WHERE run_id='scan-test'").first()).n,1);
- const initialEvaluation=JSON.parse((await db().prepare("SELECT evaluation FROM fundamental_snapshots WHERE run_id='scan-test'").first()).evaluation);assert.equal(initialEvaluation.opportunity.strategy,'UNIFIED_OPPORTUNITY');assert.equal(initialEvaluation.opportunity.state,'needs-research');assert.equal(initialEvaluation.opportunity.rankingEligible,false);
+ const initialEvaluation=JSON.parse((await db().prepare("SELECT evaluation FROM fundamental_snapshots WHERE run_id='scan-test'").first()).evaluation);assert.equal(initialEvaluation.opportunity.strategy,'UNIFIED_OPPORTUNITY');assert.equal(initialEvaluation.opportunity.researchState,'needs-research');assert.equal(initialEvaluation.opportunity.sourceEligible,false);
  const now=new Date().toISOString(),today=now.slice(0,10),previous=new Date(Date.parse(now)-86400000).toISOString().slice(0,10);setHistoryResult({history:[{date:previous,open:10,high:10,low:10,close:10,volume:1000},{date:today,open:11,high:11,low:11,close:11,volume:1000}],splits:[],source:'TEST_ONLY',url:'https://example.test',availableAt:now,retrievedAt:now});
- try { const researchStage=await processScanBatch('scan-test');assert.equal(researchStage.done,false);assert.equal(researchStage.run.stage,11);assert.equal(researchStage.run.total,1,'issuer-linked financial research is attempted even when liquidity is below the safety floor');const final=await processScanBatch('scan-test');assert.equal(final.done,true);assert.equal(final.run.stage,13);assert.equal(final.run.processed,1);assert.equal(final.run.status,'complete');const stored=JSON.parse((await db().prepare("SELECT payload FROM fundamental_snapshots WHERE run_id='scan-test'").first()).payload);assert.equal(stored.price,11);assert.ok(Math.abs(stored.dailyChange-.1)<1e-12);assert.match(stored.provenance.dailyChange.tag,/completed close/);assert.equal(stored.opportunityResearch.earnings.providerStatus,'retrieved');const opportunity=await GET(new Request('https://radar.test/api/radar'));assert.equal(opportunity.status,200);const body=await opportunity.json();assert.equal(body.page.strategy,'opportunity','the API defaults to the unified category');assert.equal(body.summary.opportunityRanked,0);assert.equal(body.summary.opportunityNeedsResearch,1);assert.equal(body.snapshots.length,0,'scanner-only data must not become a ranked opportunity');const oldAlias=await GET(new Request('https://radar.test/api/radar?strategy=core'));assert.equal((await oldAlias.json()).page.strategy,'opportunity','retired category requests are mapped to the unified category');const research=await GET(new Request('https://radar.test/api/radar?strategy=opportunity&state=needs-research'));assert.equal((await research.json()).snapshots[0].symbol,'TEST'); }
+ try { const researchStage=await processScanBatch('scan-test');assert.equal(researchStage.done,false);assert.equal(researchStage.run.stage,11);assert.equal(researchStage.run.total,1,'issuer-linked financial research is attempted even when liquidity is below the safety floor');const final=await processScanBatch('scan-test');assert.equal(final.done,true);assert.equal(final.run.stage,13);assert.equal(final.run.processed,1);assert.equal(final.run.status,'complete');const stored=JSON.parse((await db().prepare("SELECT payload FROM fundamental_snapshots WHERE run_id='scan-test'").first()).payload);assert.equal(stored.price,11);assert.ok(Math.abs(stored.dailyChange-.1)<1e-12);assert.match(stored.provenance.dailyChange.tag,/completed close/);assert.equal(stored.opportunityResearch.earnings.providerStatus,'retrieved');const opportunity=await GET(new Request('https://radar.test/api/radar'));assert.equal(opportunity.status,200);const body=await opportunity.json();assert.equal(body.page.strategy,'opportunity','the API defaults to the unified category');assert.equal(body.summary.opportunityRanked,1);assert.equal(body.summary.opportunityNeedsResearch,0);assert.equal(body.snapshots.length,1,'scanner-only data has a final numeric grade with separate evidence diagnostics');const oldAlias=await GET(new Request('https://radar.test/api/radar?strategy=core'));assert.equal((await oldAlias.json()).page.strategy,'opportunity','retired category requests are mapped to the unified category');const research=await GET(new Request('https://radar.test/api/radar?strategy=opportunity&state=needs-research'));assert.equal((await research.json()).snapshots[0].symbol,'TEST'); }
  finally { setHistoryResult(null); }
 });
 test('Company Facts recovery stage advances when the durable Frames row is already complete',async()=>{
@@ -296,10 +296,10 @@ test('portfolio history endpoint persists owner scope and returns sourced aggreg
 test('portfolio logo endpoint rejects malformed symbols before any provider call',async()=>{
  const response=await portfolioLogoGET(new Request('https://radar.test/api/portfolio-logo?symbol=BAD!'));assert.equal(response.status,400);assert.equal(await response.text(),'Invalid symbol');
 });
-test('scan report retains needs-research rows, validates paging and never promotes them',async()=>{
+test('scan report retains every scored listing and validates paging',async()=>{
  const url='https://radar.test/api/scan-report?runId=scan-test&strategy=opportunity';
  const response=await reportGET(new Request(url));assert.equal(response.status,200);
- const payload=await response.json();assert.equal(payload.counts.total,1);assert.equal(payload.rows[0].symbol,'TEST');assert(payload.blockers.length>0);assert.equal(payload.counts.passed,0);assert.equal(payload.page.hasMore,false);
+ const payload=await response.json();assert.equal(payload.counts.total,1);assert.equal(payload.rows[0].symbol,'TEST');assert(payload.blockers.length>0);assert.equal(payload.counts.passed,1);assert.equal(payload.page.hasMore,false);
  assert.equal((await reportGET(new Request(url+'&offset=-1'))).status,400);
  assert.equal((await reportGET(new Request(url.replace('opportunity','bounce')))).status,400);
  assert.equal((await reportGET(new Request(url.replace('scan-test','absent')))).status,404);
@@ -320,18 +320,18 @@ test('historical scan report counts the same saved rubric states it displays',as
  }
  const response=await reportGET(new Request('https://radar.test/api/scan-report?runId=report-retired&strategy=opportunity'));
  assert.equal(response.status,200);const report=await response.json();
- assert.deepEqual(report.counts,{total:2,passed:0,failed:1,unknown:1,withEvidence:0});
- assert.deepEqual(report.rows.map(row=>row.evaluation.state),['needs-research','excluded']);
+ assert.deepEqual(report.counts,{total:2,passed:2,failed:0,unknown:0,withEvidence:0});
+ assert.deepEqual(report.rows.map(row=>row.evaluation.state),['ranked','ranked']);
  assert.equal(report.blockers.find(blocker=>blocker.id==='sec-concept-conflict')?.count,1);
  await db().prepare("DELETE FROM fundamental_snapshots WHERE run_id='report-retired'").run();
  await db().prepare("DELETE FROM strategy_runs WHERE id='report-retired'").run();
  invalidateStateCache();
 });
-test('opportunity scan report keeps missing factors in research state with explicit blockers',async()=>{
+test('opportunity scan report ranks missing-factor models with explicit source gaps',async()=>{
  const response=await reportGET(new Request('https://radar.test/api/scan-report?runId=scan-test&strategy=opportunity'));
  assert.equal(response.status,200);const payload=await response.json();
- assert.equal(payload.counts.total,1);assert.equal(payload.counts.passed,0);assert.equal(payload.counts.unknown,1);
- assert.equal(payload.rows[0].evaluation.state,'needs-research');assert.equal(payload.rows[0].evaluation.rankingEligible,false);
+ assert.equal(payload.counts.total,1);assert.equal(payload.counts.passed,1);assert.equal(payload.counts.unknown,0);
+ assert.equal(payload.rows[0].evaluation.researchState,'needs-research');assert.equal(payload.rows[0].evaluation.sourceEligible,false);
  assert.equal(payload.blockers.filter(blocker=>!blocker.id.startsWith('eligibility-')).length,8);
  assert(payload.blockers.every(blocker=>blocker.status==='UNKNOWN'&&blocker.count===1));
  assert.deepEqual(payload.blockers.filter(blocker=>blocker.id.startsWith('eligibility-')).map(blocker=>blocker.id).sort(),['eligibility-liquidity-unknown','eligibility-market-cap-unknown','eligibility-price-unknown','eligibility-security-unknown']);
@@ -361,7 +361,7 @@ test('provider outage finishes partial, preserves row and never manufactures his
  const transition=await processScanBatch('outage');assert.equal(transition.run.stage,11);assert.equal(transition.done,false);
  const result=await processScanBatch('outage');assert.equal(result.run.status,'partial');assert.equal(result.run.failed,1);assert.equal(result.done,true);assert.equal(result.run.retryPending,0);
  const row=await db().prepare("SELECT payload,evaluation FROM fundamental_snapshots WHERE id='outage:OUTAGE'").first();
- assert.match(row.payload,/Injected provider outage/);assert.equal(JSON.parse(row.evaluation).opportunity.state,'needs-research');
+ assert.match(row.payload,/Injected provider outage/);assert.equal(JSON.parse(row.evaluation).opportunity.researchState,'needs-research');
 });
 
 test('local evaluation benchmarks at 2000, 10000 and 15000 synthetic companies',t=>{
@@ -386,7 +386,7 @@ test('full history stage can qualify marketable candidates while unverified fact
   const transition=await processScanBatch('rebound-evidence');assert.equal(transition.done,false);assert.equal(transition.run.stage,11);
   const result=await processScanBatch('rebound-evidence');assert.equal(result.done,true);
   const stored=sqlite.prepare("SELECT payload,evaluation FROM fundamental_snapshots WHERE run_id='rebound-evidence'").get();
-  const e=JSON.parse(stored.evaluation);assert.equal(e.opportunity.state,'needs-research');assert(e.opportunity.factors.some(factor=>!factor.evidenced));
+  const e=JSON.parse(stored.evaluation);assert.equal(e.opportunity.researchState,'needs-research');assert(e.opportunity.factors.some(factor=>!factor.evidenced));
   assert.equal(JSON.parse(stored.payload).splitAdjusted,true);assert.equal(JSON.parse(stored.payload).history,undefined);
  }finally{setHistoryResult(null);}
 });
@@ -399,7 +399,7 @@ test('history retries recover without double-counting failures or retaining stal
  try{
   const transition=await processScanBatch('outage');assert.equal(transition.run.stage,11);assert.equal(transition.done,false);
   const r=await processScanBatch('outage');assert.equal(r.done,true);assert.equal(r.run.failed,0);assert.equal(r.run.status,'complete');assert.equal(r.run.error,null);
-  const row=await db().prepare("SELECT payload,evaluation FROM fundamental_snapshots WHERE id='outage:OUTAGE'").first();assert(!row.payload.includes('Injected provider outage'));assert.equal(JSON.parse(row.evaluation).opportunity.state,'needs-research');
+  const row=await db().prepare("SELECT payload,evaluation FROM fundamental_snapshots WHERE id='outage:OUTAGE'").first();assert(!row.payload.includes('Injected provider outage'));assert.equal(JSON.parse(row.evaluation).opportunity.researchState,'needs-research');
  }finally{setHistoryResult(null);}
 });
 test('history completion queues all CIK-linked common stocks for SEC research and recovered SEC retries complete cleanly',async()=>{
@@ -430,7 +430,7 @@ test('stage11 fetches one SEC Company Facts response per issuer and persists it 
  await db().prepare('INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,strategy_hash) VALUES(?,?,?,?,?,?,?,?,?)').bind('sec-research','2026-09-20','2026-09-20','running','Bulk Quotes/SEC Frames + Opportunity SEC v12 · full',1,'paged-v1',11,currentHash()).run();
  await db().prepare('INSERT INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind('universe:sec-research:opportunity:0','test',now,JSON.stringify([{ticker:snapshot.symbol,cik:snapshot.cik}])).run();
  await insertSnapshot('sec-research',snapshot).run();setOpportunityResearchResult({providerStatus:'retrieved',retryable:false});
- try{const result=await processScanBatch('sec-research');assert.equal(result.done,true);assert.equal(result.run.stage,13);assert.equal(result.run.sec_requests,2);const stored=sqlite.prepare("SELECT payload,evaluation FROM fundamental_snapshots WHERE run_id='sec-research'").get();const payload=JSON.parse(stored.payload);assert.equal(payload.opportunityResearch.earnings.providerStatus,'retrieved');assert.equal(payload.opportunityResearch.financialStrength.providerStatus,'retrieved');const evaluation=JSON.parse(stored.evaluation).opportunity;assert.equal(evaluation.state,'needs-research');assert.equal(evaluation.rankingEligible,false);assert(evaluation.factors.find(f=>f.id==='earningsQuality').rationale.includes('Synthetic runtime provider fixture'));}
+ try{const result=await processScanBatch('sec-research');assert.equal(result.done,true);assert.equal(result.run.stage,13);assert.equal(result.run.sec_requests,2);const stored=sqlite.prepare("SELECT payload,evaluation FROM fundamental_snapshots WHERE run_id='sec-research'").get();const payload=JSON.parse(stored.payload);assert.equal(payload.opportunityResearch.earnings.providerStatus,'retrieved');assert.equal(payload.opportunityResearch.financialStrength.providerStatus,'retrieved');const evaluation=JSON.parse(stored.evaluation).opportunity;assert.equal(evaluation.researchState,'needs-research');assert.equal(evaluation.sourceEligible,false);assert(evaluation.factors.find(f=>f.id==='earningsQuality').rationale.includes('Synthetic runtime provider fixture'));}
  finally{setOpportunityResearchResult({providerStatus:'retrieved',retryable:false});}
 });
 test('SEC research stage resumes across eight-row pages and records a stable 403 without retrying',async()=>{
@@ -455,7 +455,7 @@ test('SEC research stage records mismatched-issuer payloads as validation failur
   assert.equal(result.done,true);assert.equal(result.run.status,'partial');assert.equal(result.run.sec_success,0);assert.equal(result.run.sec_failed,1);assert.match(result.run.error,/SEC/);
   const stored=await db().prepare("SELECT payload,evaluation FROM fundamental_snapshots WHERE run_id='sec-invalid-identity'").first();
   assert.equal(JSON.parse(stored.payload).opportunityResearch.earnings.providerStatus,'invalid');
-  const evaluation=JSON.parse(stored.evaluation).opportunity;assert.equal(evaluation.state,'needs-research');assert.equal(evaluation.rankingEligible,false);
+  const evaluation=JSON.parse(stored.evaluation).opportunity;assert.equal(evaluation.researchState,'needs-research');assert.equal(evaluation.sourceEligible,false);
  }finally{setOpportunityResearchResult({providerStatus:'retrieved',retryable:false});}
 });
 test('concurrent quick/full starts share one durable run before any network call',async()=>{
@@ -578,24 +578,24 @@ test('unified opportunity pages keep incomplete companies in research and never 
  await researched('RANK-GROWTH',[[100,20,24,8],[150,30,35,10],[225,45,55,15]]).run();
  await researched('RANK-LOSS',[[100,-5,0,3],[130,-4,2,3],[180,-2,4,4]]).run();
  await researched('RANK-UNVERIFIED',[[500,100,150,10],[600,120,180,10],[700,140,210,10]],'unknown').run();
- const ranked=await readState({strategy:'opportunity',opportunityState:'ranked',limit:10});assert.equal(ranked.summary.total,7);assert.equal(ranked.summary.opportunityRanked,0);assert.equal(ranked.snapshots.length,0);
- const first=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:1});assert.equal(first.summary.opportunityNeedsResearch,7);assert.equal(first.snapshots.length,1);assert.equal(first.page.hasMore,true);
+ const ranked=await readState({strategy:'opportunity',opportunityState:'ranked',limit:10});assert.equal(ranked.summary.total,7);assert.equal(ranked.summary.opportunityRanked,7);assert.equal(ranked.snapshots.length,7);
+ const first=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:1});assert.equal(first.summary.opportunityRanked,7);assert.equal(first.snapshots.length,1);assert.equal(first.page.hasMore,true);
  const second=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:10,offset:1});assert.equal(second.snapshots.length,6);
  const all=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:10});assert.equal(all.snapshots.length,7);assert(all.snapshots.some(s=>s.symbol==='RANK-FAIL'));
  assert.deepEqual([...first.snapshots,...second.snapshots].map(s=>s.symbol),all.snapshots.map(s=>s.symbol));
- assert.equal(all.snapshots[0].symbol,'RANK-HIGH','proxy score ordering prioritizes the stronger valuation and operating signals');
- assert.equal(all.snapshots.at(-1).symbol,'RANK-LOW','weak proxy signals sort below the other research candidates');
+ assert.ok(all.storedEvaluations.every((row,index)=>index===0||all.storedEvaluations[index-1].opportunity.score>=row.opportunity.score));
+ assert.deepEqual(all.rankPositions,[1,2,3,4,5,6,7]);
 });
 
 
-test('radar pages refresh cached completed-session quotes without exceeding D1 bind limits',async()=>{
+test('radar preserves canonical scored quotes when a deep cache is newer',async()=>{
  const now='2101-01-01T00:00:00.000Z',symbols=Array.from({length:20},(_,index)=>`PAGE${index}`);
  await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES('large-radar-page',? ,?,'complete','Bulk Quotes/SEC Frames v10 · full',20,20,13,?)").bind(now,now,currentHash()).run();
  for(const symbol of symbols)await insertSnapshot('large-radar-page',{...base,symbol,name:`Synthetic ${symbol}`}).run();
  const quote={price:17,dailyChange:.125,provenance:{price:{source:'test',periodEnd:'2026-09-30',tag:'last completed session close'},dailyChange:{source:'test',periodEnd:'2026-09-30',tag:'previous completed close'}}};
  await db().prepare('INSERT INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind('deep:v11:PAGE0','test',now,JSON.stringify({...quote,symbol:'PAGE0'})).run();
  const result=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:20});
- assert.equal(result.snapshots.length,20);assert.equal(result.snapshots.find(snapshot=>snapshot.symbol==='PAGE0').dailyChange,.125);assert.equal(result.snapshots.find(snapshot=>snapshot.symbol==='PAGE0').price,17);
+ assert.equal(result.snapshots.length,20);assert.equal(result.snapshots.find(snapshot=>snapshot.symbol==='PAGE0').dailyChange,base.dailyChange);assert.equal(result.snapshots.find(snapshot=>snapshot.symbol==='PAGE0').price,base.price);
 });
 
 test('latest scan report uses the same recomputed factor coverage as opportunity ranking',async()=>{
@@ -604,7 +604,7 @@ test('latest scan report uses the same recomputed factor coverage as opportunity
  await insertSnapshot('report-current',{...base,symbol:'REPORT-CURRENT',name:'Synthetic report fixture'}).run();
  const stored=await db().prepare("SELECT evaluation FROM fundamental_snapshots WHERE run_id='report-current' AND symbol='REPORT-CURRENT'").first();
  const evaluation=JSON.parse(stored.evaluation),partial=evaluation.opportunity.factors[0];
- partial.evidenced=true;partial.complete=false;partial.score=7;partial.coveragePct=70;partial.points=partial.weight*.49;partial.sources=[{source:'SEC Company Facts · regression fixture',url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0000000001.json',availableAt:now,periodEnd:now.slice(0,10),retrievedAt:now,rightsStatus:'redistribution-permitted'}];
+ partial.evidenced=true;partial.complete=false;partial.score=7;partial.coveragePct=70;partial.points=partial.weight*.7;partial.sources=[{source:'SEC Company Facts · regression fixture',url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0000000001.json',availableAt:now,periodEnd:now.slice(0,10),retrievedAt:now,rightsStatus:'redistribution-permitted'}];
  evaluation.opportunity.score=partial.points;evaluation.opportunity.coveragePct=partial.weight*.7;
  await db().prepare("UPDATE fundamental_snapshots SET evaluation=? WHERE run_id='report-current' AND symbol='REPORT-CURRENT'").bind(JSON.stringify(evaluation)).run();
  invalidateStateCache();
@@ -616,4 +616,31 @@ test('latest scan report uses the same recomputed factor coverage as opportunity
  assert.equal(eligibility.length,4);assert(eligibility.every(blocker=>blocker.count===1&&blocker.status==='UNKNOWN'));
  for(const factor of payload.rows[0].evaluation.factors)assert.equal(payload.blockers.find(blocker=>blocker.id===factor.id)?.count,factor.complete?0:1);
  assert.equal(payload.rows[0].evaluation.factors[0].evidenced,true);assert.equal(payload.rows[0].evaluation.factors[0].complete,false);
+});
+
+test('all listings retain canonical saved grades, full-universe ranks, reports and profiles across reloads',async()=>{
+ const id='acceptance-complete-universe',created='9999-12-31T23:59:59.999Z';
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES(?,?,?,'complete','Acceptance · full',260,260,13,'old-rubric')").bind(id,created,created).run();
+ const types=['common','adr','unit','warrant','right','unknown','preferred','fund','debt'];
+ for(let index=0;index<260;index++){
+  const symbol=`COMPLETE-${String(index).padStart(4,'0')}`;
+  const snapshot={symbol,name:symbol,asOf:'2026-09-30T00:00:00Z',securityType:types[index%types.length],provenance:{}};
+  if(index===1)snapshot.opportunityResearch={earnings:{conflicts:['Partial malformed historical section']}};
+  await db().prepare('INSERT INTO fundamental_snapshots(id,run_id,symbol,as_of,payload,evaluation) VALUES(?,?,?,?,?,?)').bind(`${id}:${symbol}`,id,symbol,snapshot.asOf,JSON.stringify(snapshot),'{}').run();
+ }
+ invalidateStateCache();const symbols=[],evaluations=new Map();
+ for(let offset=0;offset<260;offset+=37){
+  const response=await GET(new Request(`https://radar.test/api/radar?limit=37&offset=${offset}`));assert.equal(response.status,200);const page=await response.json();
+  assert.equal(page.summary.opportunityRanked,260);assert.equal(page.summary.opportunityNeedsResearch,0);assert.equal(page.summary.opportunityExcluded,0);
+  page.snapshots.forEach((snapshot,index)=>{const evaluation=page.storedEvaluations[index].opportunity;assert.equal(evaluation.score,0);assert.equal(evaluation.factors.filter(factor=>typeof factor.score==='number').length,8);assert.equal(page.rankPositions[index],offset+index+1);symbols.push(snapshot.symbol);evaluations.set(snapshot.symbol,evaluation);});
+ }
+ assert.equal(new Set(symbols).size,260);assert.deepEqual(symbols,[...symbols].sort());
+ for(const symbol of symbols){const response=await companyGET(new Request(`https://radar.test/api/company?symbol=${symbol}`));assert.equal(response.status,200);const company=await response.json();assert.deepEqual(company.evaluation,evaluations.get(symbol));assert.equal(company.ranking.position,symbols.indexOf(symbol)+1);}
+ for(let offset=0;offset<260;offset+=25){const response=await reportGET(new Request(`https://radar.test/api/scan-report?runId=${id}&offset=${offset}`));assert.equal(response.status,200);const report=await response.json();assert.equal(report.counts.passed,260);report.rows.forEach((row,index)=>{assert.equal(row.rank,offset+index+1);assert.deepEqual(row.evaluation,evaluations.get(row.symbol));});}
+ // Repair a current-version row with a null factor, and rebuild stable ranks.
+ const corrupted=structuredClone(evaluations.get(symbols[100]));corrupted.factors[0].score=null;
+ await db().prepare('UPDATE fundamental_snapshots SET evaluation=? WHERE run_id=? AND symbol=?').bind(JSON.stringify({opportunity:corrupted}),id,symbols[100]).run();
+ invalidateStateCache();const repaired=await GET(new Request('https://radar.test/api/radar?limit=250'));const page=await repaired.json();assert.equal(page.summary.opportunityRanked,260);assert.deepEqual(page.storedEvaluations[100].opportunity,evaluations.get(symbols[100]));
+ const searched=await GET(new Request(`https://radar.test/api/radar?q=${symbols[259]}`));const search=await searched.json();assert.equal(search.rankPositions[0],260);
+ invalidateStateCache();const reload=await GET(new Request('https://radar.test/api/radar?limit=37'));assert.deepEqual((await reload.json()).storedEvaluations,page.storedEvaluations.slice(0,37));
 });

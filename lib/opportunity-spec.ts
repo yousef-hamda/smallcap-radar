@@ -1,7 +1,7 @@
 /** Single shared contract for the unified opportunity category. */
 export const OPPORTUNITY_SPEC = {
   id: 'UNIFIED_OPPORTUNITY',
-  version: '0.8.2-complete-algorithmic-grades',
+  version: '1.0.0-complete-universe-ranking',
   defaultHorizonMonths: 6,
   defaultRiskTolerance: 'medium' as const,
   // Include small and micro caps; liquidity is screened independently.
@@ -9,8 +9,11 @@ export const OPPORTUNITY_SPEC = {
   medianDollarVolume20dMin: 150_000,
   quoteFreshnessMarketDays: 3,
   marketDataFreshnessMarketDays: 3,
-  // All eight fixed-weight factors must be evidenced for a ranked result.
+  // Evidence coverage is disclosed separately from complete mathematical ranking.
   minimumEvidenceCoverage: 100,
+  rankingPolicy: 'all-listings-numeric-grade' as const,
+  missingComponentGrade: 0,
+  tieBreak: 'symbol-ascending' as const,
   requiredRankedFactors: [
     'valuation',
     'catalysts',

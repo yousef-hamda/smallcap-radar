@@ -1,11 +1,12 @@
 import type { Snapshot, Provenance, Status } from './engine';
+import { proxyOpportunityEvidence } from './opportunity-proxies';
 import { usableEvidence } from './evidence';
 import { OPPORTUNITY_SPEC, opportunitySpecHash, type OpportunityFactorId, type OpportunityRiskTolerance } from './opportunity-spec';
 import { INVESTABLE_EXCHANGES } from './strategy-spec';
 
 export type OpportunityEvidence = {
   score: number | null;
-  /** A deterministic subtotal based on available snapshot fields, not a reviewed dossier. */
+  /** A deterministic model grade based on observed inputs, not a reviewed dossier. */
   proxy?: boolean;
   /** Share of this factor's fixed weight backed by source-reviewed evidence (0–100). */
   coveragePct?: number;
@@ -26,6 +27,10 @@ export type OpportunityEvaluation = {
   version: typeof OPPORTUNITY_SPEC.version;
   hash: string;
   asOf: string;
+  evaluationHash: string;
+  snapshotHash: string;
+  researchState: OpportunityState;
+  sourceEligible: boolean;
   horizonMonths: number;
   riskTolerance: OpportunityRiskTolerance;
   state: OpportunityState;
@@ -40,7 +45,7 @@ export type OpportunityEvaluation = {
     id: OpportunityFactorId;
     label: string;
     weight: number;
-    score: number | null;
+    score: number;
     points: number;
     evidenced: boolean;
     complete: boolean;
@@ -58,7 +63,6 @@ export type OpportunityEvaluation = {
 };
 
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
-const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
 function marketWeekdayAge(availableAt: string, asOf: string) {
   const start = Date.parse(availableAt);
@@ -128,9 +132,8 @@ export function isOpportunityIdentityEvidenceValid(provenance:Provenance,asOf:st
 }
 
 /**
- * Evidence-first single category evaluator. Missing factors earn no points on
- * the fixed 100-point denominator and remain visibly uncovered. All eight
- * weighted factors must be evidenced before shortlist ranking.
+ * Complete single category evaluator. Missing components earn zero on the
+ * fixed denominator. Evidence and safety findings never hide a numeric rank.
  */
 export function evaluateOpportunity(
   snapshot: Snapshot,
@@ -178,6 +181,7 @@ export function evaluateOpportunity(
   const sourceConflict = (snapshot.sourceConflicts ?? []).length > 0;
   if (sourceConflict) add('source-conflict', 'UNKNOWN', (snapshot.sourceConflicts ?? []).join('; '), 'evidence');
 
+  const models = proxyOpportunityEvidence(snapshot);
   let evidencedWeight = 0;
   const factors = OPPORTUNITY_SPEC.factors.map(spec => {
     const candidate = evidence[spec.id];
@@ -198,20 +202,23 @@ export function evaluateOpportunity(
       && candidate!.rationale.trim().length > 0
       && calculationValid
       && sources.length > 0;
-    const score = evidenced || proxy ? clamp(candidate!.score!, 0, 10) : null;
-    const algorithmicCoveragePct = score == null ? 0 : 100;
+    // A reviewed partial assessment is normalized to the full factor once.
+    // Model grades already use their complete fixed component denominator.
+    const model = models[spec.id]!;
+    const useReviewed = evidenced && !proxy;
+    const score = Math.round((useReviewed ? candidate!.score! * rawCoverage / 100
+      : proxy && conflicts.length === 0 ? candidate!.score! : conflicts.length ? 0 : model.score!) * 100) / 100;
+    const algorithmicCoveragePct = 100;
     const coveragePct = evidenced ? rawCoverage : 0;
-    const points = score == null ? 0 : proxy && !evidenced
-      ? score / 10 * spec.weight
-      : score / 10 * spec.weight * coveragePct / 100;
-    const complete = evidenced && coveragePct === 100;
+    const points = score / 10 * spec.weight;
+    const complete = evidenced && !proxy && coveragePct === 100;
     if (evidenced) evidencedWeight += spec.weight * coveragePct / 100;
     return {
       id: spec.id,
       label: spec.label,
       weight: spec.weight,
       score,
-      points: Math.round(points * 100) / 100,
+      points: Math.round(points * 1000) / 1000,
       evidenced,
       complete,
       coveragePct,
@@ -220,36 +227,38 @@ export function evaluateOpportunity(
       // proof of low-quality evidence. It can never contribute to high overall
       // confidence, but it may support medium confidence for a complete rank.
       confidence: evidenced ? candidate!.confidence ?? 'medium' : 'low',
-      rationale: evidenced ? candidate!.rationale : conflicts.length ? `Source conflict: ${conflicts.join('; ')}` : candidate?.rationale?.trim() || 'Evidence is missing, stale, future-dated, or lacks a valid calculation trace, rationale, or source.',
+      rationale: useReviewed ? `${candidate!.rationale} Final factor grade includes ${rawCoverage}% reviewed coverage; missing dimensions earn zero.` : conflicts.length ? `Source conflict: ${conflicts.join('; ')}; final factor grade is zero until reconciled.` : proxy ? candidate!.rationale : `${candidate?.rationale ?? ''} ${model.rationale}`,
       sources,
-      ...(calculationValid ? { calculation: candidate!.calculation } : {}),
+      calculation: useReviewed ? { ...candidate!.calculation!, inputs: [...candidate!.calculation!.inputs, { name: 'reviewed-grade', value: candidate!.score! }, { name: 'reviewed-coverage-pct', value: rawCoverage }] } : proxy && calculationValid ? candidate!.calculation : model.calculation,
       conflicts,
-      ...(proxy ? { proxy: true } : {}),
+      ...(!useReviewed ? { proxy: true } : {}),
     };
   });
 
   const coveragePct = evidencedWeight;
   const algorithmicCoveragePct = Math.round(factors.reduce((total, factor) => total + (factor.algorithmicCoveragePct * factor.weight / 100), 0) * 100) / 100;
   const requiredFactorsPresent = OPPORTUNITY_SPEC.requiredRankedFactors.every(id => factors.find(factor => factor.id === id)?.complete);
-  const rankingEligible = !hardFailure
+  const sourceEligible = !hardFailure
     && !hardUnknown
     && !sourceConflict
     && requiredFactorsPresent
     && coveragePct >= OPPORTUNITY_SPEC.minimumEvidenceCoverage;
-  const state: OpportunityState = hardFailure ? 'excluded' : rankingEligible ? 'ranked' : 'needs-research';
+  const researchState: OpportunityState = hardFailure ? 'excluded' : sourceEligible ? 'ranked' : 'needs-research';
+  const rankingEligible = true;
+  const state: OpportunityState = 'ranked';
   const score = Math.round(factors.reduce((total, factor) => total + factor.points, 0) * 100) / 100;
   const requiredFactorConfidence = factors
     .filter(factor => (OPPORTUNITY_SPEC.requiredRankedFactors as readonly string[]).includes(factor.id))
     .map(factor => factor.confidence);
-  const confidence = rankingEligible && coveragePct >= 95 && factors.every(factor => factor.confidence === 'high')
+  const confidence = sourceEligible && coveragePct >= 95 && factors.every(factor => factor.confidence === 'high')
     ? 'high'
-    : rankingEligible && requiredFactorConfidence.every(level => level !== 'low') ? 'medium' : 'low';
-  const status: Status = state === 'excluded' ? 'FAIL' : rankingEligible ? 'PASS' : 'UNKNOWN';
+    : sourceEligible && requiredFactorConfidence.every(level => level !== 'low') ? 'medium' : 'low';
+  const status: Status = researchState === 'excluded' ? 'FAIL' : sourceEligible ? 'PASS' : 'UNKNOWN';
   const reason = hardFailure
     ? 'Fails the common-security, positive-market-capitalization, liquidity, or verified-price safety screen.'
     : hardUnknown
       ? 'Needs verified security, price, market-cap, liquidity, or freshness evidence before a decision.'
-      : rankingEligible
+      : sourceEligible
         ? 'Meets safety checks and has sourced evidence for all material diligence factors; score is diagnostic, not a return probability.'
         : 'Visible for research, but one or more material factors or the evidence-coverage threshold is incomplete.';
 
@@ -258,6 +267,10 @@ export function evaluateOpportunity(
     version: OPPORTUNITY_SPEC.version,
     hash: opportunitySpecHash(),
     asOf: snapshot.asOf,
+    snapshotHash: opportunitySnapshotHash(snapshot),
+    evaluationHash: evaluationFingerprint({ snapshot, factors, score, horizonMonths, riskTolerance }),
+    researchState,
+    sourceEligible,
     horizonMonths,
     riskTolerance,
     state,
@@ -270,6 +283,33 @@ export function evaluateOpportunity(
     rankingEligible,
     factors,
     checks,
-    reason,
+    reason: `Final deterministic research grade; sorted across every listing. ${reason}`,
   };
 }
+
+/** Stable evaluation identity for the same saved snapshot and rubric. */
+function evaluationFingerprint(value: unknown) {
+  let hash = 2166136261;
+  for (const character of JSON.stringify(value)) { hash ^= character.charCodeAt(0); hash = Math.imul(hash, 16777619); }
+  return `${opportunitySpecHash()}:${(hash >>> 0).toString(16).padStart(8, '0')}`;
+}
+
+/** Validate persisted shape and arithmetic, not merely a matching version label. */
+export function isCurrentOpportunityEvaluation(value: unknown): value is OpportunityEvaluation {
+  if (!value || typeof value !== 'object') return false;
+  const evaluation = value as OpportunityEvaluation;
+  return evaluation.hash === opportunitySpecHash() && !!evaluation.evaluationHash
+    && evaluation.state === 'ranked' && evaluation.rankingEligible === true
+    && finite(evaluation.score) && evaluation.score >= 0 && evaluation.score <= 100
+    && Array.isArray(evaluation.factors) && evaluation.factors.length === 8
+    && OPPORTUNITY_SPEC.factors.every(spec => {
+      const matches = evaluation.factors.filter(factor => factor.id === spec.id);
+      const factor = matches[0];
+      return matches.length === 1 && factor.weight === spec.weight && finite(factor.score)
+        && factor.score >= 0 && factor.score <= 10 && finite(factor.points)
+        && Math.abs(factor.points - Math.round(factor.score * spec.weight * 100) / 1000) < 1e-8
+        && !!factor.calculation?.rubricId && factor.calculation.inputs.length > 0;
+    }) && Math.abs(evaluation.score - Math.round(evaluation.factors.reduce((sum, factor) => sum + factor.points, 0) * 100) / 100) < 1e-8;
+}
+
+export function opportunitySnapshotHash(snapshot: Snapshot) { return evaluationFingerprint(snapshot); }

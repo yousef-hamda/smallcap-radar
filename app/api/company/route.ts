@@ -1,5 +1,5 @@
 import { resolveCompanyBySymbol, companySnapshot } from '@/lib/providers';
-import { db, ensureSchema } from '@/lib/storage';
+import { db, ensureSchema, readCanonicalCompany } from '@/lib/storage';
 import { json } from '@/lib/http';
 
 import { reconcile } from '@/lib/reconcile';
@@ -13,6 +13,8 @@ export async function GET(request: Request) {
     const symbol = new URL(request.url).searchParams.get('symbol')?.trim().toUpperCase() ?? '';
     if (!/^[A-Z0-9.^-]{1,16}$/.test(symbol)) return json({ error: 'رمز غير صالح' }, 400);
     await ensureSchema();
+    const canonical=await readCanonicalCompany(symbol);
+    if(canonical)return json({...canonical,cached:true,ratingSource:'saved-production-universe'});
     // Version the deep cache whenever the enrichment contract changes so a
     // previous partial response cannot mask newly available fields.
     const cacheKey = `deep:${secUserAgentCacheVersion()}:${symbol}`;

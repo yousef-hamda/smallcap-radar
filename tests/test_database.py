@@ -21,4 +21,11 @@ class DatabaseTests(unittest.TestCase):
     self.db.execute("INSERT INTO fundamental_snapshots VALUES('bad','missing-run','B','now','{}','{}')")
   except sqlite3.IntegrityError:pass
   self.assertEqual(self.db.execute('SELECT COUNT(*) FROM fundamental_snapshots').fetchone()[0],0)
+ def test_rating_revision_tracks_insert_payload_update_and_delete(self):
+  self.db.execute("INSERT INTO fundamental_snapshots VALUES('s','r','A','now','{}','{}')")
+  self.assertEqual(self.db.execute("SELECT revision FROM opportunity_rating_versions WHERE run_id='r'").fetchone()[0],1)
+  self.db.execute("UPDATE fundamental_snapshots SET payload='{}' WHERE id='s'")
+  self.assertEqual(self.db.execute("SELECT revision FROM opportunity_rating_versions WHERE run_id='r'").fetchone()[0],2)
+  self.db.execute("DELETE FROM fundamental_snapshots WHERE id='s'")
+  self.assertEqual(self.db.execute("SELECT revision FROM opportunity_rating_versions WHERE run_id='r'").fetchone()[0],3)
 if __name__=='__main__':unittest.main()

@@ -1,3 +1,7 @@
+# Current acceptance contract
+
+The complete mathematical ranking requirements in [the 2026-10-05 audit](COMPLETE_RANKING_AUDIT_2026_10_05.md) supersede earlier requirements that used source completeness as a ranking filter. All eight grades and the final grade are required for every listing. Evidence sufficiency and investment safety remain separate findings. Entries below are historical.
+
 # Acceptance ledger — 2026-09-10
 
 Status is implementation evidence, not an assertion of historical strategy profitability. Full user plan is preserved in USER_PLAN_AR.md. No section is silently treated as complete.

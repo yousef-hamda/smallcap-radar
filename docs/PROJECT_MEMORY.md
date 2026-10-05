@@ -1,3 +1,17 @@
+# Current complete-ranking contract — 2026-10-05
+
+Rubric `1.0.0-complete-universe-ranking` supersedes the historical source-eligibility ranking policy in the entries below. Every production listing receives all eight numeric grades and one actual final rating, with fixed 25/20/15/12/10/10/5/3 weights. `state=ranked` and `rankingEligible=true` refer to complete mathematical ranking. `researchState`, `sourceEligible`, coverage, confidence and checks preserve evidence/tradability findings separately; they never remove a listing from final rankings. Missing model components earn zero. Reviewed partial grades are reduced once for uncovered dimensions. Displayed factor grades determine the exact fixed-weight arithmetic.
+
+Production payload replay: 6,954/6,954 valid evaluations; zero missing factor grades or final grades; all 6,954 sortable; 6,344 positive and 610 zero ratings. Live deployment and full production endpoint verification are pending at this checkpoint. Do not infer live adoption from local tests.
+
+Storage: canonical evaluations remain in `fundamental_snapshots.evaluation.opportunity`. New `opportunity_rankings` persists score, evaluation identity, rubric hash and rank position; `opportunity_rating_versions` tracks snapshot writes through three triggers; `opportunity_rank_versions` records the materialized revision. Readers repair older/corrupt evaluations in 100-row batches and rebuild ranks atomically, independent of starting a scan. Sort order is final score descending, then symbol using SQLite BINARY ordering. Search/pagination preserve whole-universe ranks. The chosen completed full run is shared by radar and profiles; newer failed/running/quick scans cannot replace it.
+
+Company profiles for universe members reuse the canonical saved snapshot/evaluation and rank. On-demand provider research remains available for companies outside that universe; current data acquisition for universe members is the scan pipeline. Opening a profile does not create a different grade. UI displays final ratings to two decimals, including zero, and defaults to the complete ranking. Report/export use the same evaluations. Prices in the scored universe stay paired with the rated snapshot; cached quote overlays are limited to favorites.
+
+See [diagnosis and acceptance contract](COMPLETE_RANKING_AUDIT_2026_10_05.md) (from repository root), and verification scripts `scripts/verify-complete-ranking.mjs` / `scripts/verify-production-ranking.mjs`. Earlier statements that zero final rankings are expected are historical and are superseded.
+
+---
+
 # Project memory — Small-Cap Radar
 
 Last verified: 2026-10-02. This is repository memory; many older entries below are dated historical checkpoints and are superseded by the latest continuation at the end. Active plan: `docs/UNIFIED_OPPORTUNITY_CATEGORY_PLAN_2026_09_30.md`.

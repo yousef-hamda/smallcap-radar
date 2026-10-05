@@ -1,4 +1,4 @@
-import {db,ensureSchema,readState} from '@/lib/storage';
+import {db,ensureSchema,readState,ensureRunEvaluations} from '@/lib/storage';
 import {json} from '@/lib/http';
 import {currentOpportunityEvaluation,opportunityDossierFromSnapshot} from '@/lib/opportunity-dossier';
 import {OPPORTUNITY_SPEC} from '@/lib/opportunity-spec';
@@ -13,6 +13,7 @@ export async function GET(req:Request){
   await ensureSchema();const database=db();
   const run=await database.prepare('SELECT id,status,stage,created_at,updated_at,failed,error FROM strategy_runs WHERE id=?').bind(runId).first();
   if(!run)return json({error:'الجولة غير موجودة'},404);
+  await ensureRunEvaluations(runId);
   const researchConflictRow=await database.prepare("SELECT COUNT(*) AS count FROM fundamental_snapshots WHERE run_id=? AND COALESCE(json_array_length(payload,'$.opportunityResearch.earnings.conflicts'),0)>0").bind(runId).first() as any;
   const researchConflictCount=Number(researchConflictRow?.count||0);
   const current=await readState({strategy:'opportunity',opportunityState:'all',limit,offset});
@@ -27,7 +28,7 @@ export async function GET(req:Request){
     blockers.push({id:`eligibility-${id}-${status.toLowerCase()}`,label:`بوابة الأهلية · ${checkLabels[id]??id}`,status,count:Number(value.count)||0});
    }
    if(researchConflictCount)blockers.push({id:'sec-concept-conflict',label:'تعارض مفاهيم مالية من SEC يحتاج مراجعة',status:'UNKNOWN',count:researchConflictCount});
-   const rows=current.snapshots.map((snapshot:any,index:number)=>({symbol:snapshot.symbol,name:snapshot.name,asOf:snapshot.asOf,evaluation:currentOpportunityEvaluation(snapshot,current.storedEvaluations?.[index]?.opportunity,opportunityDossierFromSnapshot(snapshot))}));
+   const rows=current.snapshots.map((snapshot:any,index:number)=>({symbol:snapshot.symbol,name:snapshot.name,asOf:snapshot.asOf,rank:current.rankPositions?.[index],evaluation:currentOpportunityEvaluation(snapshot,current.storedEvaluations?.[index]?.opportunity,opportunityDossierFromSnapshot(snapshot))}));
    return json({run,strategy,counts:{total,passed,failed,unknown:Math.max(0,total-passed-failed),withEvidence:current.summary.opportunityWithEvidence,stale:current.summary.stale},blockers,rows,page:{offset,limit,hasMore:current.page.hasMore}});
   }
   {
@@ -47,8 +48,8 @@ export async function GET(req:Request){
    const checkLabels:Record<string,string>={security:'نوع الورقة والبورصة', 'market-cap':'القيمة السوقية',liquidity:'سيولة التداول',price:'حداثة السعر','source-conflict':'تعارض المصادر','dossier-as-of':'تطابق توقيت البحث'};
    blockers.push(...eligibilityRows.map(row=>({id:`eligibility-${row.id}-${String(row.status).toLowerCase()}`,label:`بوابة الأهلية · ${checkLabels[row.id]??row.id}`,status:row.status as 'FAIL'|'UNKNOWN',count:Number(row.count)||0})));
    if(researchConflictCount)blockers.push({id:'sec-concept-conflict',label:'تعارض مفاهيم مالية من SEC يحتاج مراجعة',status:'UNKNOWN',count:researchConflictCount});
-   const rows=(await database.prepare('SELECT symbol,payload,evaluation FROM fundamental_snapshots WHERE run_id=? ORDER BY symbol LIMIT ? OFFSET ?').bind(runId,limit+1,offset).all()).results as any[];
-   return json({run,strategy,counts:{total,passed,failed,unknown:Math.max(0,total-passed-failed),withEvidence:Number(counts?.withEvidence||0)},blockers,rows:rows.slice(0,limit).map(row=>{const snapshot=JSON.parse(row.payload),evaluation=JSON.parse(row.evaluation).opportunity??currentOpportunityEvaluation(snapshot,undefined,opportunityDossierFromSnapshot(snapshot));return {symbol:row.symbol,name:snapshot.name,asOf:snapshot.asOf,evaluation};}),page:{offset,limit,hasMore:rows.length>limit}});
+   const rows=(await database.prepare("SELECT symbol,payload,evaluation,ROW_NUMBER() OVER (ORDER BY json_extract(evaluation,'$.opportunity.score') DESC,symbol COLLATE BINARY ASC) AS rank_position FROM fundamental_snapshots WHERE run_id=? ORDER BY json_extract(evaluation,'$.opportunity.score') DESC,symbol COLLATE BINARY ASC LIMIT ? OFFSET ?").bind(runId,limit+1,offset).all()).results as any[];
+   return json({run,strategy,counts:{total,passed,failed,unknown:Math.max(0,total-passed-failed),withEvidence:Number(counts?.withEvidence||0)},blockers,rows:rows.slice(0,limit).map(row=>{const snapshot=JSON.parse(row.payload),evaluation=JSON.parse(row.evaluation).opportunity??currentOpportunityEvaluation(snapshot,undefined,opportunityDossierFromSnapshot(snapshot));return {symbol:row.symbol,name:snapshot.name,asOf:snapshot.asOf,rank:Number(row.rank_position),evaluation};}),page:{offset,limit,hasMore:rows.length>limit}});
   }
  }catch{return json({error:'تعذّر تحميل تقرير الجولة المحفوظة؛ حاول مجددًا'},503);}
 }

@@ -105,21 +105,19 @@ test('company profile consumes only the canonical Opportunity evaluation',async(
  const source=await readFile(path.join(root,'app/company-sheet.tsx'),'utf8');
  const route=await readFile(path.join(root,'app/api/company/route.ts'),'utf8');
  assert.match(source,/opportunityEvaluation\.factors\.map/);
- assert.match(source,/opportunityEvaluation\.score\.toFixed\(1\)/);
- assert.match(source,/أدلة القوة المالية والسيولة/);assert.match(source,/unrestrictedCash/);assert.match(source,/النقص يمنع احتساب العامل/);
+ assert.match(source,/opportunityEvaluation\.score\.toFixed\(2\)/);
+ assert.match(source,/أدلة القوة المالية والسيولة/);assert.match(source,/unrestrictedCash/);assert.match(source,/النقص يقلل تغطية الأدلة المصدرية للعامل/);
  assert.doesNotMatch(source,/evaluateStrategy|SPECS\.(core|bounce)|فرص الارتداد|القيمة الأساسية/);
  assert.match(route,/evaluateOpportunityDossier\(snapshot,opportunityDossierFromSnapshot\(snapshot\)\)/);
 });
 
-test('radar displays fixed-denominator verified subtotals and sorts incomplete results by score then coverage',async()=>{
+test('radar displays numeric final grades, source coverage and stable database ranks',async()=>{
  const source=await readFile(path.join(root,'app/page.tsx'),'utf8');
  const storage=await readFile(path.join(root,'lib/storage.ts'),'utf8');
- assert.match(source,/نقاط مثبتة/);assert.match(source,/تغطية الأدلة \$\{e\.coveragePct\.toFixed\(1\)\}%/);assert.match(source,/f\.points\.toFixed\(2\)/);
- assert.match(source,/f\.complete\?'pass':f\.evidenced\?'partial':'unknown'/);
- assert.match(source,/opportunityWithEvidence\?\?0/);assert.match(source,/شركات لها نقاط موثقة/);
- const css=await readFile(path.join(root,'app/globals.css'),'utf8');assert.match(css,/\.brief-stats\{display:grid;grid-template-columns:repeat\(4,minmax\(0,1fr\)\)/);assert.match(css,/\.brief-stats\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);
- assert.match(storage,/json_extract\(evaluation,'\$\.opportunity\.score'\),0\) DESC, COALESCE\(json_extract\(evaluation,'\$\.opportunity\.coveragePct'\),0\) DESC/);
- assert.match(storage,/SELECT id,symbol,payload,evaluation FROM fundamental_snapshots WHERE run_id=\? AND symbol>\? ORDER BY symbol ASC LIMIT \?/);assert.match(storage,/snapshot_run_symbol_idx/);assert.match(storage,/Never materialize the entire multi-megabyte market snapshot/);
+ assert.match(source,/e\.score\.toFixed\(2\)/);assert.match(source,/f\.points\.toFixed\(2\)/);
+ assert.match(source,/تغطية المصادر/);assert.match(source,/rankBySymbol\[s\.symbol\]/);
+ assert.match(storage,/ROW_NUMBER\(\) OVER/);assert.match(storage,/symbol COLLATE BINARY ASC/);
+ assert.match(storage,/ensureRunEvaluations/);
 });
 
 test('profile renders sourced financial-strength gaps without filling missing figures with zero',async()=>{
@@ -129,7 +127,7 @@ test('profile renders sourced financial-strength gaps without filling missing fi
  assert.match(html,/أدلة القوة المالية والسيولة · 1\/6 مدخلات/);
  assert.match(html,/\$1\.25M/);
  assert.match(html,/rolling year-two debt maturity unavailable/);
- assert.match(html,/النقص يمنع احتساب العامل ولا يُعامل كقيمة صفرية/);
+ assert.match(html,/النقص يقلل تغطية الأدلة المصدرية للعامل ولا يُعامل كقيمة صفرية/);
  assert.doesNotMatch(html,/إجمالي الدين المعياري[\s\S]{0,80}>\$0/);
 });
 
@@ -276,17 +274,17 @@ test('radar favorites send the displayed verified snapshot when saving',async()=
  assert.match(source,/action:'favorite',symbol:s\.symbol,saved,\.\.\.\(saved\?\{snapshot:s\}:\{\}\)/);
 });
 
-test('unified opportunity view shows provisional weighted points while keeping completion status explicit',async()=>{
+test('unified opportunity view displays final grades and complete ranking',async()=>{
  const source=await readFile(path.join(root,'app/page.tsx'),'utf8');
  assert.match(source,/strategy=\$\{view==='opportunity'\?'opportunity':view\}/);
  assert.match(source,/state=\$\{opportunityState\}/);
  assert.match(source,/e\.state===opportunityState/);
- assert.match(source,/e\.state==='ranked'\?e\.score\.toFixed\(1\):e\.score>0\?e\.score\.toFixed\(1\):'—'/);
+ assert.match(source,/e\.score\.toFixed\(2\)/);
  assert.match(source,/\$\{f\.points\.toFixed\(2\)\} نقطة/);
  assert.match(source,/operatingCandidateSignals\(s\)/);
  assert.match(source,/candidate-signals/);
- assert.match(source,/ليست درجة نهائية/);
- assert.match(source,/useState<OpportunityState>\('needs-research'\)/);
+ assert.match(source,/الترتيب النهائي لجميع الأسهم/);assert.doesNotMatch(source,/ليست درجة نهائية|نقاط موثقة مؤقتة/);
+ assert.match(source,/useState<OpportunityState>\('ranked'\)/);
  assert.match(source,/visibleEvaluated\.map\(\(\{s,e\},index\)=>/);
  assert.match(source,/visibleEvaluated\.length\} نتيجة معروضة/);
 });

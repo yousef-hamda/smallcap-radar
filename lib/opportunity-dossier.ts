@@ -1,5 +1,5 @@
 import type { Snapshot } from './engine';
-import { evaluateOpportunity, type OpportunityEvaluation, type OpportunityEvidence, type OpportunityEvidenceSet } from './opportunity-engine';
+import { isCurrentOpportunityEvaluation, evaluateOpportunity, type OpportunityEvaluation, type OpportunityEvidence, type OpportunityEvidenceSet } from './opportunity-engine';
 import {
   scoreCatalysts,
   scoreDownsideRisk,
@@ -21,12 +21,12 @@ import {
   type TechnicalTimingAssessment,
   type TechnicalTimingScore,
 } from './opportunity-scoring';
-import { OPPORTUNITY_SPEC, opportunitySpecHash, type OpportunityFactorId, type OpportunityRiskTolerance } from './opportunity-spec';
+import { OPPORTUNITY_SPEC, type OpportunityFactorId, type OpportunityRiskTolerance } from './opportunity-spec';
 import { proxyOpportunityEvidence } from './opportunity-proxies';
 
 /**
  * Normalized research inputs for the unified score. Each section is populated
- * by a source adapter or analyst review; absent sections remain unscored.
+ * by a source adapter or analyst review; absent sections use explicit deterministic model grades.
  * This is deliberately separate from the existing compact scan Snapshot.
  */
 export type OpportunityDossier = {
@@ -125,7 +125,7 @@ export function scoreOpportunityDossier(dossier: OpportunityDossier, horizonMont
       if (result && result.score == null && acquisitionNote) result.rationale = `${result.rationale} ${acquisitionNote}`;
     } catch (error) {
       const detail = error instanceof Error ? error.message.slice(0, 180) : 'invalid section data';
-      output[factor] = missingEvidence(factor, 'This research section could not be evaluated; correct its input shape before ranking.', `${factor} calculator input error: ${detail}`);
+      output[factor] = missingEvidence(factor, 'This research section could not be evaluated; correct its input shape for source-reviewed coverage.', `${factor} calculator input error: ${detail}`);
     }
   }
   return output;
@@ -136,7 +136,8 @@ type SnapshotEarningsPeriod = NonNullable<Snapshot['opportunityResearch']>['earn
 
 function adaptEarningsPeriods(periods: SnapshotEarningsPeriod[]): EarningsPeriod[] {
   return periods.flatMap(period => {
-    const metrics = period.metrics;
+    const metrics = period?.metrics;
+    if(!metrics || typeof metrics!=='object')return [];
     if (!earningsMetricIds.every(metric => {
       const value = metrics[metric];
       return !!value && Number.isFinite(value.value) && !!value.unit && !!value.source;
@@ -157,12 +158,12 @@ export function opportunityDossierFromSnapshot(snapshot: Snapshot): OpportunityD
   const technicalResearch = snapshot.opportunityResearch?.technicalTiming;
   const researchNotes: OpportunityDossier['researchNotes'] = {};
   if (research) {
-    const coverage = `${research.coverage.annualPeriodsFound}/3 annual and ${research.coverage.quarterlyPeriodsFound}/8 quarterly periods`;
+    const coverage = `${research.coverage?.annualPeriodsFound??0}/3 annual and ${research.coverage?.quarterlyPeriodsFound??0}/8 quarterly periods`;
     const provider = research.providerStatus === 'retrieved'
       ? `SEC Company Facts retrieved ${coverage}. `
       : `SEC Company Facts status is ${research.providerStatus}${research.providerMessage ? ` (${research.providerMessage})` : ''}; ${coverage}. `;
-    const gaps = research.missing.length ? ` Missing: ${research.missing.slice(0, 5).join('; ')}.` : '';
-    const conflicts = research.conflicts.length ? ` Conflicts: ${research.conflicts.slice(0, 3).join('; ')}.` : '';
+    const gaps = (research.missing??[]).length ? ` Missing: ${(research.missing??[]).slice(0, 5).join('; ')}.` : '';
+    const conflicts = (research.conflicts??[]).length ? ` Conflicts: ${(research.conflicts??[]).slice(0, 3).join('; ')}.` : '';
     researchNotes.earningsQuality = `${provider}Dated source-backed GAAP/non-GAAP adjustment and one-off reviews are required before scoring.${gaps}${conflicts}`;
   } else {
     researchNotes.earningsQuality = 'No sourced three-year/eight-quarter SEC earnings history is attached to this snapshot.';
@@ -174,8 +175,8 @@ export function opportunityDossierFromSnapshot(snapshot: Snapshot): OpportunityD
     && !!financialMetrics && financialMetricIds.every(id => !!financialMetrics[id]);
   if (financialResearch) {
     const available = financialMetricIds.filter(id => !!financialMetrics?.[id]).length;
-    const gaps = financialResearch.missing.length ? ` Missing: ${financialResearch.missing.slice(0, 6).join('; ')}.` : '';
-    const conflicts = financialResearch.conflicts.length ? ` Conflicts: ${financialResearch.conflicts.slice(0, 3).join('; ')}.` : '';
+    const gaps = (financialResearch.missing??[]).length ? ` Missing: ${(financialResearch.missing??[]).slice(0, 6).join('; ')}.` : '';
+    const conflicts = (financialResearch.conflicts??[]).length ? ` Conflicts: ${(financialResearch.conflicts??[]).slice(0, 3).join('; ')}.` : '';
     researchNotes.financialStrength = financialComplete
       ? 'SEC financial inputs are available; the evaluator still validates date, currency, rights, and balance-sheet alignment.'
       : `SEC financial-strength inputs: ${available}/6 available; provider status ${financialResearch.providerStatus}.${gaps}${conflicts}`;
@@ -183,18 +184,18 @@ export function opportunityDossierFromSnapshot(snapshot: Snapshot): OpportunityD
     researchNotes.financialStrength = 'No sourced SEC cash, debt, TTM cash-flow, interest, and maturity inputs are attached to this snapshot.';
   }
   researchNotes.technicalTiming = technicalResearch
-    ? `Completed price history: ${technicalResearch.dailyBars} daily, ${technicalResearch.weeklyBars} weekly, ${technicalResearch.monthlyBars} monthly, and ${technicalResearch.benchmarkBars} benchmark bars. ${technicalResearch.missing.join(' ')}`
+    ? `Completed price history: ${technicalResearch.dailyBars} daily, ${technicalResearch.weeklyBars} weekly, ${technicalResearch.monthlyBars} monthly, and ${technicalResearch.benchmarkBars} benchmark bars. ${(technicalResearch.missing??[]).join(' ')}`
     : 'Technical review has not acquired multi-timeframe stock and benchmark history.';
   const filingResearch = snapshot.opportunityResearch?.secFilings;
   researchNotes.catalysts = filingResearch
-    ? `SEC recent-submission index status: ${filingResearch.providerStatus}; ${filingResearch.items.length} bounded filing metadata records are attached. ${filingResearch.form8KItemIndex?`${filingResearch.form8KItemIndex.fetchedDocuments} recent 8-K bodies were scanned for item-number references only; those references are discovery aids, not reviewed evidence. `:''}This filing index is a discovery aid only: filings have not been classified for binding status, revenue impact, timing, market expectations, or future catalyst value. No catalyst score may be inferred from filing count, form, or item numbers. ${filingResearch.limitations.join(' ')} ${filingResearch.form8KItemIndex?.limitations.join(' ')??''}`
+    ? `SEC recent-submission index status: ${filingResearch.providerStatus}; ${(filingResearch.items??[]).length} bounded filing metadata records are attached. ${filingResearch.form8KItemIndex?`${filingResearch.form8KItemIndex.fetchedDocuments} recent 8-K bodies were scanned for item-number references only; those references are discovery aids, not reviewed evidence. `:''}This filing index is a discovery aid only: filings have not been classified for binding status, revenue impact, timing, market expectations, or future catalyst value. No catalyst score may be inferred from filing count, form, or item numbers. ${(filingResearch.limitations??[]).join(' ')} ${filingResearch.form8KItemIndex?.limitations.join(' ')??''}`
     : 'No issuer filing index is attached. Future catalysts require dated, source-reviewed evidence; do not infer them from headlines or filing counts.';
   return {
     asOf: snapshot.asOf,
-    ...(research && (research.annual.length > 0 || research.quarterly.length > 0) ? { earningsQualityPartial: {
+    ...(research && ((research.annual??[]).length > 0 || (research.quarterly??[]).length > 0) ? { earningsQualityPartial: {
       asOf: snapshot.asOf,
-      annual: adaptEarningsPeriods(research.annual),
-      quarterly: adaptEarningsPeriods(research.quarterly),
+      annual: adaptEarningsPeriods(research.annual??[]),
+      quarterly: adaptEarningsPeriods(research.quarterly??[]),
     } } : {}),
     ...(financialComplete ? { financialStrength: {
       industryModel: financialResearch!.industryModel!,
@@ -233,10 +234,10 @@ export function evaluateOpportunityDossier(
     const result = evaluateOpportunity(snapshot, {}, options);
     return {
       ...result,
-      state: result.state === 'excluded' ? 'excluded' : 'needs-research',
-      status: result.state === 'excluded' ? 'FAIL' : 'UNKNOWN',
-      rankingEligible: false,
-      reason: 'Snapshot and research dossier timestamps differ; reconcile the quote and research cut before ranking.',
+      researchState: result.researchState === 'excluded' ? 'excluded' : 'needs-research',
+      sourceEligible: false,
+      status: result.researchState === 'excluded' ? 'FAIL' : 'UNKNOWN',
+      reason: 'Snapshot and research dossier timestamps differ; the final model grade is retained, while reviewed evidence awaits reconciliation.',
       checks: [...result.checks, { id: 'dossier-as-of', status: 'UNKNOWN', role: 'evidence', explanation: 'Snapshot and dossier as-of timestamps must match exactly.' }],
     };
   }
@@ -248,33 +249,13 @@ export function evaluateOpportunityDossier(
     // A reviewed dossier outranks an automated proxy. Proxies fill only the
     // previously unscored qualitative factors.
     if (!existing || existing.score == null) {
-      // A proxy can provide a bounded provisional number even when reviewed
+      // A model supplies a final bounded grade when reviewed
       // evidence has conflicts. Preserve the conflict on the proxy so it stays
-      // visible and continues to block evidenced coverage and ranking.
+      // visible and continues to withhold source-reviewed coverage.
       evidence[factor] = {
         ...candidate,
         ...(existing?.rationale ? { rationale: `${existing.rationale} ${candidate.rationale}` } : {}),
-        ...(existing?.conflicts?.length ? { conflicts: [...existing.conflicts] } : {}),
-      };
-    }
-  }
-  // Direct financial and earnings factors also receive a bounded zero proxy
-  // when their reviewed sections are absent or incomplete. This guarantees a
-  // deterministic overall 100-point algorithmic grade for every snapshot;
-  // source-reviewed coverage remains separately zero and ranking gates remain
-  // unchanged.
-  for (const factor of ['financialStrength', 'earningsQuality'] as const) {
-    const existing = evidence[factor];
-    if (!existing || existing.score == null) {
-      evidence[factor] = {
-        score: 0,
-        proxy: true,
-        coveragePct: 0,
-        rationale: `${existing?.rationale ?? 'No complete source-reviewed factor assessment is available.'} Deterministic fallback proxy score is zero; it is not a filing-level review.`,
-        sources: [],
-        confidence: 'low',
-        calculation: { rubricId: 'proxy-v1', inputs: [{ name: 'fallback', value: 'no-complete-reviewed-assessment' }] },
-        ...(existing?.conflicts?.length ? { conflicts: [...existing.conflicts] } : {}),
+        ...(existing?.conflicts?.length ? { conflicts: existing.conflicts.filter(conflict=>!conflict.startsWith('qualitative dimension not reviewed:')) } : {}),
       };
     }
   }
@@ -314,8 +295,7 @@ export function currentOpportunityEvaluation(
   saved: unknown,
   dossier: OpportunityDossier = opportunityDossierFromSnapshot(snapshot),
 ): OpportunityEvaluation {
-  if (saved && typeof saved === 'object'
-    && (saved as OpportunityEvaluation).hash === opportunitySpecHash()) {
+  if (isCurrentOpportunityEvaluation(saved) && saved.asOf === snapshot.asOf) {
     return saved as OpportunityEvaluation;
   }
   return evaluateOpportunityDossier(snapshot, dossier);

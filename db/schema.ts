@@ -40,3 +40,14 @@ export const recoveryBundles=sqliteTable('recovery_bundles',{
  claimedAt:text('claimed_at'),
  claimedBy:text('claimed_by'),
 });
+
+export const opportunityRankings=sqliteTable('opportunity_rankings',{
+ runId:text('run_id').notNull(),symbol:text('symbol').notNull(),score:real('score').notNull(),
+ evaluationHash:text('evaluation_hash').notNull(),rankPosition:integer('rank_position').notNull(),rubricHash:text('rubric_hash').notNull(),
+},t=>[primaryKey({columns:[t.runId,t.symbol]}),index('opportunity_rank_position_idx').on(t.runId,t.rankPosition)]);
+export const opportunityRatingVersions=sqliteTable('opportunity_rating_versions',{
+ runId:text('run_id').primaryKey(),revision:integer('revision').notNull().default(0),
+});
+export const opportunityRankVersions=sqliteTable('opportunity_rank_versions',{
+ runId:text('run_id').primaryKey(),revision:integer('revision').notNull(),rubricHash:text('rubric_hash').notNull(),
+});

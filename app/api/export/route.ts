@@ -10,7 +10,7 @@ export async function GET(req: Request) {
     ? OPPORTUNITY_SPEC
     : kind === 'schema'
       ? {
-          description: 'Import a Snapshot[] array, not this wrapper. This example is SYNTHETIC and must be replaced with sourced observations. Opportunity ranking requires sourced evidence for all eight fixed-weight factors.',
+          description: 'Import a Snapshot[] array, not this wrapper. This example is SYNTHETIC and must be replaced with sourced observations. Every listing receives eight deterministic grades and a final fixed-weight rating; source coverage and safety findings are disclosed separately.',
           example: fixtures[0],
           required: ['symbol', 'name', 'asOf', 'provenance'],
           metricUnits: { marketCap: 'USD', revenue: 'reported currency unless explicitly converted with sourced FX', return12m: 'decimal (-0.4 = -40%)', dilution: 'split-adjusted decimal', price: 'last completed regular session close' },

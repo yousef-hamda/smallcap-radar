@@ -656,10 +656,10 @@ test('unified opportunity scores on the fixed denominator and ranks only with ma
  assert.equal(evaluation.state,'ranked');assert.equal(evaluation.rankingEligible,true);assert.equal(evaluation.score,100);assert.equal(evaluation.coveragePct,100);assert.equal(evaluation.evidencedWeight,100);
  const materialOnly=Object.fromEntries(['valuation','catalysts','financialStrength','earningsQuality','downsideRisk'].map(id=>[id,opportunityEvidence()[id]]));
  const partial=evaluateOpportunity(opportunitySnapshot,materialOnly);
- assert.equal(partial.state,'needs-research');assert.equal(partial.coveragePct,82);assert.equal(partial.score,82);assert.equal(partial.confidence,'low');
+ assert.equal(partial.researchState,'needs-research');assert.equal(partial.coveragePct,82);assert.equal(partial.score,82);assert.equal(partial.confidence,'low');
  const partialValuation=opportunityEvidence();partialValuation.valuation.coveragePct=40;
  const quantified=evaluateOpportunity(opportunitySnapshot,partialValuation);
- assert.equal(quantified.factors.find(factor=>factor.id==='valuation').points,10);assert.equal(quantified.coveragePct,85);assert.equal(quantified.score,85);assert.equal(quantified.rankingEligible,false);assert.equal(quantified.factors.find(factor=>factor.id==='valuation').complete,false);
+ assert.equal(quantified.factors.find(factor=>factor.id==='valuation').points,10);assert.equal(quantified.coveragePct,85);assert.equal(quantified.score,85);assert.equal(quantified.sourceEligible,false);assert.equal(quantified.factors.find(factor=>factor.id==='valuation').complete,false);
 });
 test('SEC operating research priorities use only issuer-linked dated facts and expose missing history',()=>{
  const annual=(year,revenue,income,cash,capex,rightsStatus='redistribution-permitted')=>{const end=`${year}-12-31`,source={source:'SEC Company Facts · annual fixture',url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0000000001.json',periodEnd:end,availableAt:`${Number(year)+1}-02-01T00:00:00Z`,retrievedAt:`${Number(year)+1}-02-02T00:00:00Z`,rightsStatus,confidence:'high'};const value=n=>({value:n,unit:'USD',source});return{start:`${year}-01-01`,end,metrics:{revenue:value(revenue),netIncome:value(income),operatingCashFlow:value(cash),capitalExpenditure:value(capex)}}};
@@ -679,14 +679,14 @@ test('SEC revenue concepts prefer consolidated operating revenue over narrow con
 test('missing, out-of-range, unsourced, stale and future factor evidence never earns points',()=>{
  const evidence=opportunityEvidence();evidence.valuation.score=11;evidence.catalysts.sources=[];evidence.financialStrength.sources=[{...opportunityProvenance,availableAt:'2027-01-01T00:00:00Z'}];
  const result=evaluateOpportunity(opportunitySnapshot,evidence);
- assert.equal(result.state,'needs-research');assert.equal(result.rankingEligible,false);
- for(const id of ['valuation','catalysts','financialStrength']){const factor=result.factors.find(item=>item.id===id);assert.equal(factor.score,null);assert.equal(factor.points,0);assert.equal(factor.evidenced,false);}
+ assert.equal(result.researchState,'needs-research');assert.equal(result.sourceEligible,false);
+ for(const id of ['valuation','catalysts','financialStrength']){const factor=result.factors.find(item=>item.id===id);assert.equal(factor.score,0);assert.equal(factor.points,0);assert.equal(factor.evidenced,false);}
 });
 test('undated or non-auditable security identity and factor source cannot rank',()=>{
  const evidence=opportunityEvidence();evidence.valuation.sources=[{...opportunityProvenance,url:'http://example.test/source'}];
- assert.equal(evaluateOpportunity(opportunitySnapshot,evidence).state,'needs-research');
+ assert.equal(evaluateOpportunity(opportunitySnapshot,evidence).researchState,'needs-research');
  const missingIdentitySource={...opportunitySnapshot,provenance:{...opportunitySnapshot.provenance,securityType:undefined}};
- assert.equal(evaluateOpportunity(missingIdentitySource,opportunityEvidence()).state,'needs-research');
+ assert.equal(evaluateOpportunity(missingIdentitySource,opportunityEvidence()).researchState,'needs-research');
 });
 test('dated primary listing identity can establish the share class without asserting market-data reuse rights',()=>{
  const evidence=opportunityEvidence();
@@ -698,16 +698,16 @@ test('evidence from sources without cleared reuse rights cannot score or pass sa
  const evidence=opportunityEvidence();evidence.valuation.sources=[{...opportunityProvenance,rightsStatus:'unverified'}];
  const snapshot={...opportunitySnapshot,provenance:{...opportunitySnapshot.provenance,price:{...freshMarketEvidence,rightsStatus:'unverified'}}};
  const result=evaluateOpportunity(snapshot,evidence);
- assert.equal(result.state,'needs-research');
+ assert.equal(result.researchState,'needs-research');
  assert.equal(result.checks.find(check=>check.id==='price').status,'UNKNOWN');
  const valuation=result.factors.find(factor=>factor.id==='valuation');
- assert.equal(valuation.evidenced,false);assert.equal(valuation.score,null);
+ assert.equal(valuation.evidenced,false);assert.equal(valuation.score,0);
 });
 test('a numeric factor score without a reproducible calculation trace earns no points',()=>{
  const evidence=opportunityEvidence();delete evidence.valuation.calculation;
  const result=evaluateOpportunity(opportunitySnapshot,evidence);
  const valuation=result.factors.find(factor=>factor.id==='valuation');
- assert.equal(valuation.evidenced,false);assert.equal(valuation.score,null);assert.equal(valuation.points,0);assert.equal(result.state,'needs-research');
+ assert.equal(valuation.evidenced,false);assert.equal(valuation.score,0);assert.equal(valuation.points,0);assert.equal(result.researchState,'needs-research');
 });
 test('overall confidence cannot be high if a ranked factor has no confidence assessment',()=>{
  const evidence=opportunityEvidence();delete evidence.valuation.confidence;
@@ -718,15 +718,15 @@ test('unified opportunity enforces only broad security, size, liquidity and curr
  const allEvidence=opportunityEvidence();
  assert.equal(evaluateOpportunity({...opportunitySnapshot,marketCap:3e9},allEvidence).state,'ranked','there is no old Core upper cap');
  assert.equal(evaluateOpportunity({...opportunitySnapshot,marketCap:20e6},allEvidence).state,'ranked','micro caps are not rejected solely due to size');
- assert.equal(evaluateOpportunity({...opportunitySnapshot,marketCap:0},allEvidence).state,'excluded','zero capitalization is invalid');
- assert.equal(evaluateOpportunity({...opportunitySnapshot,medianDollarVolume20d:149999},allEvidence).state,'excluded');
- assert.equal(evaluateOpportunity({...opportunitySnapshot,provenance:{...opportunitySnapshot.provenance,marketCap:{...freshMarketEvidence,availableAt:'2026-09-21T20:00:00Z'}}},allEvidence).state,'needs-research','stale market cap does not exclude or rank');
- assert.equal(evaluateOpportunity({...opportunitySnapshot,provenance:{...opportunitySnapshot.provenance,medianDollarVolume20d:{...freshMarketEvidence,availableAt:'2026-09-21T20:00:00Z'}}},allEvidence).state,'needs-research','stale liquidity does not exclude or rank');
- assert.equal(evaluateOpportunity({...opportunitySnapshot,securityType:'warrant'},allEvidence).state,'excluded');
+ assert.equal(evaluateOpportunity({...opportunitySnapshot,marketCap:0},allEvidence).researchState,'excluded','zero capitalization is invalid');
+ assert.equal(evaluateOpportunity({...opportunitySnapshot,medianDollarVolume20d:149999},allEvidence).researchState,'excluded');
+ assert.equal(evaluateOpportunity({...opportunitySnapshot,provenance:{...opportunitySnapshot.provenance,marketCap:{...freshMarketEvidence,availableAt:'2026-09-21T20:00:00Z'}}},allEvidence).researchState,'needs-research','stale market cap does not exclude or rank');
+ assert.equal(evaluateOpportunity({...opportunitySnapshot,provenance:{...opportunitySnapshot.provenance,medianDollarVolume20d:{...freshMarketEvidence,availableAt:'2026-09-21T20:00:00Z'}}},allEvidence).researchState,'needs-research','stale liquidity does not exclude or rank');
+ assert.equal(evaluateOpportunity({...opportunitySnapshot,securityType:'warrant'},allEvidence).researchState,'excluded');
  const adr={...opportunitySnapshot,securityType:'adr',provenance:{...opportunitySnapshot.provenance,securityType:{...opportunityProvenance,rightsStatus:'unknown'},exchange:{...opportunityProvenance,rightsStatus:'unknown'}}};
- const adrResult=evaluateOpportunity(adr,allEvidence);assert.equal(adrResult.state,'needs-research');assert.match(adrResult.checks.find(check=>check.id==='security').explanation,/conversion ratio/);
- assert.equal(evaluateOpportunity({...opportunitySnapshot,securityType:undefined},allEvidence).state,'needs-research');
- assert.equal(evaluateOpportunity({...opportunitySnapshot,provenance:{...opportunitySnapshot.provenance,price:{...opportunitySnapshot.provenance.price,availableAt:'2026-09-24T20:00:00Z'}}},allEvidence).state,'needs-research');
+ const adrResult=evaluateOpportunity(adr,allEvidence);assert.equal(adrResult.researchState,'needs-research');assert.match(adrResult.checks.find(check=>check.id==='security').explanation,/conversion ratio/);
+ assert.equal(evaluateOpportunity({...opportunitySnapshot,securityType:undefined},allEvidence).researchState,'needs-research');
+ assert.equal(evaluateOpportunity({...opportunitySnapshot,provenance:{...opportunitySnapshot.provenance,price:{...opportunitySnapshot.provenance.price,availableAt:'2026-09-24T20:00:00Z'}}},allEvidence).researchState,'needs-research');
 });
 test('source registry covers every factor and distinguishes public FINRA short interest from unavailable borrow data',()=>{
  const ids=new Set(DATA_FIELD_REGISTRY.map(field=>field.id));
@@ -757,9 +757,9 @@ test('old Core profitability/EV-S and Bounce drawdown/MA30W conditions do not ga
 test('conflicts hold affected evidence for review without fabricating points',()=>{
  const evidence=opportunityEvidence();evidence.valuation.conflicts=['SEC and company IR value disagree'];
  const result=evaluateOpportunity(opportunitySnapshot,evidence);
- assert.equal(result.state,'needs-research');assert.equal(result.factors.find(factor=>factor.id==='valuation').score,null);
+ assert.equal(result.researchState,'needs-research');assert.equal(result.factors.find(factor=>factor.id==='valuation').score,0);
  const conflicted=evaluateOpportunity({...opportunitySnapshot,sourceConflicts:['market cap conflict']},opportunityEvidence());
- assert.equal(conflicted.state,'needs-research');assert.equal(conflicted.coveragePct,100);assert.equal(conflicted.score,100,'retained evidence remains visible even while the final ranking is held');
+ assert.equal(conflicted.researchState,'needs-research');assert.equal(conflicted.coveragePct,100);assert.equal(conflicted.score,100,'retained evidence remains visible even while the final ranking is held');
 });
 test('risk tolerance and investment horizon are report context, not score-weight changes',()=>{
  const evidence=opportunityEvidence();
@@ -777,7 +777,7 @@ test('dossier orchestrator runs every validated calculator and produces one repr
  assert.deepEqual(Object.keys(evidence).sort(),OPPORTUNITY_SPEC.factors.map(factor=>factor.id).sort());
  for(const factor of OPPORTUNITY_SPEC.factors){assert.ok(evidence[factor.id].calculation?.rubricId,`${factor.id} calculation trace`);assert.ok(evidence[factor.id].sources.length,`${factor.id} sourced evidence`)}
  const result=evaluateOpportunityDossier(opportunitySnapshot,dossier);
- assert.equal(result.state,'ranked');assert.equal(result.coveragePct,100);assert.equal(result.score,result.factors.reduce((sum,factor)=>sum+factor.points,0));
+ assert.equal(result.state,'ranked');assert.equal(result.coveragePct,100);assert.equal(result.score,Math.round(result.factors.reduce((sum,factor)=>sum+factor.points,0)*100)/100);
  assert.deepEqual(result.factors.map(factor=>factor.weight),[25,20,15,12,10,10,5,3]);
 });
 test('stale scan-report scores are rebuilt from the saved dossier instead of dropping its evidence',()=>{
@@ -793,16 +793,16 @@ test('dossier evaluation always produces a complete algorithmic 100-point grade'
  assert.equal(evaluation.score>=0,true);assert.equal(evaluation.algorithmicCoveragePct,100);
  assert.equal(evaluation.factors.every(factor=>typeof factor.score==='number' && factor.score>=0 && factor.score<=10),true);
  assert.equal(evaluation.factors.reduce((sum,factor)=>sum+factor.points,0),evaluation.score);
- assert.equal(evaluation.rankingEligible,false,'source safety and evidence gates remain separate from the algorithmic grade');
+ assert.equal(evaluation.sourceEligible,false,'source safety and evidence gates remain separate from the algorithmic grade');
 });
 test('dossier orchestrator does not manufacture missing sections or combine different as-of cuts',()=>{
  const incomplete=completeOpportunityDossier();incomplete.earningsQuality.quarterly=incomplete.earningsQuality.quarterly.slice(1);
  const partial=evaluateOpportunityDossier(opportunitySnapshot,incomplete);
- assert.equal(partial.state,'needs-research');assert.equal(partial.factors.find(factor=>factor.id==='earningsQuality').score,0);assert.equal(partial.factors.find(factor=>factor.id==='earningsQuality').proxy,true);assert.equal(partial.rankingEligible,false);
+ assert.equal(partial.researchState,'needs-research');assert.equal(partial.factors.find(factor=>factor.id==='earningsQuality').score,0);assert.equal(partial.factors.find(factor=>factor.id==='earningsQuality').proxy,true);assert.equal(partial.sourceEligible,false);
  const mismatched=completeOpportunityDossier();mismatched.catalysts={...mismatched.catalysts,asOf:'2026-09-29T12:00:00.000Z'};
  const result=evaluateOpportunityDossier(opportunitySnapshot,mismatched);
- assert.equal(result.state,'needs-research');assert.equal(result.factors.find(factor=>factor.id==='catalysts').score,0);assert.equal(result.factors.find(factor=>factor.id==='catalysts').proxy,true);assert.match(result.factors.find(factor=>factor.id==='catalysts').rationale,/timestamp does not match/);
- assert.equal(evaluateOpportunityDossier({...opportunitySnapshot,asOf:'2026-09-30T12:00:01.000Z'},completeOpportunityDossier()).rankingEligible,false);
+ assert.equal(result.researchState,'needs-research');assert.equal(result.factors.find(factor=>factor.id==='catalysts').score,0);assert.equal(result.factors.find(factor=>factor.id==='catalysts').proxy,true);assert.match(result.factors.find(factor=>factor.id==='catalysts').rationale,/timestamp does not match/);
+ assert.equal(evaluateOpportunityDossier({...opportunitySnapshot,asOf:'2026-09-30T12:00:01.000Z'},completeOpportunityDossier()).sourceEligible,false);
 });
 test('snapshot SEC earnings history contributes only the quantified earnings subtotal while review points remain uncovered',()=>{
  const history=earningsInput();
@@ -810,7 +810,7 @@ test('snapshot SEC earnings history contributes only the quantified earnings sub
  const snapshot={...opportunitySnapshot,opportunityResearch:{earnings:{providerStatus:'retrieved',coverage:{annualPeriodsFound:3,quarterlyPeriodsFound:8,selectedUnit:'USD'},annual:adapt(history.annual),quarterly:adapt(history.quarterly),missing:[],conflicts:[],limitations:[],readyForScoring:false}}};
  const dossier=opportunityDossierFromSnapshot(snapshot);assert.equal(dossier.earningsQualityPartial.annual.length,3);assert.equal(dossier.earningsQualityPartial.quarterly.length,8);assert.equal(dossier.earningsQualityPartial.gaapNonGaapBridgeReview,undefined);
  const result=evaluateOpportunityDossier(snapshot,dossier),factor=result.factors.find(item=>item.id==='earningsQuality');
- assert.ok(factor.score>0);assert.equal(factor.evidenced,true);assert.equal(factor.complete,false);assert.equal(factor.coveragePct,85);assert.equal(factor.points,Math.round(factor.score/10*12*.85*100)/100);assert.equal(factor.sources.length,66);assert.match(factor.rationale,/GAAP\/non-GAAP and one-off reviews remain unscored/);assert.equal(result.state,'needs-research');
+ assert.ok(factor.score>0);assert.equal(factor.evidenced,true);assert.equal(factor.complete,false);assert.equal(factor.coveragePct,85);assert.equal(factor.points,Math.round(factor.score/10*12*1000)/1000);assert.equal(factor.sources.length,66);assert.match(factor.rationale,/GAAP\/non-GAAP and one-off reviews remain unscored/);assert.equal(result.researchState,'needs-research');
 });
 test('unresolved SEC concept conflicts withhold provisional earnings points and operating priority signals',()=>{
  const history=earningsInput();
@@ -847,7 +847,7 @@ test('SEC financial-strength adapter derives only aligned debt, maturity, intere
  const partialScore=scoreFinancialStrengthPartial(partialAssessment);assert.equal(partialScore.coveragePct,70);assert.ok(partialScore.score>0);assert.match(partialScore.rationale,/70%.*unavailable dimensions remain uncovered/);
  const partialSnapshot={...opportunitySnapshot,opportunityResearch:{financialStrength:{providerStatus:'retrieved',industryModel:'industrial-operating-company',metrics:{...partialAssessment},missing:['interest is missing'],conflicts:[],limitations:[],readyForScoring:false}}};
  const partialEvaluation=evaluateOpportunityDossier(partialSnapshot,opportunityDossierFromSnapshot(partialSnapshot)),partialFactor=partialEvaluation.factors.find(item=>item.id==='financialStrength');
- assert.equal(partialFactor.coveragePct,70);assert.ok(partialFactor.points>0);assert.equal(partialFactor.complete,false);assert.equal(partialEvaluation.rankingEligible,false);
+ assert.equal(partialFactor.coveragePct,70);assert.ok(partialFactor.points>0);assert.equal(partialFactor.complete,false);assert.equal(partialEvaluation.sourceEligible,false);
  const incomplete=structuredClone(payload);delete incomplete.facts['us-gaap'].LongTermDebtMaturitiesRepaymentsOfPrincipalInYearTwo;
  const missingMaturity=buildSecFinancialStrengthInputs(cik,incomplete,asOf,'2026-09-30T11:00:00.000Z',earnings,'industrial-operating-company');
  assert.equal(missingMaturity.assessment,undefined);assert.match(missingMaturity.missing.join(' '),/year-two debt maturities/);
@@ -873,14 +873,14 @@ test('dossier withholds fair value when its reference price or trading session d
 test('dossier orchestrator requires catalyst assessment to match the selected horizon',()=>{
  const dossier=completeOpportunityDossier();dossier.catalysts={...dossier.catalysts,horizonMonths:12};
  const result=evaluateOpportunityDossier(opportunitySnapshot,dossier,{horizonMonths:6});
- assert.equal(result.state,'needs-research');assert.equal(result.factors.find(factor=>factor.id==='catalysts').score,0);assert.equal(result.factors.find(factor=>factor.id==='catalysts').proxy,true);
+ assert.equal(result.researchState,'needs-research');assert.equal(result.factors.find(factor=>factor.id==='catalysts').score,0);assert.equal(result.factors.find(factor=>factor.id==='catalysts').proxy,true);
  const aligned=completeOpportunityDossier();aligned.catalysts={...aligned.catalysts,horizonMonths:12};
  assert.equal(evaluateOpportunityDossier(opportunitySnapshot,aligned,{horizonMonths:12}).factors.find(factor=>factor.id==='catalysts').evidenced,true);
 });
 test('dossier orchestrator contains malformed section payloads as unscored research gaps',()=>{
  const dossier=completeOpportunityDossier();dossier.valuation={...dossier.valuation,methods:null};
  const result=evaluateOpportunityDossier(opportunitySnapshot,dossier);
- assert.equal(result.state,'needs-research');assert.equal(result.factors.find(factor=>factor.id==='valuation').score,0);assert.equal(result.factors.find(factor=>factor.id==='valuation').proxy,true);
+ assert.equal(result.researchState,'needs-research');assert.equal(result.factors.find(factor=>factor.id==='valuation').score,0);assert.equal(result.factors.find(factor=>factor.id==='valuation').proxy,true);
  assert.match(result.factors.find(factor=>factor.id==='valuation').rationale,/calculator input error/);
 });
 
@@ -1149,4 +1149,45 @@ test('converted provenance requires auditable ECB rate lineage and positive fini
  assert.equal(isOpportunityProvenanceValid({...source,conversion:{...source.conversion,sourceUrl:'https://api.frankfurter.dev/v2/providers/ecb/rates?from=2026-09-01&to=2026-09-03&base=EUR&quotes=JPY%2CUSD',rateProvider:'European Central Bank (ECB) via Frankfurter API'}},'2026-09-06T00:00:00Z'),true);
  assert.equal(isOpportunityProvenanceValid({...source,conversion:{...source.conversion,rate:0}},'2026-09-06T00:00:00Z'),false);
  assert.equal(isOpportunityProvenanceValid({...source,conversion:{...source.conversion,sourceUrl:'http://data.ecb.europa.eu/api'}},'2026-09-06T00:00:00Z'),false);
+});
+
+test('complete rating covers all listing types and every subset of the eight factors',()=>{
+ const ids=OPPORTUNITY_SPEC.factors.map(factor=>factor.id);
+ for(const securityType of ['common','adr','unit','warrant','right','unknown','preferred','fund','debt']){
+  for(let mask=0;mask<256;mask++){
+   const evidence=Object.fromEntries(ids.filter((_,index)=>mask&(1<<index)).map(id=>[id,opportunityEvidence()[id]]));
+   const snapshot={symbol:`TYPE-${securityType}`,name:'Acceptance fixture',asOf:opportunityAsOf,securityType,provenance:{}};
+   const result=evaluateOpportunity(snapshot,evidence);
+   assert.equal(result.state,'ranked');assert.equal(result.rankingEligible,true);assert.equal(result.algorithmicCoveragePct,100);
+   assert.equal(result.factors.length,8);assert.ok(result.evaluationHash);
+   for(const factor of result.factors){assert.ok(Number.isFinite(factor.score)&&factor.score>=0&&factor.score<=10);assert.equal(factor.points,Math.round(factor.score*factor.weight*100)/1000);assert.ok(factor.calculation.inputs.length>0);}
+   assert.equal(result.score,Math.round(result.factors.reduce((sum,factor)=>sum+factor.points,0)*100)/100);
+   assert.deepEqual(result,evaluateOpportunity(structuredClone(snapshot),structuredClone(evidence)));
+  }
+ }
+});
+test('empty snapshots and timestamp mismatches retain eight traced zero grades and a final rank',()=>{
+ const snapshot={symbol:'EMPTY',name:'Empty fixture',asOf:opportunityAsOf,provenance:{}};
+ for(const result of [evaluateOpportunity(snapshot),evaluateOpportunityDossier(snapshot,{asOf:'2020-01-01'})]){
+  assert.equal(result.state,'ranked');assert.equal(result.score,0);assert.equal(result.rankingEligible,true);
+  assert.equal(result.factors.filter(factor=>factor.score===0).length,8);
+  assert.equal(result.sourceEligible,false);
+ }
+});
+test('partial review grade is reduced once and its displayed grade exactly determines fixed-weight points',()=>{
+ const evidence=opportunityEvidence();evidence.valuation.score=8;evidence.valuation.coveragePct=40;
+ const result=evaluateOpportunity(opportunitySnapshot,evidence),factor=result.factors.find(factor=>factor.id==='valuation');
+ assert.equal(factor.score,3.2);assert.equal(factor.points,8);assert.equal(result.state,'ranked');assert.equal(result.sourceEligible,false);
+});
+
+test('missing qualitative review dimensions do not suppress observable business and alignment model grades',()=>{
+ const snapshot={...opportunitySnapshot,grossMargin:.4,dilution:.02,provenance:{...opportunitySnapshot.provenance,grossMargin:opportunityProvenance,dilution:opportunityProvenance}};
+ const result=evaluateOpportunityDossier(snapshot,opportunityDossierFromSnapshot(snapshot));
+ assert.ok(result.factors.find(factor=>factor.id==='competitivePosition').score>0);
+ assert.ok(result.factors.find(factor=>factor.id==='management').score>0);
+ assert.equal(result.sourceEligible,false);
+ const conflict={...snapshot,sourceConflicts:['unresolved conflicting inputs']};
+ const conflicted=evaluateOpportunityDossier(conflict,opportunityDossierFromSnapshot(conflict));
+ assert.equal(conflicted.factors.find(factor=>factor.id==='competitivePosition').score,0);
+ assert.equal(conflicted.state,'ranked');
 });

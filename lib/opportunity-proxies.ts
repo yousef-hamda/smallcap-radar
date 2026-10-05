@@ -1,117 +1,101 @@
 import type { Snapshot, Provenance } from './engine';
-import type { OpportunityEvidence, OpportunityEvidenceSet } from './opportunity-engine';
+import type { OpportunityEvidenceSet } from './opportunity-engine';
+import { usableEvidence } from './evidence';
+import { OPPORTUNITY_SPEC, type OpportunityFactorId } from './opportunity-spec';
 
-type NumericKey = keyof Snapshot;
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 const clamp = (value: number, low = 0, high = 10) => Math.max(low, Math.min(high, value));
+type Component = { name: string; weight: number; grade: number | null; keys: string[]; values: Array<string | number> };
 
-function sourceFor(snapshot: Snapshot, keys: NumericKey[]): Provenance[] {
-  const sources: Provenance[] = [];
-  for (const key of keys) {
-    const source = snapshot.provenance[key as string];
-    if (!source || !source.url) continue;
-    // SEC EDGAR facts are public government records. Market-data sources keep
-    // their original rights status and therefore cannot silently become a
-    // licensed input merely because a proxy uses them.
-    let hostname = '';
-    try { hostname = new URL(source.url).hostname; } catch { continue; }
-    const isSec = /(^|\.)sec\.gov$/i.test(hostname)
-      || /(^|\.)data\.sec\.gov$/i.test(hostname);
-    sources.push(isSec && !source.rightsStatus ? { ...source, rightsStatus: 'public-domain' } : source);
-  }
-  return [...new Map(sources.map(source => [`${source.url}:${source.periodEnd}:${source.tag ?? ''}`, source])).values()];
-}
-
-function evidence(
-  score: number,
-  available: number,
-  total: number,
-  keys: NumericKey[],
-  snapshot: Snapshot,
-  rationale: string,
-  inputs: Array<{ name: string; value: string | number; unit?: string }>,
-): OpportunityEvidence {
-  const coveragePct = Math.round((available / total) * 100);
-  const sources = sourceFor(snapshot, keys);
-  return {
-    score: clamp(score),
-    proxy: true,
-    coveragePct,
-    rationale: `${rationale} Deterministic proxy score; it is not a filing-level qualitative review.`,
-    sources,
-    confidence: coveragePct === 100 && sources.length > 0 ? 'medium' : 'low',
-    calculation: { rubricId: 'proxy-v1', inputs },
-  };
-}
-
-/**
- * Conservative, reproducible proxies for factors that do not have a single
- * numeric vendor field. They use only values already present on the snapshot;
- * missing inputs lower coverage and never become neutral evidence.
- */
+/** Fixed component denominators: missing observations earn zero, never a positive prior.
+ * These are model estimates, not assertions of fair value, a moat, or reviewed governance. */
 export function proxyOpportunityEvidence(snapshot: Snapshot): OpportunityEvidenceSet {
   const output: OpportunityEvidenceSet = {};
-
-  const valuationInputs: NumericKey[] = [];
-  let valuation = 0;
-  if (finite(snapshot.evSales) && snapshot.evSales >= 0) {
-    valuationInputs.push('evSales');
-    valuation = snapshot.evSales <= 1 ? 9 : snapshot.evSales <= 3 ? 7.5 : snapshot.evSales <= 6 ? 5.5 : snapshot.evSales <= 10 ? 3.5 : 1.5;
-  } else if (finite(snapshot.ps) && snapshot.ps >= 0) {
-    valuationInputs.push('ps');
-    valuation = snapshot.ps <= 1 ? 9 : snapshot.ps <= 3 ? 7.5 : snapshot.ps <= 6 ? 5.5 : snapshot.ps <= 10 ? 3.5 : 1.5;
-  }
-  if (finite(snapshot.fcfYield)) { valuationInputs.push('fcfYield'); valuation += clamp(snapshot.fcfYield * 100 * 0.7, -1.5, 1.5); }
-  if (finite(snapshot.revenueGrowth)) { valuationInputs.push('revenueGrowth'); valuation += clamp(snapshot.revenueGrowth * 100 * 0.03, -1, 1); }
-  if (valuationInputs.length) output.valuation = evidence(valuation, valuationInputs.length, 3, valuationInputs, snapshot, 'Relative valuation uses EV/Sales or P/S, adjusted modestly for free-cash-flow yield and growth.', valuationInputs.map(key => ({ name: key, value: Number(snapshot[key]) })));
-
-  const catalystKeys: NumericKey[] = [];
-  let catalyst = 0;
-  if (finite(snapshot.revenueGrowth)) { catalystKeys.push('revenueGrowth'); catalyst += clamp(5 + snapshot.revenueGrowth * 100 * 0.12, 0, 10); }
-  if (snapshot.backlog && finite(snapshot.backlog.amount) && finite(snapshot.revenue) && snapshot.revenue > 0) { catalystKeys.push('revenue', 'backlog'); catalyst += clamp(snapshot.backlog.amount! / snapshot.revenue * 2, 0, 2); }
-  if (snapshot.nextEarnings) { catalystKeys.push('nextEarnings'); catalyst += 1; }
-  if (catalystKeys.length) output.catalysts = evidence(catalyst, catalystKeys.length, 3, catalystKeys, snapshot, 'Catalyst proxy uses forward-dated earnings timing, disclosed backlog relative to revenue, and observed revenue growth.', catalystKeys.map(key => ({ name: key, value: String(snapshot[key]) })));
-
-  const competitiveKeys: NumericKey[] = [];
-  let competitive = 0;
-  if (finite(snapshot.grossMargin)) { competitiveKeys.push('grossMargin'); competitive += clamp(snapshot.grossMargin * 10, 0, 6); }
-  if (finite(snapshot.operatingMarginTrend)) { competitiveKeys.push('operatingMarginTrend'); competitive += clamp(5 + snapshot.operatingMarginTrend * 20, 0, 3); }
-  if (finite(snapshot.revenueGrowth)) { competitiveKeys.push('revenueGrowth'); competitive += clamp(1 + snapshot.revenueGrowth * 100 * 0.03, 0, 1); }
-  if (competitiveKeys.length) output.competitivePosition = evidence(competitive, competitiveKeys.length, 3, competitiveKeys, snapshot, 'Business-quality proxy combines gross margin, operating-margin direction, and organic growth signals.', competitiveKeys.map(key => ({ name: key, value: Number(snapshot[key]) })));
-
-  const downsideKeys: NumericKey[] = [];
-  let downside = 7;
-  if (finite(snapshot.cash) && finite(snapshot.debt)) { downsideKeys.push('cash', 'debt'); downside += snapshot.cash >= snapshot.debt ? 2 : snapshot.cash >= snapshot.debt * 0.5 ? 0 : -2; }
-  if (finite(snapshot.dilution)) { downsideKeys.push('dilution'); downside += snapshot.dilution <= 0 ? 1 : snapshot.dilution < 0.1 ? 0 : -2; }
-  if (snapshot.deathSpiral && snapshot.deathSpiral !== 'unknown') { downsideKeys.push('deathSpiral'); downside += snapshot.deathSpiral === 'clean' ? 1 : snapshot.deathSpiral === 'severe' ? -4 : -1; }
-  if (downsideKeys.length) output.downsideRisk = evidence(downside, downsideKeys.length, 3, downsideKeys, snapshot, 'Downside proxy combines cash/debt capacity, dilution, and the financing-risk classification.', downsideKeys.map(key => ({ name: key, value: String(snapshot[key]) })));
-
-  const managementKeys: NumericKey[] = [];
-  let management = 5;
-  if (finite(snapshot.dilution)) { managementKeys.push('dilution'); management += snapshot.dilution <= 0 ? 2 : snapshot.dilution < 0.1 ? 0 : -2; }
-  if (finite(snapshot.insiderBuyValue)) { managementKeys.push('insiderBuyValue'); management += snapshot.insiderBuyValue > 0 ? 2 : -1; }
-  if (snapshot.lastEarningsStatus) { managementKeys.push('lastEarningsStatus'); management += snapshot.lastEarningsStatus === 'إيجابي' ? 1 : snapshot.lastEarningsStatus === 'سلبي' ? -1 : 0; }
-  if (managementKeys.length) output.management = evidence(management, managementKeys.length, 3, managementKeys, snapshot, 'Management proxy uses dilution discipline, verified open-market insider activity when present, and the latest reported earnings outcome.', managementKeys.map(key => ({ name: key, value: String(snapshot[key]) })));
-
-  const technicalKeys: NumericKey[] = [];
-  let technical = 5;
-  if (finite(snapshot.price) && finite(snapshot.ma30w) && snapshot.ma30w > 0) { technicalKeys.push('price', 'ma30w'); technical += snapshot.price > snapshot.ma30w ? 2 : -2; }
-  if (finite(snapshot.price) && finite(snapshot.low52w) && finite(snapshot.high52w) && snapshot.high52w > snapshot.low52w) { technicalKeys.push('price', 'low52w', 'high52w'); const position = (snapshot.price - snapshot.low52w) / (snapshot.high52w - snapshot.low52w); technical += clamp((position - 0.5) * 4, -2, 2); }
-  if (finite(snapshot.return12m)) { technicalKeys.push('return12m'); technical += clamp(snapshot.return12m * 4, -2, 2); }
-  if (technicalKeys.length) output.technicalTiming = evidence(technical, technicalKeys.length, 3, technicalKeys, snapshot, 'Technical proxy combines price versus 30-week average, 52-week range position, and trailing return.', technicalKeys.map(key => ({ name: key, value: Number(snapshot[key]) })));
-
-  // Every factor receives a deterministic worst-case proxy when no usable
-  // input exists. This supplies a numeric provisional grade without claiming
-  // that evidence was found; the evaluator keeps its evidence coverage at 0.
-  const fallback: Array<[keyof OpportunityEvidenceSet, string]> = [
-    ['valuation', 'No valuation inputs are available; provisional proxy is zero.'],
-    ['catalysts', 'No dated growth or catalyst inputs are available; provisional proxy is zero.'],
-    ['competitivePosition', 'No margin or growth inputs are available; provisional proxy is zero.'],
-    ['downsideRisk', 'No balance-sheet or financing-risk inputs are available; provisional proxy is zero.'],
-    ['management', 'No alignment or execution inputs are available; provisional proxy is zero.'],
-    ['technicalTiming', 'No permitted technical inputs are available; provisional proxy is zero.'],
-  ];
-  for (const [id, rationale] of fallback) if (!output[id]) output[id] = evidence(0, 0, 3, [], snapshot, rationale, []);
-
+  const observation = (key: string): number | null => {
+    const value = snapshot[key as keyof Snapshot], source = snapshot.provenance?.[key];
+    if (!finite(value) || !source || !usableEvidence(source, snapshot.asOf)
+      || !Number.isFinite(Date.parse(source.retrievedAt)) || Date.parse(source.retrievedAt) > Date.parse(snapshot.asOf)) return null;
+    try { if (new URL(source.url!).protocol !== 'https:') return null; } catch { return null; }
+    // Retain original rights metadata. Using an observed value in a model does
+    // not certify its source, freshness or redistribution entitlement.
+    const age = (Date.parse(snapshot.asOf) - Date.parse(source.periodEnd)) / 86_400_000;
+    if (!Number.isFinite(age) || age < 0 || age > (['price','ma30w','low52w','high52w','return12m','ps','evSales','fcfYield'].includes(key) ? 7 : 400)) return null;
+    return value;
+  };
+  const component = (name: string, weight: number, keys: string[], calculate: (...values: number[]) => number): Component => {
+    const values = keys.map(observation);
+    return { name, weight, keys, values: values.map(value => value ?? 'missing-or-ineligible'), grade: values.every(finite) ? clamp(calculate(...values as number[])) : null };
+  };
+  const set = (id: OpportunityFactorId, rationale: string, components: Component[]) => {
+    const conflicts = snapshot.sourceConflicts ?? [];
+    const usable = conflicts.length ? [] : components.filter(item => item.grade !== null);
+    const coveragePct = usable.reduce((sum, item) => sum + item.weight, 0);
+    const sources: Provenance[] = [...new Map(usable.flatMap(item => item.keys.flatMap(key => {
+      const source = snapshot.provenance?.[key];
+      return source ? [[JSON.stringify(source), source] as const] : [];
+    }))).values()];
+    output[id] = {
+      score: Math.round(usable.reduce((sum, item) => sum + item.grade! * item.weight / 100, 0) * 100) / 100,
+      proxy: true, coveragePct, confidence: 'low', sources, conflicts,
+      rationale: `${rationale} Model components use a fixed denominator; missing components earn zero. Input coverage ${coveragePct}%; this is a model rating, not a qualitative review.${conflicts.length ? ' Unresolved snapshot conflicts withhold model points.' : ''}`,
+      calculation: { rubricId: `${id}-model-v2`, inputs: components.flatMap(item => [
+        { name: `${item.name}:weight`, value: item.weight },
+        { name: `${item.name}:grade`, value: conflicts.length ? 'withheld-conflict' : item.grade ?? 'missing-zero' },
+        ...item.keys.map((key, index) => ({ name: `${item.name}:${key}`, value: item.values[index] })),
+      ]) },
+    };
+  };
+  const multiple = observation('evSales') !== null ? 'evSales' : 'ps';
+  set('valuation', 'Relative valuation uses sales multiples, FCF yield and growth; no fair value is invented.', [
+    component('sales-multiple', 70, [multiple], value => value < 0 ? 0 : value <= 1 ? 9 : value <= 3 ? 7.5 : value <= 6 ? 5.5 : value <= 10 ? 3.5 : 1.5),
+    component('fcf-yield', 20, ['fcfYield'], value => value <= 0 ? 0 : clamp(value * 100)),
+    component('growth', 10, ['revenueGrowth'], value => value <= 0 ? 0 : clamp(value * 25)),
+  ]);
+  const earningsDate = Date.parse(snapshot.nextEarnings ?? '');
+  const inHorizon = Number.isFinite(earningsDate) && earningsDate > Date.parse(snapshot.asOf)
+    && earningsDate <= Date.parse(snapshot.asOf) + OPPORTUNITY_SPEC.defaultHorizonMonths * 30.4375 * 86_400_000
+    && !!snapshot.provenance?.nextEarnings && usableEvidence(snapshot.provenance.nextEarnings, snapshot.asOf);
+  const backlog = snapshot.backlog;
+  const revenue = observation('revenue');
+  const backlogEligible = finite(backlog?.amount) && backlog!.amount! >= 0 && revenue !== null && revenue > 0
+    && !!snapshot.provenance?.backlog && usableEvidence(snapshot.provenance.backlog, snapshot.asOf);
+  set('catalysts', 'Observed growth and disclosed backlog approximate business momentum; a scheduled earnings event earns only limited timing credit, not positive impact.', [
+    component('growth-momentum', 50, ['revenueGrowth'], value => clamp(value * 25)),
+    { name: 'backlog', weight: 30, grade: backlogEligible ? clamp(backlog!.amount! / revenue! * 5) : null, keys: ['backlog','revenue'], values: [backlog?.amount ?? 'missing', revenue ?? 'missing'] },
+    { name: 'earnings-window', weight: 20, grade: inHorizon ? 2 : null, keys: ['nextEarnings'], values: [snapshot.nextEarnings ?? 'missing'] },
+  ]);
+  set('competitivePosition', 'Margins and growth approximate business quality; they do not establish a durable competitive moat.', [
+    component('gross-margin', 50, ['grossMargin'], value => value * 15),
+    component('margin-trend', 30, ['operatingMarginTrend'], value => value > 0 ? clamp(value * 100) : 0),
+    component('growth', 20, ['revenueGrowth'], value => clamp(value * 25)),
+  ]);
+  const financingSource = snapshot.provenance?.deathSpiral;
+  const financingKnown = !!financingSource && usableEvidence(financingSource, snapshot.asOf)
+    && ['clean','moderate','severe'].includes(snapshot.deathSpiral ?? '');
+  set('downsideRisk', 'Cash versus debt, dilution and observed financing findings approximate downside resilience.', [
+    component('cash-debt', 40, ['cash','debt'], (cash, debt) => cash < 0 || debt < 0 ? 0 : debt === 0 ? 10 : clamp(cash / debt * 5)),
+    component('dilution', 30, ['dilution'], value => clamp(10 - Math.max(0, value) * 40)),
+    { name: 'financing-review', weight: 30, grade: financingKnown ? snapshot.deathSpiral === 'clean' ? 10 : snapshot.deathSpiral === 'severe' ? 0 : 3 : null, keys: ['deathSpiral'], values: [snapshot.deathSpiral ?? 'missing'] },
+  ]);
+  set('management', 'Dilution discipline, sourced insider purchases and earnings outcomes approximate alignment; governance diligence remains separate.', [
+    component('dilution-discipline', 40, ['dilution'], value => clamp(10 - Math.max(0, value) * 40)),
+    component('insider-purchases', 30, ['insiderBuyValue'], value => value > 0 ? 7 : 0),
+    { name: 'earnings-outcome', weight: 30, grade: snapshot.provenance?.lastEarningsStatus && usableEvidence(snapshot.provenance.lastEarningsStatus, snapshot.asOf) ? snapshot.lastEarningsStatus === 'إيجابي' ? 7 : snapshot.lastEarningsStatus === 'سلبي' ? 0 : null : null, keys: ['lastEarningsStatus'], values: [snapshot.lastEarningsStatus ?? 'missing'] },
+  ]);
+  set('technicalTiming', 'Observed trend, range and return approximate entry timing; dates and market-source metadata are retained.', [
+    component('moving-average', 40, ['price','ma30w'], (price, average) => price > 0 && average > 0 ? clamp(5 + (price / average - 1) * 20) : 0),
+    component('range', 30, ['price','low52w','high52w'], (price, low, high) => price > 0 && low > 0 && high > low ? clamp((price - low) / (high - low) * 10) : 0),
+    component('trailing-return', 30, ['return12m'], value => clamp(5 + value * 10)),
+  ]);
+  set('financialStrength', 'Observed liquidity, FCF margin and cash runway approximate financial capacity when a reviewed industry model is unavailable.', [
+    component('cash-debt', 40, ['cash','debt'], (cash, debt) => cash < 0 || debt < 0 ? 0 : debt === 0 ? 10 : clamp(cash / debt * 5)),
+    component('fcf-margin', 40, ['fcf','revenue'], (fcf, sales) => sales > 0 ? clamp(fcf / sales * 50) : 0),
+    component('runway', 20, ['cash','fcf'], (cash, fcf) => cash < 0 ? 0 : fcf > 0 ? 10 : fcf < 0 ? clamp(cash / -fcf * 5) : 0),
+  ]);
+  set('earningsQuality', 'Profit margin, FCF margin and cash conversion approximate quantitative earnings quality; no accounting review is inferred.', [
+    component('profit-margin', 30, ['netIncome','revenue'], (profit, sales) => sales > 0 ? clamp(profit / sales * 50) : 0),
+    component('fcf-margin', 40, ['fcf','revenue'], (fcf, sales) => sales > 0 ? clamp(fcf / sales * 50) : 0),
+    component('cash-conversion', 30, ['fcf','netIncome'], (fcf, profit) => profit > 0 ? clamp(fcf / profit * 8) : 0),
+  ]);
   return output;
 }
