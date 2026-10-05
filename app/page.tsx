@@ -90,7 +90,14 @@ export default function RadarApp(){
   const refreshWhenVisible=()=>{
    if(document.visibilityState!=='visible'||loadingRequest.current)return;
    if(hiddenAt.value!=null&&Date.now()-hiddenAt.value<60_000)return;
-   hiddenAt.value=null;void refresh();
+   hiddenAt.value=null;
+   if(view==='opportunity'){
+    // Background metadata refresh must preserve loaded canonical ranking pages.
+    // An active scan's completion or an explicit refresh replaces the snapshot.
+    void request<{run:ScanRun|null}>('/api/radar?status=1').then(payload=>setData(old=>old?{...old,run:payload.run}:old)).catch(()=>{});
+    return;
+   }
+   void refresh();
   };
   const onVisibility=()=>{if(document.visibilityState==='hidden')hiddenAt.value=Date.now();else refreshWhenVisible()};
   const timer=window.setInterval(refreshWhenVisible,10*60_000);
