@@ -55,8 +55,8 @@ export default function RadarApp(){
     try{const quotePayload=await request<{quotes:Record<string,{price?:number;dailyChange?:number;provenance?:Snapshot['provenance']}>}>(`/api/favorite-quotes?symbols=${encodeURIComponent(snapshots.map(s=>s.symbol).join(','))}`,{signal:controller.signal});snapshots=mergeCardQuotes(snapshots,quotePayload.quotes)}catch(error){if(controller.signal.aborted)return;setNotice(error instanceof Error?error.message:'تعذّر تحديث أسعار المفضلة؛ عُرضت آخر لقطة محفوظة.');}
    }
    setData(payload);if(version===favoriteVersion.current&&!favoritePending.current)setFavorites(payload.favorites);setPortfolioCount(payload.portfolioCount??0);setHasMore(payload.page.hasMore);cursor.current=offset+snapshots.length;setError('');
-   if(view==='opportunity')setRankBySymbol(old=>{const next=append?{...old}:{};snapshots.forEach((snapshot,index)=>{next[snapshot.symbol]=payload.rankPositions?.[index]??offset+index+1});return next});
-   if(view==='opportunity')setOpportunityBySymbol(old=>{const next=append?{...old}:{};snapshots.forEach((snapshot,index)=>{next[snapshot.symbol]=currentOpportunityEvaluation(snapshot,payload.storedEvaluations?.[index]?.opportunity,opportunityDossierFromSnapshot(snapshot))});return next});
+   if(view==='opportunity'||view==='favorites')setRankBySymbol(old=>{const next=append?{...old}:{};snapshots.forEach((snapshot,index)=>{next[snapshot.symbol]=payload.rankPositions?.[index]??offset+index+1});return next});
+   if(view==='opportunity'||view==='favorites')setOpportunityBySymbol(old=>{const next=append?{...old}:{};snapshots.forEach((snapshot,index)=>{next[snapshot.symbol]=currentOpportunityEvaluation(snapshot,payload.storedEvaluations?.[index]?.opportunity,opportunityDossierFromSnapshot(snapshot))});return next});
    setRows(old=>append?[...old,...snapshots.filter(s=>!old.some(p=>p.symbol===s.symbol))]:snapshots);
    void saveOffline({savedAt:new Date().toISOString(),run:payload.dataRun,snapshots:payload.snapshots}).catch(()=>{});
   }catch(e){if(!controller.signal.aborted)setError(e instanceof Error?e.message:'تعذّر تحميل البيانات');}

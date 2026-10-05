@@ -643,4 +643,6 @@ test('all listings retain canonical saved grades, full-universe ranks, reports a
  invalidateStateCache();const repaired=await GET(new Request('https://radar.test/api/radar?limit=250'));const page=await repaired.json();assert.equal(page.summary.opportunityRanked,260);assert.deepEqual(page.storedEvaluations[100].opportunity,evaluations.get(symbols[100]));
  const searched=await GET(new Request(`https://radar.test/api/radar?q=${symbols[259]}`));const search=await searched.json();assert.equal(search.rankPositions[0],260);
  invalidateStateCache();const reload=await GET(new Request('https://radar.test/api/radar?limit=37'));assert.deepEqual((await reload.json()).storedEvaluations,page.storedEvaluations.slice(0,37));
+ await db().prepare('INSERT INTO personal_watchlist(owner,symbol,created_at,payload) VALUES(?,?,?,?)').bind('complete-rating-owner',symbols[5],created,JSON.stringify({...base,symbol:symbols[5]})).run();
+ invalidateStateCache();const favorites=await readState({strategy:'favorites',owner:'complete-rating-owner'});assert.deepEqual(favorites.storedEvaluations[0].opportunity,evaluations.get(symbols[5]));assert.equal(favorites.rankPositions[0],6);assert.equal(favorites.snapshots[0].asOf,'2026-09-30T00:00:00Z');
 });

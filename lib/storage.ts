@@ -98,13 +98,14 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
  // one bounded lookup so favorites and the strategy cards use the same
  // completed-session value without opening a deep profile for every favorite.
  const favoriteScanBySymbol=new Map<string,any>();
+ const favoriteRatingBySymbol=new Map<string,{evaluation:any;rank:number}>();
  const isCompletedPrice=(value:any)=>typeof value?.tag==='string'&&(/completed session close|last close/i.test(value.tag));
  const isCompletedChange=(value:any)=>typeof value?.tag==='string'&&/previous (completed )?close/i.test(value.tag);
  if(strategy==='favorites'&&latest&&fav.length){
   const symbols=[...new Set(fav.map(row=>String(row.symbol)).filter(Boolean))];
   for(let start=0;start<symbols.length;start+=80){
-   const chunk=symbols.slice(start,start+80),result=await d.prepare(`SELECT symbol,payload FROM fundamental_snapshots WHERE run_id=? AND symbol IN (${chunk.map(()=>'?').join(',')})`).bind(latest.id,...chunk).all();
-   for(const row of result.results as any[]){try{favoriteScanBySymbol.set(String(row.symbol),JSON.parse(String(row.payload)))}catch{/* ignore one corrupted optional row */}}
+   const chunk=symbols.slice(start,start+80),result=await d.prepare(`SELECT s.symbol,s.payload,s.evaluation,r.rank_position FROM fundamental_snapshots s LEFT JOIN opportunity_rankings r ON r.run_id=s.run_id AND r.symbol=s.symbol WHERE s.run_id=? AND s.symbol IN (${chunk.map(()=>'?').join(',')})`).bind(latest.id,...chunk).all();
+   for(const row of result.results as any[]){try{favoriteScanBySymbol.set(String(row.symbol),JSON.parse(String(row.payload)));favoriteRatingBySymbol.set(String(row.symbol),{evaluation:JSON.parse(row.evaluation),rank:Number(row.rank_position)})}catch{/* ignore one corrupted optional row */}}
   }
  }
  const portfolioCount=options.owner?Number((await d.prepare("SELECT COUNT(*) AS count FROM (SELECT symbol FROM portfolio_transactions WHERE owner=? GROUP BY symbol HAVING SUM(CASE side WHEN 'buy' THEN quantity ELSE -quantity END)>0.00000001)").bind(options.owner).first() as any)?.count||0):0;
@@ -169,12 +170,12 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
  if(strategy==='favorites'){
   rows=fav.filter(r=>!search||`${r.symbol} ${JSON.parse(r.payload).name}`.toLowerCase().includes(search)).map(r=>{
    const saved=JSON.parse(r.payload),scanned=favoriteScanBySymbol.get(String(r.symbol)),savedPrice=saved.provenance?.price,scanPrice=scanned?.provenance?.price,scanChange=scanned?.provenance?.dailyChange;
-   const refreshed={...saved,
+   const refreshed={...(scanned??saved),
     ...(scanned?.name?{name:scanned.name}:{}),...(scanned?.exchange?{exchange:scanned.exchange}:{}),...(Number.isFinite(scanned?.marketCap)?{marketCap:scanned.marketCap}:{}),
     ...(Number.isFinite(scanned?.price)&&isCompletedPrice(scanPrice)?{price:scanned.price,provenance:{...saved.provenance,price:scanPrice}}:{}),
     ...(Number.isFinite(scanned?.dailyChange)&&isCompletedChange(scanChange)?{dailyChange:scanned.dailyChange,provenance:{...saved.provenance,price:scanPrice??savedPrice,dailyChange:scanChange}}:{})
    };
-   const s=applyFinancingRisk(refreshed);return {payload:JSON.stringify(s),evaluation:JSON.stringify({opportunity:evaluateSnapshotOpportunity(s)})}
+   const s=applyFinancingRisk(refreshed),canonical=favoriteRatingBySymbol.get(String(r.symbol));return {payload:JSON.stringify(s),evaluation:JSON.stringify(canonical?.evaluation??{opportunity:evaluateSnapshotOpportunity(s)}),rank_position:canonical?.rank??null}
   });
   rows=rows.slice(offset,offset+limit+1);
  }
