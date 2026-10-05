@@ -131,6 +131,15 @@ test('profile renders sourced financial-strength gaps without filling missing fi
  assert.doesNotMatch(html,/إجمالي الدين المعياري[\s\S]{0,80}>\$0/);
 });
 
+test('incomplete technical research does not claim the final factor weight is omitted',async()=>{
+ const {TechnicalTimingEvidence}=await vite.ssrLoadModule('/app/company-sheet.tsx');
+ const research={dailyBars:0,weeklyBars:0,monthlyBars:0,benchmarkBars:0,score:{score:null,indicators:{}},splitAdjusted:false,rightsStatus:'unverified',missing:['daily history unavailable']};
+ const html=renderToStaticMarkup(React.createElement(TechnicalTimingEvidence,{research}));
+ assert.match(html,/الدرجة النهائية للعامل معروضة أعلاه/);
+ assert.match(html,/daily history unavailable/);
+ assert.doesNotMatch(html,/لم يُحتسب وزن العامل|الدرجة التشخيصية/);
+});
+
 test('profile source ledger displays ECB conversion rate dates, method inputs, provider, and source link',async()=>{
  const {FinancialStrengthEvidence}=await vite.ssrLoadModule('/app/company-sheet.tsx');
  const research={providerStatus:'retrieved',metrics:{unrestrictedCash:{value:1250000,unit:'USD',source:{source:'SEC fact · analytical USD translation using ECB daily reference rates',url:'https://www.sec.gov/Archives/edgar/data/1/filing.htm',periodEnd:'2026-06-30',availableAt:'2026-09-30T12:00:00.000Z',retrievedAt:'2026-09-30T12:00:00.000Z',currency:'USD',rightsStatus:'redistribution-permitted',confidence:'high',conversion:{rate:0.0067,sourceCurrency:'JPY',targetCurrency:'USD',method:'period-average-daily-reference-cross-rate',ratePeriodStart:'2026-04-01',ratePeriodEnd:'2026-06-30',observationCount:63,sourceUrl:'https://api.frankfurter.dev/v2/providers/ecb/rates?from=2026-04-01&to=2026-06-30&base=EUR&quotes=JPY%2CUSD',rateProvider:'European Central Bank (ECB) via Frankfurter API',inputAvailableAt:'2026-08-01T00:00:00.000Z',inputRetrievedAt:'2026-08-15T00:00:00.000Z'}}}},missing:['other inputs remain unavailable'],conflicts:[],limitations:[],readyForScoring:false};
