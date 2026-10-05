@@ -56,7 +56,7 @@ State caches are bounded by serialized bytes as well as entry count. Summary/sou
 
 | Command/check | Final result |
 |---|---|
-| `npm run test:runtime` (includes `test:engine`) | 171 engine + 69 runtime/API tests passed |
+| `npm run test:runtime` (includes `test:engine`) | 171 engine + 70 runtime/API tests passed |
 | `npm run test:engine` after exact annual-growth regression | 171 passed |
 | `npm test` (includes verified build) | Build passed; 48 repository/UI tests passed |
 | `npm run test:research` | 5 passed; no learned weights enabled |
@@ -65,8 +65,12 @@ State caches are bounded by serialized bytes as well as entry count. Summary/sou
 | `npm run lint` | Passed, no errors/warnings after ignoring local verification artifacts |
 | `git diff --check` | Passed |
 | `verify-complete-ranking.mjs` on all original production payloads | 6,954 complete deterministic ratings; no missing factors/finals |
-| GitHub Verify radar for deployed code `db67314` | Run `37377375798`, success (Node 24 / Linux) |
+| GitHub Verify radar for deployed code `325c579` | Run `37379031180`, success (Node 24 / Linux) |
 
 Meaningful acceptance coverage includes all nine stock types, 256 missing-factor combinations per type, empty/partial/malformed data, stale/future/invalid provenance, actual conflicts versus absent qualitative review, fixed weights, exact half-cent rounding, saved-corruption repair, materialization revision triggers, search ranks, API/report/profile parity, pagination, reloads, scan completion, favorites and Arabic rendering. Runtime integration checks a 260-listing universe on every surface. Production verification below uses every real listing rather than a sample.
 
 Earlier failed checks were resolved: lint variable declarations, malformed historical research arrays, old state-policy assertions, exact arithmetic expectations, the valuation date defect, and cross-runtime growth hashes. First deployment-transition reads returned 502 while the container was replaced and were repeated after successful deployment. The initial GitHub runs for `0324cb1`/`138be63` could not acquire a hosted runner and executed no tests; later code runs `dc23569`, `1c30427`, `998f79a`, `1ea52cd` and `db67314` succeeded. Old verification attempts interrupted by a replacement deployment are superseded by final full-universe checks.
+
+The exhaustive report traversal exposed a repeated full-payload conflict-count query. It now caches the count by run mutation revision, with bounded entries; a regression verifies reuse and update/delete invalidation. Report UI calls these source and safety findings independently of final grades. The first exhaustive browser run reached all 6,954 rows but its ten-minute background refresh then collapsed the list to 40 rows just before validation. Automatic Opportunity refresh now updates scan metadata only, preserving all loaded canonical pages. Active scan completion and explicit refresh still replace the snapshot. Final browser verification explicitly invokes the ten-minute callback and checks row retention.
+
+Mobile profile navigation exposed an invisible full-card button covered by factor boxes. The ticker is now a visible semantic button with focus indication; copy/favorite controls retain their independent actions. The corrected production path is checked against canonical positive and zero-grade profiles.

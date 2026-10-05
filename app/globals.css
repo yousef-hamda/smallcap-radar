@@ -160,3 +160,5 @@ button,input{font:inherit}button,a{-webkit-tap-highlight-color:transparent}butto
 @media(max-width:370px){.positions-list>button{grid-template-columns:38px minmax(70px,1fr) 58px 58px 58px 20px;gap:6px}}
 
 .sec-filing-items{margin:12px 0;padding:12px;border:1px solid #343a37;border-radius:12px;background:#101312}.sec-filing-items h4{margin:0 0 6px}.sec-filing-items>p{font-size:13px;line-height:1.7}.sec-filing-items>p:has(a){display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid #252a28}.sec-filing-items>p:has(a) a{color:#8be1c1}.sec-filing-items>p:has(a) b{font-variant-numeric:tabular-nums;direction:ltr;white-space:nowrap}
+
+.ticker-open{border:0;background:transparent;color:inherit;font:inherit;padding:0;cursor:pointer}.ticker-open:hover{text-decoration:underline}.ticker-open:focus-visible{outline:2px solid var(--green);outline-offset:4px;border-radius:3px}
