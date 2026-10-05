@@ -1,4 +1,4 @@
-import {db,ensureSchema,readState,ensureRunEvaluations} from '@/lib/storage';
+import {db,ensureSchema,readState,ensureRunEvaluations,readResearchConflictCount} from '@/lib/storage';
 import {json} from '@/lib/http';
 import {currentOpportunityEvaluation} from '@/lib/opportunity-dossier';
 import {OPPORTUNITY_SPEC} from '@/lib/opportunity-spec';
@@ -14,8 +14,7 @@ export async function GET(req:Request){
   const run=await database.prepare('SELECT id,status,stage,created_at,updated_at,failed,error FROM strategy_runs WHERE id=?').bind(runId).first();
   if(!run)return json({error:'الجولة غير موجودة'},404);
   await ensureRunEvaluations(runId);
-  const researchConflictRow=await database.prepare("SELECT COUNT(*) AS count FROM fundamental_snapshots WHERE run_id=? AND COALESCE(json_array_length(payload,'$.opportunityResearch.earnings.conflicts'),0)>0").bind(runId).first() as any;
-  const researchConflictCount=Number(researchConflictRow?.count||0);
+  const researchConflictCount=await readResearchConflictCount(runId);
   const current=await readState({strategy:'opportunity',opportunityState:'all',limit,offset});
   if(current.dataRunId===runId){
    const total=current.summary.total,passed=current.summary.opportunityRanked,failed=current.summary.opportunityExcluded;

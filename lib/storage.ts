@@ -12,11 +12,25 @@ type StateCacheEntry={expiresAt:number;value:any;bytes:number};
 const stateCache=new Map<string,StateCacheEntry>();
 const runSummaryCache=new Map<string,any>();
 const runCoverageCache=new Map<string,any>();
+const runResearchConflictCache=new Map<string,{revision:number;count:number}>();
 const STATE_CACHE_TTL=5_000;
 const STATE_CACHE_LIMIT=64;
 const STATE_CACHE_BYTES=4*1024*1024;
 function evaluateSnapshotOpportunity(snapshot:Snapshot){return evaluateOpportunityDossier(snapshot,opportunityDossierFromSnapshot(snapshot));}
-export function invalidateStateCache(){stateCache.clear();runSummaryCache.clear();runCoverageCache.clear();}
+export function invalidateStateCache(){stateCache.clear();runSummaryCache.clear();runCoverageCache.clear();runResearchConflictCache.clear();}
+
+/** Report pagination must not reread the whole source payload set on each page.
+ * Snapshot mutation triggers make the count cache safe across scans/imports. */
+export async function readResearchConflictCount(runId:string){
+ await ensureSchema();const d=db();
+ const version=await d.prepare('SELECT revision FROM opportunity_rating_versions WHERE run_id=?').bind(runId).first() as any;
+ const revision=Number(version?.revision??0),cached=runResearchConflictCache.get(runId);
+ if(cached?.revision===revision)return cached.count;
+ const row=await d.prepare("SELECT COUNT(*) AS count FROM fundamental_snapshots WHERE run_id=? AND COALESCE(json_array_length(payload,'$.opportunityResearch.earnings.conflicts'),0)>0").bind(runId).first() as any;
+ const count=Number(row?.count??0);
+ if(runResearchConflictCache.size>=8)runResearchConflictCache.delete(runResearchConflictCache.keys().next().value!);
+ runResearchConflictCache.set(runId,{revision,count});return count;
+}
 function rememberState(key:string,value:any){
  const bytes=JSON.stringify(value).length*2;
  // Production payloads exceed 335 MB. Bound page-cache memory by bytes as

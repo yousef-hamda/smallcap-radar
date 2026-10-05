@@ -1,3 +1,9 @@
+# Historical research checkpoint
+
+Ranking eligibility and zero-ranking completion statements below are superseded by [the current complete-universe contract](COMPLETE_RANKING_MODEL_2026_10_06.md) and [production verification](COMPLETE_RANKING_AUDIT_2026_10_05.md). Rubric `1.0.3-deterministic-universe-ranking` gives every listing eight numeric grades and the actual final fixed-weight rating used for sorting. Source coverage and safety remain separate findings; their gaps cannot remove a listing from the mathematical ranking. Historical source-rights and research limitations remain applicable where not explicitly resolved.
+
+---
+
 # Opportunity ranking: free-source study and execution record
 
 Date: 2026-10-03. Production data cut: completed run `9c059528-f468-4086-8c1e-927456f8599a`, 2026-10-03T11:44:47Z. The product is a shared Railway-hosted stock research site. Its final rank requires all eight fixed-weight factors and passing identity, price, capitalization, and liquidity evidence checks.

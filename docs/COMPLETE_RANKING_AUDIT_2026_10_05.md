@@ -41,3 +41,32 @@ Source review: [SEC public data API](https://data.sec.gov/) and [SEC data resour
 10. Run engine, runtime/API, repository/UI, research, database, typecheck, lint, build and whitespace gates; commit, push, deploy, check deployment identity and production persistence after restart. Record exact outcomes, counts, files and operational limitations.
 
 The score is a deterministic research rating, not a return probability or a claim of complete qualitative diligence. A low score caused by missing evidence is explicitly traceable to missing components. This distinction must coexist with a complete usable ranking.
+
+## Waves 3–5: implementation and resolved defects
+
+The ranking policy now represents complete mathematical grades separately from source research and safety (`researchState`, `sourceEligible`, factor source coverage, confidence and checks). Fixed factor weights never change. Bounded deterministic component models fill missing assessments, with missing inputs earning zero rather than a positive prior. Valid reviewed partial grades are scaled once, so every displayed grade produces its displayed contribution using the fixed weight. Exact integer arithmetic resolves the 50 half-cent mismatches found in the first production replay.
+
+Canonical saved evaluations and materialized whole-universe ranks now drive the radar, profiles, reports, favorites and exports. Revision triggers detect all snapshot mutations; a version/shape/identity repair processes 100 rows per batch and publishes ranks atomically. The first read repairs old data independently of initiating a scan. Ranking readers share the latest completed full run, retain zero scores and all nine security types, and use saved score descending/symbol BINARY ascending for ties. UI displays the actual final grade to two decimals, including zero, and uses global ranks across pagination/search.
+
+A complete factor audit caught an always-zero valuation factor despite supported P/S values. Compound ratio provenance contains a fiscal period plus market availability; checking that fiscal date as a quote date incorrectly rejected all inputs. Both dependencies are now validated independently. Supported FCF yield is calculated from cash flow, revenue and P/S; growth is calculated from comparable saved reported revenue periods, with leaf inputs and sources persisted. A later cross-runtime deep comparison caught exponentiation differences of two last-decimal bits in annual growth, which changed evaluation hashes despite equal grades. Adjacent annual growth now uses direct division. A profile research section that incorrectly said the technical factor weight was omitted now points to the final factor grid.
+
+State caches are bounded by serialized bytes as well as entry count. Summary/source-coverage caches last until their run revision changes. Saved evaluations are reused before rebuilding dossiers. These changes avoid repeatedly retaining full 335+ MB historical payloads while traversing thousands of company responses. Full model details are in [the current scoring contract](COMPLETE_RANKING_MODEL_2026_10_06.md).
+
+### Local and CI test outcomes
+
+| Command/check | Final result |
+|---|---|
+| `npm run test:runtime` (includes `test:engine`) | 171 engine + 69 runtime/API tests passed |
+| `npm run test:engine` after exact annual-growth regression | 171 passed |
+| `npm test` (includes verified build) | Build passed; 48 repository/UI tests passed |
+| `npm run test:research` | 5 passed; no learned weights enabled |
+| `python3 -m unittest discover -s tests -p '*test*.py'` | 4 database tests passed |
+| `npm run typecheck` | Passed |
+| `npm run lint` | Passed, no errors/warnings after ignoring local verification artifacts |
+| `git diff --check` | Passed |
+| `verify-complete-ranking.mjs` on all original production payloads | 6,954 complete deterministic ratings; no missing factors/finals |
+| GitHub Verify radar for deployed code `db67314` | Run `37377375798`, success (Node 24 / Linux) |
+
+Meaningful acceptance coverage includes all nine stock types, 256 missing-factor combinations per type, empty/partial/malformed data, stale/future/invalid provenance, actual conflicts versus absent qualitative review, fixed weights, exact half-cent rounding, saved-corruption repair, materialization revision triggers, search ranks, API/report/profile parity, pagination, reloads, scan completion, favorites and Arabic rendering. Runtime integration checks a 260-listing universe on every surface. Production verification below uses every real listing rather than a sample.
+
+Earlier failed checks were resolved: lint variable declarations, malformed historical research arrays, old state-policy assertions, exact arithmetic expectations, the valuation date defect, and cross-runtime growth hashes. First deployment-transition reads returned 502 while the container was replaced and were repeated after successful deployment. The initial GitHub runs for `0324cb1`/`138be63` could not acquire a hosted runner and executed no tests; later code runs `dc23569`, `1c30427`, `998f79a`, `1ea52cd` and `db67314` succeeded. Old verification attempts interrupted by a replacement deployment are superseded by final full-universe checks.

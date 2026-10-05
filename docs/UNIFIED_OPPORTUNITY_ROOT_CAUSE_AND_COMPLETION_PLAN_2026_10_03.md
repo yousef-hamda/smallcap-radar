@@ -1,3 +1,9 @@
+# Historical research checkpoint
+
+Ranking eligibility and zero-ranking completion statements below are superseded by [the current complete-universe contract](COMPLETE_RANKING_MODEL_2026_10_06.md) and [production verification](COMPLETE_RANKING_AUDIT_2026_10_05.md). Rubric `1.0.3-deterministic-universe-ranking` gives every listing eight numeric grades and the actual final fixed-weight rating used for sorting. Source coverage and safety remain separate findings; their gaps cannot remove a listing from the mathematical ranking. Historical source-rights and research limitations remain applicable where not explicitly resolved.
+
+---
+
 # Unified Opportunity: root-cause study and completion plan — 2026-10-03
 
 ## Goal

@@ -30,7 +30,7 @@ Arabic RTL mobile-first PWA, currently deployed on Railway with an older separat
 
 Read [the requirement ledger](docs/ACCEPTANCE.md) and [the unified category plan](docs/UNIFIED_OPPORTUNITY_CATEGORY_PLAN_2026_09_30.md). Major remaining gaps: sourced valuation models, catalyst classification, complete risk/governance/peer and management reviews, rights-cleared market history, scenario analysis, point-in-time/delisted total-return validation, and a safe production migration/rollback. Incomplete source dossiers reduce coverage; every listing still receives a complete model rating and rank. Free endpoint access does not imply commercial reuse or display rights.
 
-The original site's server implementation and point-in-time historical dataset remain unavailable here. Original historical success rates cannot be reproduced or asserted. The current diagnostic ordering is enabled only for issuers with all required evidence; no prediction/probability claim is enabled or validated.
+The original site's server implementation and point-in-time historical dataset remain unavailable here. Original historical success rates cannot be reproduced or asserted. The complete final ranking includes every saved listing, with source completeness and safety findings shown separately; no prediction/probability claim is enabled or validated.
 
 ## Run and verify
 

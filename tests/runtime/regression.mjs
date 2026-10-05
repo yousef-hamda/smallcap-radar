@@ -10,7 +10,7 @@ import {setHistoryResult,setOpportunityResearchResult,setUniverse,universeCalls,
 import {evaluateStrategy} from '../../.test-build/engine.mjs';
 import {proxyOpportunityEvidence} from '../../.test-build/opportunity-proxies.mjs';
 import {fixtures} from '../../.test-build/fixtures.mjs';
-import {ensureSchema,db,currentHash,readState,insertSnapshot,invalidateStateCache} from '../../.test-build/storage.mjs';
+import {ensureSchema,db,currentHash,readState,insertSnapshot,invalidateStateCache,readResearchConflictCount} from '../../.test-build/storage.mjs';
 import {processScanBatch,startScan,historyCandidate,preliminaryCandidates} from '../../.test-build/scanner.mjs';
 import {GET,POST} from '../../.test-build/radar-api.mjs';
 import {GET as recoverGET} from '../../.test-build/recover-api.mjs';
@@ -645,4 +645,18 @@ test('all listings retain canonical saved grades, full-universe ranks, reports a
  invalidateStateCache();const reload=await GET(new Request('https://radar.test/api/radar?limit=37'));assert.deepEqual((await reload.json()).storedEvaluations,page.storedEvaluations.slice(0,37));
  await db().prepare('INSERT INTO personal_watchlist(owner,symbol,created_at,payload) VALUES(?,?,?,?)').bind('complete-rating-owner',symbols[5],created,JSON.stringify({...base,symbol:symbols[5]})).run();
  invalidateStateCache();const favorites=await readState({strategy:'favorites',owner:'complete-rating-owner'});assert.deepEqual(favorites.storedEvaluations[0].opportunity,evaluations.get(symbols[5]));assert.equal(favorites.rankPositions[0],6);assert.equal(favorites.snapshots[0].asOf,'2026-09-30T00:00:00Z');
+});
+
+test('report conflict count avoids repeated full payload scans and follows snapshot mutations',async()=>{
+ const runId='conflict-count-cache',now='2020-01-01T00:00:00.000Z';
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES(?,?,?,'complete','Synthetic report cache · full',1,1,13,?)").bind(runId,now,now,currentHash()).run();
+ await insertSnapshot(runId,{...base,symbol:'CONFLICT-CACHE'}).run();
+ assert.equal(await readResearchConflictCount(runId),0);
+ const originalPrepare=runtimeEnv.DB.prepare;
+ runtimeEnv.DB.prepare=sql=>{if(sql.includes("json_array_length(payload,'$.opportunityResearch.earnings.conflicts')"))throw Error('report re-scanned cached full source payloads');return originalPrepare(sql);};
+ try{assert.equal(await readResearchConflictCount(runId),0)}finally{runtimeEnv.DB.prepare=originalPrepare}
+ await db().prepare('UPDATE fundamental_snapshots SET payload=? WHERE run_id=?').bind(JSON.stringify({...base,symbol:'CONFLICT-CACHE',opportunityResearch:{earnings:{conflicts:['conflicting revenue concepts']}}}),runId).run();
+ assert.equal(await readResearchConflictCount(runId),1);
+ await db().prepare('DELETE FROM fundamental_snapshots WHERE run_id=?').bind(runId).run();
+ assert.equal(await readResearchConflictCount(runId),0);
 });
