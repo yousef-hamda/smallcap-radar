@@ -2,7 +2,9 @@
  * live HTTP radar, report and company handlers, plus the durable rank table.
  * Emits counts only; never prints private tables, host secrets or source data. */
 import {DatabaseSync} from 'node:sqlite';
-import {readdirSync} from 'node:fs';
+import {readdirSync,readFileSync} from 'node:fs';
+import {gunzipSync} from 'node:zlib';
+import {createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
 const directory='/app/data/state/v3/d1/miniflare-D1DatabaseObject';
 const databasePath=process.argv[2]??`${directory}/${readdirSync(directory).find(name=>name.endsWith('.sqlite')&&name!=='metadata.sqlite')}`;
@@ -18,7 +20,14 @@ assert.equal(rows.length,total);
 // Nasdaq symbols and every exchange code. A selected run count alone is not
 // evidence that the universe is complete.
 const officialUrls=['https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt','https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt'];
-const officialFiles=await Promise.all(officialUrls.map(async url=>{const response=await fetch(url,{signal:AbortSignal.timeout(30000)});assert.equal(response.status,200,url);const text=await response.text();assert.match(text,/(?:^|\n)File Creation Time:/);return text;}));
+let officialFiles,officialMethod='live official URLs',officialRetrievedAt=new Date().toISOString();
+try{officialFiles=await Promise.all(officialUrls.map(async url=>{const response=await fetch(url,{signal:AbortSignal.timeout(30000)});assert.equal(response.status,200,url);const text=await response.text();assert.match(text,/(?:^|\n)File Creation Time:/);return text;}));}
+catch{
+ const raw=JSON.parse(readFileSync(new URL('../lib/listing-directory-sources.generated.json',import.meta.url),'utf8'));
+ officialFiles=raw.files.map((body,index)=>{const text=gunzipSync(Buffer.from(body,'base64')).toString();assert.equal(createHash('sha256').update(text).digest('hex'),raw.sources[index].contentHash);assert.equal(raw.sources[index].url,officialUrls[index]);assert.match(text,/(?:^|\n)File Creation Time:/);return text;});
+ officialMethod='checksum-verified complete official downloads';officialRetrievedAt=raw.retrievedAt;
+}
+
 const officialSymbols=new Set();
 for(const [fileIndex,text]of officialFiles.entries())for(const line of text.split(/\r?\n/).slice(1)){
  const c=line.split('|');if(c.length<8||c[fileIndex===0?3:6]==='Y'||c[fileIndex===0?6:4]==='Y'||line.startsWith('File Creation Time:'))continue;
@@ -29,7 +38,7 @@ const previousRun=database.prepare("SELECT id FROM strategy_runs r WHERE id<>? A
 const previousSymbols=previousRun?database.prepare('SELECT symbol FROM fundamental_snapshots WHERE run_id=?').all(previousRun.id).map(row=>row.symbol):[];
 for(const symbol of previousSymbols)assert.ok(savedSymbols.has(symbol),`Previously tracked stock disappeared: ${symbol}`);
 const extras=rows.filter(row=>!officialSymbols.has(row.symbol));for(const row of extras){const payload=JSON.parse(database.prepare('SELECT payload FROM fundamental_snapshots WHERE run_id=? AND symbol=?').get(run.id,row.symbol).payload);assert.equal(payload.listingStatus,'not-confirmed-current',row.symbol);assert.equal(row.score,0,row.symbol);}
-console.log(JSON.stringify({stage:'inventory',officialListed:officialSymbols.size,previousTracked:previousSymbols.length,retainedUnconfirmed:extras.length,total,missingOfficial:0,missingPreviouslyTracked:0}));
+console.log(JSON.stringify({stage:'inventory',officialMethod,officialRetrievedAt,officialListed:officialSymbols.size,previousTracked:previousSymbols.length,retainedUnconfirmed:extras.length,total,missingOfficial:0,missingPreviouslyTracked:0}));
 const bySymbol=new Map();const weights=[25,20,15,12,10,10,5,3],factorIds=['valuation','catalysts','financialStrength','earningsQuality','competitivePosition','downsideRisk','management','technicalTiming'];
 for(const [index,row] of rows.entries()){
  const evaluation=JSON.parse(row.evaluation).opportunity;

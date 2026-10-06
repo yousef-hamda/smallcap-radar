@@ -881,3 +881,11 @@ test('recoverable failed acquisitions retain source checkpoints during historica
  await maintainHistoricalStorage(10);
  assert.equal((await db().prepare('SELECT payload FROM raw_cache WHERE key=?').bind(`universe:${id}:quotes:0`).first()).payload,'[]');assert.equal((await db().prepare('SELECT payload FROM bulk_fundamentals WHERE run_id=?').bind(id).first()).payload,'{"revenue":123}');assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM snapshot_archives WHERE id=?').get(id+':RECOVERABLE').n,0);
 });
+
+test('verified inventory recovery resumes failed initialization without a new scan or retry delay',async()=>{
+ const {saveCompleteDirectory}=await import('../../.test-build/directory-cache.mjs'),id='directory-outage-recovered',now=new Date().toISOString(),company={ticker:'RECOVERY-LISTED',name:'Synthetic only',cik:0,exchange:'Nasdaq',securityType:'common',securityName:'Common Stock',directoryUrl:'https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt'};
+ await saveCompleteDirectory({retrievedAt:now,rows:[company]});
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,stage,strategy_hash,error) VALUES(?,?,?,'failed','Bulk Quotes/SEC Frames + Opportunity SEC v14 · full',0,?,'Complete official listing inventory unavailable: injected outage')").bind(id,now,now,currentHash()).run();
+ setUniverse([company]);
+ try{const result=await scheduledScanTick(Date.now(),{reusableBytes:1024**3,filesystemFreeBytes:1024**3});assert.equal(result.run.id,id);assert.equal(result.run.status,'running');assert.equal(result.run.stage,1);assert.equal(result.run.total,1);assert.equal(result.run.retryPending,0);}finally{setUniverse([]);}
+});
