@@ -1,7 +1,7 @@
 /** Single shared contract for the unified opportunity category. */
 export const OPPORTUNITY_SPEC = {
   id: 'UNIFIED_OPPORTUNITY',
-  version: '1.2.2-current-pricing-opportunity-system',
+  version: '1.2.3-dated-evidence-opportunity-system',
   defaultHorizonMonths: 6,
   defaultRiskTolerance: 'medium' as const,
   // Include small and micro caps; liquidity is screened independently.

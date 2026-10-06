@@ -249,13 +249,15 @@ export function evaluateOpportunityDossier(
     // A reviewed dossier outranks an automated proxy. Proxies fill only the
     // previously unscored qualitative factors.
     if (!existing || existing.score == null) {
-      // A model supplies a final bounded grade when reviewed
-      // evidence has conflicts. Preserve the conflict on the proxy so it stays
-      // visible and continues to withhold source-reviewed coverage.
+      // An older assessment cannot supply reviewed coverage. Its timestamp
+      // mismatch is not a contradiction of fresh independently dated model
+      // inputs; retain the limitation without suppressing those observations.
+      const conflicts=[...new Set([...(candidate.conflicts??[]),...(existing?.conflicts??[]).filter(conflict=>!conflict.startsWith('qualitative dimension not reviewed:')&&conflict!==`${factor} as-of timestamp does not match the dossier.`)])];
+      const limitations=(existing?.conflicts??[]).filter(conflict=>conflict===`${factor} as-of timestamp does not match the dossier.`);
       evidence[factor] = {
         ...candidate,
-        ...(existing?.rationale ? { rationale: `Source-review result: ${existing.rationale} Final model rating: ${candidate.rationale}` } : {}),
-        ...(existing?.conflicts?.length ? { conflicts: existing.conflicts.filter(conflict=>!conflict.startsWith('qualitative dimension not reviewed:')) } : {}),
+        ...(existing?.rationale ? { rationale: `Source-review result: ${existing.rationale}${limitations.length?` Assessment limitation: ${limitations.join('; ')}`:''} Final model rating: ${candidate.rationale}` } : {}),
+        conflicts,
       };
     }
   }

@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import {compatibleFinancialSources,alignSnapshotFinancials,commercialObservationKind,evidenceLeaves} from '../../.test-build/financial-integrity.mjs';
 import {reportedBorrowings} from '../../.test-build/sec.mjs';
 import {evaluateOpportunity} from '../../.test-build/opportunity-engine.mjs';
+import {evaluateOpportunityDossier} from '../../.test-build/opportunity-dossier.mjs';
 import {OPPORTUNITY_SPEC} from '../../.test-build/opportunity-spec.mjs';
 import {buildOpportunityThesis,intrinsicValuationGrade} from '../../.test-build/opportunity-thesis.mjs';
 import {parseFilingObservations,persistFilingDocument} from '../../.test-build/filing-observations.mjs';
@@ -168,4 +169,12 @@ test('pricing ratios withhold incompatible currencies and invalid dependencies',
  const result=alignSnapshotFinancials(s);for(const key of ['ps','evSales','fcfYield']){assert.equal(result[key],null);assert.equal(result.provenance[key],undefined);}
  s.provenance.marketCap.currency='USD';for(const key of ['ps','evSales','fcfYield'])assert.equal(alignSnapshotFinancials(s)[key],null,'a partial-year flow cannot be treated as annual pricing');
  for(const key of ['revenue','fcf'])s.provenance[key].periodStart='2025-07-01';s.provenance.marketCap.retrievedAt='2026-10-04T12:00:00Z';assert.equal(alignSnapshotFinancials(s).ps,null);
+});
+
+
+test('stale technical assessments cannot suppress independently sourced current timing grades',()=>{
+ const s=valuationFixture();s.ma30w=9;s.low52w=8;s.high52w=12;s.return12m=.2;for(const key of ['ma30w','low52w','high52w','return12m'])s.provenance[key]={...s.provenance.price};
+ const expected=evaluateOpportunity(s).factors.find(f=>f.id==='technicalTiming');assert(expected.score>0);
+ const actual=evaluateOpportunityDossier(s,{asOf:s.asOf,technicalTimingScore:{asOf:'2026-09-30T12:00:00Z',score:9}}).factors.find(f=>f.id==='technicalTiming');assert.equal(actual.score,expected.score);assert.equal(actual.proxy,true);assert.equal(actual.complete,false);assert.deepEqual(actual.conflicts,[]);assert.match(actual.rationale,/timestamp does not match/);
+ const conflict=evaluateOpportunityDossier({...s,sourceConflicts:['actual vendor-price contradiction']},{asOf:s.asOf,technicalTimingScore:{asOf:'2026-09-30T12:00:00Z',score:9}}).factors.find(f=>f.id==='technicalTiming');assert.equal(conflict.score,0);assert(conflict.conflicts.includes('actual vendor-price contradiction'));
 });

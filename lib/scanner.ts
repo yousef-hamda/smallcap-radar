@@ -473,6 +473,6 @@ async function failDirectoryCheckpoint(run:any,initialQueue:any[],error:unknown)
  const database=db();
  const attempt=Number(initialQueue[0]?.attempt||0)+1,message=error instanceof Error?error.message:'Directory checkpoint failed';
  await database.prepare('UPDATE strategy_runs SET status=?,error=?,retry_queue=?,lease_until=0,updated_at=? WHERE id=?').bind(attempt>=3?'failed':'running',message,attempt>=3?'[]':JSON.stringify([{stage:1,phase:'directory-ratings',attempt}]),new Date().toISOString(),run.id).run();
- if(attempt>=3)await database.prepare("UPDATE strategy_runs SET status='failed',error=?,lease_until=0 WHERE id=? AND status='running'").bind(message,`${run.id}:ratings-v2`).run();
+ if(attempt>=3)await database.prepare("UPDATE strategy_runs SET status='failed',error=?,lease_until=0 WHERE id=? AND status='running'").bind(message,`${run.id}:ratings-v3`).run();
  return {run:publicRun(await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first()),done:attempt>=3};
 }

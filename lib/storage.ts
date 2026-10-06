@@ -97,10 +97,10 @@ export async function ensureSchema(){
  })().catch(e=>{schemaPromise=null;throw e});
  return schemaPromise;
 }
-/** 1.2.1 -> 1.2.2 changes saved pricing normalization, not acquisition stages,
+/** 1.2.1/1.2.2 -> 1.2.3 changes rating normalization, not acquisition stages,
  * source formats or weights. Preserve only the audited v13 acquisition cursor. */
 export async function migrateCompatibleAcquisitionRuns() {
- await db().prepare("UPDATE strategy_runs SET strategy_hash=? WHERE strategy_hash='UNIFIED_OPPORTUNITY:e723dd3c' AND source LIKE 'Bulk Quotes/SEC Frames + Opportunity SEC v13%' AND status IN ('running','partial') AND stage<13").bind(currentHash()).run();
+ await db().prepare("UPDATE strategy_runs SET strategy_hash=? WHERE strategy_hash IN ('UNIFIED_OPPORTUNITY:e723dd3c','UNIFIED_OPPORTUNITY:ba63f113') AND source LIKE 'Bulk Quotes/SEC Frames + Opportunity SEC v13%' AND status IN ('running','partial') AND stage<13").bind(currentHash()).run();
 }
 export const currentHash=()=>`${OPPORTUNITY_SPEC.id}:${opportunitySpecHash()}`;
 export async function readRankReleaseIdentity(runId:string,expectedToken?:string) {

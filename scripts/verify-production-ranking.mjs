@@ -14,13 +14,22 @@ const rows=database.prepare('SELECT s.symbol,s.evaluation,r.score,r.rank_positio
 const factorGrades=new Map();
 const total=database.prepare('SELECT COUNT(*) AS n FROM fundamental_snapshots WHERE run_id=?').get(run.id).n;
 assert.equal(rows.length,total);
-const bySymbol=new Map();const weights=[25,20,15,12,10,10,5,3];
+const bySymbol=new Map();const weights=[25,20,15,12,10,10,5,3],factorIds=['valuation','catalysts','financialStrength','earningsQuality','competitivePosition','downsideRisk','management','technicalTiming'];
 for(const [index,row] of rows.entries()){
  const evaluation=JSON.parse(row.evaluation).opportunity;
  assert.equal(evaluation.state,'ranked');assert.equal(evaluation.rankingEligible,true);assert.equal(evaluation.factors.length,8);assert.equal(evaluation.score,row.score);assert.equal(evaluation.evaluationHash,row.evaluation_hash);assert.equal(row.rank_position,index+1);
+  for(const factor of evaluation.factors){
+    const actualConflicts=(factor.conflicts??[]).filter(conflict=>conflict!==`${factor.id} as-of timestamp does not match the dossier.`);
+    if(factor.proxy&&!actualConflicts.length&&factor.calculation?.rubricId?.endsWith('-model-v5-opportunity')){
+      const inputs=factor.calculation.inputs,parts=inputs.filter(input=>input.name.endsWith(':grade'));
+      assert.ok(parts.length,`${row.symbol}/${factor.id}: missing model component trace`);
+      const expected=Math.round(parts.reduce((sum,part)=>{const weight=inputs.find(input=>input.name===part.name.slice(0,-6)+':weight')?.value;assert.ok(Number.isFinite(weight));return sum+(typeof part.value==='number'?part.value:0)*weight/100;},0)*100)/100;
+      assert.equal(factor.score,expected,`${row.symbol}/${factor.id}: final grade must equal its persisted model components`);
+    }
+  }
  for(const [factorIndex,factor] of evaluation.factors.entries()){
   const signal=factorGrades.get(factor.id)??new Set();signal.add(factor.score);factorGrades.set(factor.id,signal);
-  assert.equal(factor.weight,weights[factorIndex]);assert.ok(Number.isFinite(factor.score)&&factor.score>=0&&factor.score<=10);assert.ok(Math.abs(factor.points-factor.score*factor.weight/10)<1e-8);assert.ok(factor.calculation?.inputs?.length);
+  assert.equal(factor.id,factorIds[factorIndex]);assert.equal(factor.weight,weights[factorIndex]);assert.ok(Number.isFinite(factor.score)&&factor.score>=0&&factor.score<=10);assert.ok(Math.abs(factor.points-factor.score*factor.weight/10)<1e-8);assert.ok(factor.calculation?.inputs?.length);
  }
  assert.equal(evaluation.score,Math.round(evaluation.factors.reduce((sum,factor)=>sum+Math.round(factor.score*100)*factor.weight,0)/10)/100);
  if(index){const previous=rows[index-1];assert.ok(previous.score>row.score||(previous.score===row.score&&previous.symbol<row.symbol));}

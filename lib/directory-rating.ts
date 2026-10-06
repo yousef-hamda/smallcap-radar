@@ -7,7 +7,7 @@ import type {Snapshot} from './engine';
  * Carry forward issuer-matching observations with their original source dates;
  * a missing observation remains missing, rather than a favorable default. */
 export async function publishDirectoryRatings(run:any,pageSize=1000,limit=80){
- const d=db(),id=`${run.id}:ratings-v2`,key=`directory-rating:v2:${run.id}`;
+ const d=db(),id=`${run.id}:ratings-v3`,key=`directory-rating:v3:${run.id}`;
  let checkpoint=await d.prepare('SELECT payload FROM raw_cache WHERE key=?').bind(key).first() as any;
  if(!checkpoint){
   const prior=await d.prepare("SELECT id FROM strategy_runs r WHERE id<>? AND status IN ('complete','partial') AND stage>=13 AND source LIKE '%· full' AND EXISTS(SELECT 1 FROM fundamental_snapshots s WHERE s.run_id=r.id) ORDER BY updated_at DESC,created_at DESC LIMIT 1").bind(id).first() as any;
@@ -38,7 +38,10 @@ export async function publishDirectoryRatings(run:any,pageSize=1000,limit=80){
    snapshot={...prior,name:current.name,exchange:current.exchange,asOf:state.asOf,provenance:{...prior.provenance}};
    for(const field of ['price','marketCap','volume','averageVolume10d','return12m','low52w','high52w'] as const){
     const evidence=current.provenance[field],old=prior.provenance[field];
-    if(typeof current[field]==='number'&&evidence&&Date.parse(evidence.availableAt??evidence.periodEnd)>(Number.isFinite(Date.parse(old?.availableAt??old?.periodEnd??''))?Date.parse(old?.availableAt??old?.periodEnd??''):-Infinity)){
+    const observedAt=Date.parse(evidence?.availableAt??evidence?.periodEnd??''),previousAt=Date.parse(old?.availableAt??old?.periodEnd??'');
+    const validUrl=(url:string|undefined)=>{try{return new URL(url??'').protocol==='https:';}catch{return false;}};
+    const sourceRepair=observedAt===previousAt&&current[field]===prior[field]&&validUrl(evidence?.url)&&!validUrl(old?.url);
+    if(typeof current[field]==='number'&&evidence&&(observedAt>(Number.isFinite(previousAt)?previousAt:-Infinity)||sourceRepair)){
      (snapshot as any)[field]=current[field];snapshot.provenance[field]=evidence;
      if(field==='price'){snapshot.dailyChange=null;delete snapshot.provenance.dailyChange;}
     }
