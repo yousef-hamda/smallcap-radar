@@ -5,11 +5,8 @@ const database=()=>(env as any).DB;
 let schema:Promise<unknown>|undefined;
 async function ready(){schema??=database().prepare('CREATE TABLE IF NOT EXISTS listing_directory_cache(id INTEGER PRIMARY KEY CHECK(id=1),content_hash TEXT NOT NULL,body_gzip BLOB NOT NULL)').run().catch((error:unknown)=>{schema=undefined;throw error;});await schema;}
 async function digest(body:string){return [...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(body)))].map(v=>v.toString(16).padStart(2,'0')).join('');}
-export function completeDirectoryFiles(nasdaq:string,other:string){
- return nasdaq.startsWith('Symbol|Security Name|')&&other.startsWith('ACT Symbol|Security Name|')
-  && /(?:^|\n)File Creation Time:/.test(nasdaq)&&/(?:^|\n)File Creation Time:/.test(other)
-  && nasdaq.split('\n').length>2&&other.split('\n').length>2;
-}
+export {completeDirectoryFiles} from './directory';
+
 export async function saveCompleteDirectory(value:CompleteDirectory){
  if(!database())return;await ready();
  if(!value.rows.length||!Number.isFinite(Date.parse(value.retrievedAt)))throw Error('Invalid complete listing inventory');

@@ -98,10 +98,10 @@ export async function ensureSchema(){
  })().catch(e=>{schemaPromise=null;throw e});
  return schemaPromise;
 }
-/** 1.2.1-1.2.3 -> 1.2.4 preserves the audited acquisition stage formats.
+/** 1.2.1-1.2.4 -> 1.2.5 preserves the audited acquisition stage formats.
  * Directory reconciliation appends missing listings without moving existing indices. */
 export async function migrateCompatibleAcquisitionRuns() {
- await db().prepare("UPDATE strategy_runs SET strategy_hash=? WHERE strategy_hash IN ('UNIFIED_OPPORTUNITY:e723dd3c','UNIFIED_OPPORTUNITY:ba63f113','UNIFIED_OPPORTUNITY:91920a00') AND source LIKE 'Bulk Quotes/SEC Frames + Opportunity SEC v13%' AND status IN ('running','partial') AND stage<13").bind(currentHash()).run();
+ await db().prepare("UPDATE strategy_runs SET strategy_hash=? WHERE strategy_hash IN ('UNIFIED_OPPORTUNITY:e723dd3c','UNIFIED_OPPORTUNITY:ba63f113','UNIFIED_OPPORTUNITY:91920a00','UNIFIED_OPPORTUNITY:42c3b090') AND source LIKE 'Bulk Quotes/SEC Frames + Opportunity SEC v13%' AND status IN ('running','partial') AND stage<13").bind(currentHash()).run();
 }
 export const currentHash=()=>`${OPPORTUNITY_SPEC.id}:${opportunitySpecHash()}`;
 export async function readRankReleaseIdentity(runId:string,expectedToken?:string) {

@@ -1,4 +1,16 @@
-# Opportunity system release candidate — 2026-10-06
+# Current opportunity system — October 7, 2026
+
+Implementation `1.2.5-complete-instrument-contract` / `f7c5745f`. Final live acceptance and exact deployment identity are pending; the 1.2.4 transport failure is recorded in the execution audit. Earlier counts and policy entries below are historical.
+
+The full inventory parser now includes every official non-ETF/non-test listing across exchange codes and alternate Nasdaq symbols. A complete hashed durable directory cache cannot be replaced by a partial provider response. Previously tracked absent listings remain visible with explicit `not-confirmed-current` membership and complete zero-credit grades. Audited active v13 inventory repair preserves provider indices, retry queues, dated quotes and fundamentals; new scans use v14. Immutable directory publication is `:ratings-v5`.
+
+All eight numeric factor grades and the actual final score remain mandatory with unchanged 25/20/15/12/10/10/5/3 weights. Numeric ranking is separate from source eligibility, safety, confidence and action. Model inputs must be dated, bounded and traceable; missing facts earn zero without reweighting. Current pricing ratios are rebuilt from compatible current capitalization, source conflicts withhold points, and stale reviewed assessment timestamps cannot suppress independent dated model inputs. Display and sort use the same persisted score. Probability and six-month targets remain null/unvalidated.
+
+Local inventory release gates: engine 195, runtime 85, verified build/root 56, typecheck and lint PASS. Independent production membership, every-record API/report/profile/export parity, component arithmetic, cross-platform deep replay and browser/mobile/offline checks are required next. Details: `docs/SYSTEM_IMPROVEMENT_EXECUTION_2026_10_06.md`. Backup/restoration and historical proof remain recorded; private artifacts are ignored.
+
+---
+
+# Historical opportunity system checkpoint — 2026-10-06
 
 Implementation rubric: `1.2.1-reproducible-opportunity-system`. Final deployment and current production proof are pending; this section does not supersede the last verified production release until the final verification is recorded.
 
@@ -14,7 +26,7 @@ Implementation rubric: `1.2.1-reproducible-opportunity-system`. Final deployment
 
 Read [execution contract](SYSTEM_IMPROVEMENT_EXECUTION_2026_10_06.md) from the repository root for current evidence, tests and outstanding work. Local all-universe replay: 6,954 sorted, zero missing factors/final grades, 404 intrinsic models and 317 peer models. These are local replay counts, not a fresh production scan or demonstrated buying outcomes.
 
-# Current complete-ranking contract — verified 2026-10-06
+# Historical complete-ranking proof — 2026-10-06
 
 Rubric `1.0.3-deterministic-universe-ranking` supersedes the historical source-eligibility ranking policy in the entries below. Every production listing receives all eight numeric grades and one actual final rating, with fixed 25/20/15/12/10/10/5/3 weights. `state=ranked` and `rankingEligible=true` refer to complete mathematical ranking. `researchState`, `sourceEligible`, coverage, confidence and checks preserve evidence/tradability findings separately; they never remove a listing from final rankings. Missing model components earn zero. Reviewed partial grades are reduced once for uncovered dimensions. Displayed factor grades determine the exact fixed-weight arithmetic.
 

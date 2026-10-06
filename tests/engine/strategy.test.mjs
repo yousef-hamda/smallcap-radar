@@ -1274,3 +1274,10 @@ test('full inventory rejects a partial exchange download instead of shrinking th
  globalThis.fetch=async url=>{const text=String(url);if(text.endsWith('/nasdaqlisted.txt'))return new Response('Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF|NextShares\nONLY|Only Common Stock|Q|N|N|100|N|N\nFile Creation Time: 1006202623:00|');throw Error('Injected unavailable other-listed directory');};
  try{await assert.rejects(fetchUniverse({skipYahoo:true}),/Complete official listing inventory unavailable/);}finally{globalThis.fetch=original;}
 });
+
+
+test('unsupported instrument components agree with withheld final factor grades',()=>{
+ const snapshot={...base,securityType:'preferred',deathSpiral:'clean',provenance:{...base.provenance,deathSpiral:{...base.provenance.price,url:'https://www.sec.gov/Archives/example',rightsStatus:'redistribution-permitted'}}};
+ const evaluated=currentOpportunityEvaluation(snapshot);
+ for(const factor of evaluated.factors){const inputs=factor.calculation.inputs,parts=inputs.filter(item=>item.name.endsWith(':grade'));if(!parts.length)continue;const expected=Math.round(parts.reduce((sum,part)=>sum+(typeof part.value==='number'?part.value:0)*inputs.find(input=>input.name===part.name.slice(0,-6)+':weight').value/100,0)*100)/100;assert.equal(factor.score,expected,factor.id);if(factor.id!=='technicalTiming')assert.equal(factor.score,0);}
+});

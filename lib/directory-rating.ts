@@ -7,7 +7,7 @@ import type {Snapshot} from './engine';
  * Carry forward issuer-matching observations with their original source dates;
  * a missing observation remains missing, rather than a favorable default. */
 export async function publishDirectoryRatings(run:any,pageSize=1000,limit=80){
- const d=db(),id=`${run.id}:ratings-v4`,key=`directory-rating:v4:${run.id}`;
+ const d=db(),id=`${run.id}:ratings-v5`,key=`directory-rating:v5:${run.id}`;
  let checkpoint=await d.prepare('SELECT payload FROM raw_cache WHERE key=?').bind(key).first() as any;
  if(!checkpoint){
   const prior=await d.prepare("SELECT id FROM strategy_runs r WHERE id<>? AND status IN ('complete','partial') AND stage>=13 AND source LIKE '%· full' AND EXISTS(SELECT 1 FROM fundamental_snapshots s WHERE s.run_id=r.id) ORDER BY updated_at DESC,created_at DESC LIMIT 1").bind(id).first() as any;

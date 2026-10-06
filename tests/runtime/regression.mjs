@@ -577,7 +577,7 @@ test('15000 directory rows use bounded durable pages and resume quote progress',
   const initialized=await processScanBatch('large-directory');assert.equal(initialized.run.total,15000);assert.equal(initialized.run.stage,1);
   const max=sqlite.prepare("SELECT MAX(length(payload)) AS bytes,COUNT(*) AS pages FROM raw_cache WHERE key LIKE 'universe:large-directory:quotes:%'").get();assert.equal(max.pages,150);assert(max.bytes<1_000_000);
   for(let chunk=0;chunk<188;chunk++)await publishDirectoryRatings(initialized.run,100);
-  const ratings=await readState({runId:'large-directory:ratings-v4',limit:1});assert.equal(ratings.summary.total,15000);assert.equal(ratings.summary.opportunityRanked,15000);assert.equal(ratings.summary.missingFactorScores,0);assert.equal(ratings.summary.missingFinalGrades,0);assert.equal(ratings.storedEvaluations[0].opportunity.factors.length,8);assert.equal(ratings.rankPositions[0],1);assert.notEqual(ratings.run.id,ratings.dataRunId,'complete directory publication does not hide ongoing acquisition');
+  const ratings=await readState({runId:'large-directory:ratings-v5',limit:1});assert.equal(ratings.summary.total,15000);assert.equal(ratings.summary.opportunityRanked,15000);assert.equal(ratings.summary.missingFactorScores,0);assert.equal(ratings.summary.missingFinalGrades,0);assert.equal(ratings.storedEvaluations[0].opportunity.factors.length,8);assert.equal(ratings.rankPositions[0],1);assert.notEqual(ratings.run.id,ratings.dataRunId,'complete directory publication does not hide ongoing acquisition');
   for(let page=0;page<150;page++){const result=await processScanBatch('large-directory');assert.equal(result.run.stage,page===149?4:1);if(page<149)assert.equal(result.run.offset,(page+1)*100);}
   assert.equal(sqlite.prepare("SELECT universe FROM strategy_runs WHERE id='large-directory'").get().universe,'paged-v2');
   await db().prepare("UPDATE strategy_runs SET stage=9,offset=1200 WHERE id='large-directory'").run();
@@ -860,7 +860,7 @@ test('active inventory repair appends listings without losing provider cursor, r
   const run=await db().prepare('SELECT * FROM strategy_runs WHERE id=?').bind(id).first();assert.equal(run.total,3);assert.equal(run.stage,5);assert.equal(run.offset,1);assert.equal(run.directory_version,1);assert.equal(run.retry_queue,original.retry_queue);
   const quote=JSON.parse((await db().prepare('SELECT payload FROM raw_cache WHERE key=?').bind(`universe:${id}:quotes:0`).first()).payload);assert.deepEqual(quote.map(row=>row.ticker),['KEEP','ABSENT','ADDED']);assert.equal(quote[0].price,3);assert.equal(quote[0].priceAvailableAt,old[0].priceAvailableAt);assert.equal(quote[0].exchange,'Texas Stock Exchange');assert.equal(quote[1].listingStatus,'not-confirmed-current');
   assert.equal((await db().prepare('SELECT payload FROM bulk_fundamentals WHERE run_id=? AND cik=1').bind(id).first()).payload,'{"revenue":123}');assert.equal(await reconcileAcquisitionDirectory(run),false);
-  const published=await publishDirectoryRatings(run,100,80);assert.equal(published.done,true);const ranked=await readState({runId:id+':ratings-v4',limit:10});assert.equal(ranked.summary.total,3);assert.equal(ranked.summary.opportunityRanked,3);assert.equal(ranked.storedEvaluations.find((_,index)=>ranked.snapshots[index].symbol==='ABSENT').opportunity.score,0);
+  const published=await publishDirectoryRatings(run,100,80);assert.equal(published.done,true);const ranked=await readState({runId:id+':ratings-v5',limit:10});assert.equal(ranked.summary.total,3);assert.equal(ranked.summary.opportunityRanked,3);assert.equal(ranked.storedEvaluations.find((_,index)=>ranked.snapshots[index].symbol==='ABSENT').opportunity.score,0);
  }finally{setUniverse([]);}
 });
 
@@ -872,4 +872,12 @@ test('history-phase inventory repair preserves its cursor and seeds appended num
  setUniverse([{...company,listingStatus:'current'},{ticker:'HISTORY-NEW',name:'Synthetic new',cik:0,exchange:'NYSE',securityType:'preferred',listingStatus:'current'}]);
  try{const run=await db().prepare('SELECT * FROM strategy_runs WHERE id=?').bind(id).first();assert.equal(await reconcileAcquisitionDirectory(run),true);const updated=await db().prepare('SELECT * FROM strategy_runs WHERE id=?').bind(id).first();assert.equal(updated.stage,10);assert.equal(updated.offset,1);assert.equal(updated.total,2);assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM fundamental_snapshots WHERE run_id=?').get(id).n,2);const newRow=JSON.parse(sqlite.prepare('SELECT evaluation FROM fundamental_snapshots WHERE run_id=? AND symbol=?').get(id,'HISTORY-NEW').evaluation).opportunity;assert.equal(newRow.factors.length,8);assert.equal(typeof newRow.score,'number');}
  finally{setUniverse([]);}
+});
+
+test('recoverable failed acquisitions retain source checkpoints during historical maintenance',async()=>{
+ const {maintainHistoricalStorage}=await import('../../.test-build/snapshot-archive.mjs'),id=crypto.randomUUID(),now=new Date().toISOString();
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,strategy_hash) VALUES(?,?,?,'failed','Bulk Quotes/SEC Frames + Opportunity SEC v14 · full',1,9,?)").bind(id,now,now,currentHash()).run();
+ await db().prepare('INSERT INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(`universe:${id}:quotes:0`,'fixture',now,'[]').run();await db().prepare('INSERT INTO bulk_fundamentals(run_id,cik,payload) VALUES(?,?,?)').bind(id,1,'{"revenue":123}').run();await insertSnapshot(id,{...base,symbol:'RECOVERABLE'}).run();
+ await maintainHistoricalStorage(10);
+ assert.equal((await db().prepare('SELECT payload FROM raw_cache WHERE key=?').bind(`universe:${id}:quotes:0`).first()).payload,'[]');assert.equal((await db().prepare('SELECT payload FROM bulk_fundamentals WHERE run_id=?').bind(id).first()).payload,'{"revenue":123}');assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM snapshot_archives WHERE id=?').get(id+':RECOVERABLE').n,0);
 });

@@ -45,3 +45,9 @@ export function parseOfficialDirectory(nasdaqText:string,otherText:string,secPay
  }
  return [...result.values()].sort((a,b)=>a.ticker.localeCompare(b.ticker));
 }
+
+export function completeDirectoryFiles(nasdaq:string,other:string){
+ return nasdaq.startsWith('Symbol|Security Name|')&&other.startsWith('ACT Symbol|Security Name|')
+  && /(?:^|\n)File Creation Time:/.test(nasdaq)&&/(?:^|\n)File Creation Time:/.test(other)
+  && nasdaq.split('\n').length>2&&other.split('\n').length>2;
+}

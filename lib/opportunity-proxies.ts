@@ -55,7 +55,8 @@ export function proxyOpportunityEvidence(snapshot: Snapshot): OpportunityEvidenc
   };
   const set = (id: OpportunityFactorId, rationale: string, components: Component[]) => {
     const conflicts = snapshot.sourceConflicts ?? [];
-    const usable = conflicts.length ? [] : components.filter(item => item.grade !== null);
+    const applicable=snapshot.listingStatus!=='not-confirmed-current' && (id==='technicalTiming'||(operatingIssuerMetricsApplicable(snapshot)&&(id!=='valuation'||commonPerShareMetricsApplicable(snapshot))));
+    const usable = conflicts.length || !applicable ? [] : components.filter(item => item.grade !== null);
     const coveragePct = usable.reduce((sum, item) => sum + item.weight, 0);
     const sources: Provenance[] = [...new Map(usable.flatMap(item => item.keys.flatMap(key => {
       const source = snapshot.provenance?.[key];
@@ -68,7 +69,7 @@ export function proxyOpportunityEvidence(snapshot: Snapshot): OpportunityEvidenc
       rationale: `${rationale} Model components use a fixed denominator; missing components earn zero. Input coverage ${coveragePct}%; this is a model rating, not a qualitative review.${conflicts.length ? ' Unresolved snapshot conflicts withhold model points.' : ''}`,
       calculation: { rubricId: `${id}-model-v5-opportunity`, inputs: [...components.flatMap(item => [
         { name: `${item.name}:weight`, value: item.weight },
-        { name: `${item.name}:grade`, value: conflicts.length ? 'withheld-conflict' : item.grade ?? 'missing-zero' },
+        { name: `${item.name}:grade`, value: !applicable ? 'withheld-instrument' : conflicts.length ? 'withheld-conflict' : item.grade ?? 'missing-zero' },
         ...item.keys.map((key, index) => ({ name: `${item.name}:${key}`, value: item.values[index] })),
       ]), ...(components.some(item=>item.keys.includes('revenueGrowth')) ? growthTrace : [])] },
     };

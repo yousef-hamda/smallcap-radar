@@ -69,8 +69,8 @@ async function providerFetch(url: string, init?: RequestInit) {
   return fetch(url, init);
 }
 
-async function fetchText(url:string,timeoutMs=4000){
- const response=await providerFetch(url,{headers:requestHeaders(url),signal:AbortSignal.timeout(timeoutMs)});
+async function fetchText(url:string,timeoutMs=8000){
+ const response=await providerFetch(url,{headers:{Accept:'text/plain'},signal:AbortSignal.timeout(timeoutMs)});
  if(!response.ok)throw Error(`${new URL(url).hostname}: HTTP ${response.status}`);
  return response.text();
 }

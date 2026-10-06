@@ -1,3 +1,9 @@
+# Current release acceptance — October 7, 2026
+
+Candidate `1.2.5` / `f7c5745f` has passed 195 engine, 85 runtime, 56 build/root tests, typecheck and lint. The expanded complete official-plus-retained universe must pass independent membership and all-record scoring/persistence/API/report/profile/export/browser proofs before acceptance. Earlier verified 6,954-row results below are historical, and do not establish current inventory completeness. See `SYSTEM_IMPROVEMENT_EXECUTION_2026_10_06.md`.
+
+---
+
 # Current acceptance contract — production verified 2026-10-06
 
 The complete mathematical ranking requirements in [the 2026-10-05 audit](COMPLETE_RANKING_AUDIT_2026_10_05.md) supersede earlier requirements that used source completeness as a ranking filter. All eight grades and the final grade are required for every listing. Evidence sufficiency and investment safety remain separate findings. Entries below are historical.
