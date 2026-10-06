@@ -1,3 +1,4 @@
+import {publishDirectoryRatings} from './directory-rating';
 import { currentHash, db, ensureSchema, insertSnapshot, log } from './storage';
 import { companySnapshot, consumeProviderIssues, enrichSnapshotsWithSecOpportunity, historicalMarketData, quickSymbols, universe,yahooBulkQuotes } from './providers';
 import { fetchBulkFundamentals, fetchCompanyFactsFallback, needsCompanyFacts, preliminarySnapshot, type BulkFundamentals } from './bulk';
@@ -11,21 +12,22 @@ const SCORE_BATCH_SIZE = 200;
 const COMPANY_FACTS_BATCH_SIZE = 12;
 const OPPORTUNITY_BATCH_SIZE = 8;
 export const SCAN_SOURCE_VERSION = 'Bulk Quotes/SEC Frames + Opportunity SEC v13';
-const UNIVERSE_PAGE=1000;
-async function saveUniverse(runId:string,companies:any[],kind='candidates'){
+const UNIVERSE_PAGE=100;
+const universePageSize=(run:any)=>run.universe==='paged-v2'?UNIVERSE_PAGE:1000;
+async function saveUniverse(runId:string,companies:any[],kind='candidates',pageSize=UNIVERSE_PAGE){
  const statements=[];
- for(let offset=0;offset<companies.length;offset+=UNIVERSE_PAGE)statements.push(db().prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(`universe:${runId}:${kind}:${offset/UNIVERSE_PAGE}`,'scan directory checkpoint',new Date().toISOString(),JSON.stringify(companies.slice(offset,offset+UNIVERSE_PAGE))));
+ for(let offset=0;offset<companies.length;offset+=pageSize)statements.push(db().prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(`universe:${runId}:${kind}:${offset/pageSize}`,'scan directory checkpoint',new Date().toISOString(),JSON.stringify(companies.slice(offset,offset+pageSize))));
  if(statements.length)await db().batch(statements);
 }
 async function universePage(runId:string,kind:string,index:number){const row=await db().prepare('SELECT payload FROM raw_cache WHERE key=?').bind(`universe:${runId}:${kind}:${index}`).first() as any;return row?JSON.parse(row.payload):[];}
 async function runCompanies(run:any){
- if(run.universe!=='paged-v1')return JSON.parse(run.universe||'[]');
+ if(!['paged-v1','paged-v2'].includes(run.universe))return JSON.parse(run.universe||'[]');
  if(run.stage===4){const row=await db().prepare('SELECT payload FROM raw_cache WHERE key=?').bind(`universe:${run.id}:ciks`).first() as any;return JSON.parse(row?.payload||'[]').map((cik:number)=>({cik}));}
  const count=run.stage===9?SCORE_BATCH_SIZE:run.stage===5?COMPANY_FACTS_BATCH_SIZE:run.stage===11?OPPORTUNITY_BATCH_SIZE:run.source.includes('quick')?BATCH_SIZE:HISTORY_BATCH_SIZE;
  const kind=run.stage===10?'history':run.stage===11?'opportunity':'candidates';
  const companies:any[]=[];
- const start=Math.floor(run.offset/UNIVERSE_PAGE),end=Math.floor(Math.min(run.total-1,run.offset+count-1)/UNIVERSE_PAGE);
- for(let index=start;index<=end;index++){const page=await universePage(run.id,kind,index);for(let j=0;j<page.length;j++)companies[index*UNIVERSE_PAGE+j]=page[j];}
+ const pageSize=universePageSize(run),start=Math.floor(run.offset/pageSize),end=Math.floor(Math.min(run.total-1,run.offset+count-1)/pageSize);
+ for(let index=start;index<=end;index++){const page=await universePage(run.id,kind,index);for(let j=0;j<page.length;j++)companies[index*pageSize+j]=page[j];}
  return companies;
 }
 
@@ -85,7 +87,7 @@ async function initializeRun(run:any) {
     const quoteCoverage = companies.filter((company: any) => Number.isFinite(company.price) && Number.isFinite(company.marketCap)).length;
     const directory=mode==='quick'?companies.filter((c:any)=>quickSymbols.includes(c.ticker)):companies;
     await saveUniverse(id,directory,'quotes');
-    await database.prepare("UPDATE strategy_runs SET universe='paged-v1',total=?,universe_total=?,quote_coverage=?,stage=1,offset=0,lease_until=0,retry_queue='[]',error=NULL,updated_at=? WHERE id=?").bind(directory.length, universeTotal, quoteCoverage, new Date().toISOString(), id).run();
+    await database.prepare("UPDATE strategy_runs SET universe='paged-v2',total=?,universe_total=?,quote_coverage=?,stage=1,offset=0,lease_until=0,retry_queue='[]',error=NULL,updated_at=? WHERE id=?").bind(directory.length, universeTotal, quoteCoverage, new Date().toISOString(), id).run();
     await log(id, 'universe', `Loaded ${universeTotal} directory rows (${mode}); quotes will be checkpointed in groups of ${UNIVERSE_PAGE}.`);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'تعذّر تجهيز دليل الشركات';
@@ -111,8 +113,27 @@ export async function processScanBatch(runId: string) {
 
   if(run.stage===0)return initializeRun(run);
 
+  if(run.stage===1&&run.universe==='paged-v1'){
+    const records=[];
+    for(let page=0;page<Math.ceil(run.total/1000);page++)records.push(...await universePage(run.id,'quotes',page));
+    if(records.length!==Number(run.total))return failDirectoryCheckpoint(run,initialQueue,Error('Legacy quote directory checkpoint is missing listings'));
+    const prefix=`universe:${run.id}:quotes:`,writes=[database.prepare('DELETE FROM raw_cache WHERE key>=? AND key<?').bind(prefix,prefix+'\uffff')];
+    for(let offset=0;offset<records.length;offset+=UNIVERSE_PAGE)writes.push(database.prepare('INSERT INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(`universe:${run.id}:quotes:${offset/UNIVERSE_PAGE}`,'converted bounded quote directory',new Date().toISOString(),JSON.stringify(records.slice(offset,offset+UNIVERSE_PAGE))));
+    writes.push(database.prepare("UPDATE strategy_runs SET universe='paged-v2',lease_until=0 WHERE id=?").bind(run.id));await database.batch(writes);
+    return {run:publicRun(await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first()),done:false};
+  }
+
+  if(!String(run.source).includes('quick')&&run.stage===1){
+    try{
+      const ratingPublication=await publishDirectoryRatings(run,universePageSize(run));
+      if(!ratingPublication.done){await database.prepare('UPDATE strategy_runs SET lease_until=0 WHERE id=?').bind(run.id).run();return {run:publicRun(run),done:false,ratingPublication};}
+    }catch(error){
+      return failDirectoryCheckpoint(run,initialQueue,error);
+    }
+  }
+
   if(run.stage===1){
-    const index=Math.floor(run.offset/UNIVERSE_PAGE);
+    const pageSize=universePageSize(run),index=Math.floor(run.offset/pageSize);
     const entries=await universePage(run.id,'quotes',index);
     const quoted=await yahooBulkQuotes(entries);
     await database.prepare('UPDATE raw_cache SET payload=?,retrieved_at=? WHERE key=?').bind(JSON.stringify(quoted),new Date().toISOString(),`universe:${run.id}:quotes:${index}`).run();
@@ -126,9 +147,9 @@ export async function processScanBatch(runId: string) {
       return {run:publicRun(updated),done:attempt>=3};
     }
     if(offset>=run.total){
-      const all=[];for(let page=0;page<Math.ceil(run.total/UNIVERSE_PAGE);page++)all.push(...await universePage(run.id,'quotes',page));
+      const all=[];for(let page=0;page<Math.ceil(run.total/pageSize);page++)all.push(...await universePage(run.id,'quotes',page));
       const candidates=String(run.source).includes('quick')?all.filter((c:any)=>quickSymbols.includes(c.ticker)):preliminaryCandidates(all);
-      await saveUniverse(run.id,candidates);
+      await saveUniverse(run.id,candidates,'candidates',pageSize);
       await database.prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(`universe:${run.id}:ciks`,'candidate CIK checkpoint',new Date().toISOString(),JSON.stringify([...new Set(candidates.map((c:any)=>Number(c.cik)).filter(cik=>Number.isSafeInteger(cik)&&cik>0))])).run();
       await database.prepare("UPDATE strategy_runs SET total=?,screened_out=?,quote_coverage=?,stage=?,offset=0,lease_until=0,retry_queue='[]',updated_at=? WHERE id=?").bind(candidates.length,run.universe_total-candidates.length,all.filter((c:any)=>Number.isFinite(c.price)&&Number.isFinite(c.marketCap)).length,String(run.source).includes('quick')?3:4,new Date().toISOString(),run.id).run();
     }else await database.prepare("UPDATE strategy_runs SET offset=?,lease_until=0,retry_queue='[]',updated_at=? WHERE id=?").bind(offset,new Date().toISOString(),run.id).run();
@@ -215,7 +236,7 @@ export async function processScanBatch(runId: string) {
         const row=await database.prepare('SELECT payload FROM raw_cache WHERE key=?').bind(`universe:${run.id}:history-candidate:${page}`).first() as any;
         if(row)history.push(...JSON.parse(row.payload));
       }
-      await saveUniverse(run.id,history,'history');
+      await saveUniverse(run.id,history,'history',universePageSize(run));
       await database.prepare("UPDATE strategy_runs SET total=?,offset=0,processed=?,stage=10,status='running',updated_at=?,lease_until=0 WHERE id=?").bind(history.length,history.length,now,run.id).run();
       await log(run.id,'history',`History requests reduced from ${offset} screened rows to ${history.length} candidates.`);
     }
@@ -327,7 +348,7 @@ export async function processScanBatch(runId: string) {
       await database.batch(writes);
       const savedRows=(await database.prepare('SELECT symbol,payload FROM fundamental_snapshots WHERE run_id=?').bind(run.id).all()).results as any[];
       const historyUniverse:any[]=[];
-      for(let page=0;page<Math.ceil(run.total/UNIVERSE_PAGE);page++)historyUniverse.push(...await universePage(run.id,'history',page));
+      for(let page=0;page<Math.ceil(run.total/universePageSize(run));page++)historyUniverse.push(...await universePage(run.id,'history',page));
       const companyBySymbol = new Map<string, any>(historyUniverse.map((company:any)=>[company.ticker,company]));
       const researchByCik = new Map<number, { cik: number; ticker: string; tickers: string[] }>();
       let researchListingCount = 0;
@@ -349,7 +370,7 @@ export async function processScanBatch(runId: string) {
         .map(issuer => ({ cik: issuer.cik, tickers: issuer.tickers.sort() }))
         .map(issuer => ({ ...issuer, ticker: issuer.tickers[0] }))
         .sort((a, b) => a.cik - b.cik);
-      await saveUniverse(run.id,researchQueue,'opportunity');
+      await saveUniverse(run.id,researchQueue,'opportunity',universePageSize(run));
       await database.prepare("UPDATE strategy_runs SET total=?,offset=0,processed=0,failed=?,stage=11,status='running',error=NULL,updated_at=?,lease_until=0,retry_queue='[]' WHERE id=?").bind(researchQueue.length,totalFailed,now,run.id).run();
       await log(run.id,'opportunity-sec',`SEC issuer-research queue: ${researchQueue.length} distinct CIKs covering ${researchListingCount} CIK-linked common-stock listings; market price, capitalization, and liquidity are evaluated separately and do not suppress financial-data acquisition.`);
     }else{
@@ -446,4 +467,12 @@ export async function processScanBatch(runId: string) {
   await database.batch(writes);
   run = await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first();
   return { run: publicRun(run), done };
+}
+
+async function failDirectoryCheckpoint(run:any,initialQueue:any[],error:unknown){
+ const database=db();
+ const attempt=Number(initialQueue[0]?.attempt||0)+1,message=error instanceof Error?error.message:'Directory checkpoint failed';
+ await database.prepare('UPDATE strategy_runs SET status=?,error=?,retry_queue=?,lease_until=0,updated_at=? WHERE id=?').bind(attempt>=3?'failed':'running',message,attempt>=3?'[]':JSON.stringify([{stage:1,phase:'directory-ratings',attempt}]),new Date().toISOString(),run.id).run();
+ if(attempt>=3)await database.prepare("UPDATE strategy_runs SET status='failed',error=?,lease_until=0 WHERE id=? AND status='running'").bind(message,`${run.id}:ratings`).run();
+ return {run:publicRun(await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first()),done:attempt>=3};
 }

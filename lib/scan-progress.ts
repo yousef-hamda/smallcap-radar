@@ -1,6 +1,6 @@
 import {SEC_FRAME_DATASET_COUNT} from './strategy-spec';
 
-export const OPPORTUNITY_SEC_PROGRESS_DETAIL = 'تحاول هذه المرحلة جلب البيانات المالية من SEC لكل سهم عادي مرتبط برقم CIK. نقص السعر أو القيمة السوقية أو السيولة لا يوقف الجلب، لكنه قد يمنع أهلية الترتيب.';
+export const OPPORTUNITY_SEC_PROGRESS_DETAIL = 'تحاول هذه المرحلة جلب البيانات المالية من SEC لكل مُصدر مرتبط برقم CIK. نقص السعر أو القيمة السوقية أو السيولة لا يوقف الجلب ولا يحذف الدرجة النهائية؛ يظهر النقص في جودة الأدلة.';
 
 export type ScanRun = {
  id: string; status: string; source: string; stage: number; offset: number;

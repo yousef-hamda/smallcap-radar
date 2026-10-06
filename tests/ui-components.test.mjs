@@ -60,8 +60,8 @@ test("forwards progress semantics to the primitive", async () => {
 test('SEC scan progress copy matches the issuer-wide acquisition rules', async()=>{
  const {OPPORTUNITY_SEC_PROGRESS_DETAIL,scanProgress}=await vite.ssrLoadModule('/lib/scan-progress.ts');
  const state=scanProgress({id:'run',status:'running',source:'full',stage:11,offset:8,total:100,processed:8,failed:0,created_at:'2026-09-30',updated_at:'2026-09-30'});
- assert.match(state.phase,/SEC/);assert.match(OPPORTUNITY_SEC_PROGRESS_DETAIL,/لكل سهم عادي مرتبط برقم CIK/);
- assert.match(OPPORTUNITY_SEC_PROGRESS_DETAIL,/لا يوقف الجلب/);assert.match(OPPORTUNITY_SEC_PROGRESS_DETAIL,/يمنع أهلية الترتيب/);
+ assert.match(state.phase,/SEC/);assert.match(OPPORTUNITY_SEC_PROGRESS_DETAIL,/لكل مُصدر مرتبط برقم CIK/);
+ assert.match(OPPORTUNITY_SEC_PROGRESS_DETAIL,/لا يوقف الجلب/);assert.match(OPPORTUNITY_SEC_PROGRESS_DETAIL,/لا يحذف الدرجة النهائية/);
  assert.doesNotMatch(OPPORTUNITY_SEC_PROGRESS_DETAIL,/تعالج الشركات ذات السعر/);
 });
 

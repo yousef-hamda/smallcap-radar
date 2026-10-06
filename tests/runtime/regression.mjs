@@ -6,7 +6,7 @@ import {visitor} from '../../.test-build/visitor.mjs';
 import {body as parseBody} from '../../.test-build/http.mjs';
 import {numeric,parseNews,fetchJson} from '../../.test-build/providers.mjs';
 import {reconcile} from '../../.test-build/reconcile.mjs';
-import {setHistoryResult,setOpportunityResearchResult,setUniverse,universeCalls,setIntradayResult,opportunityCalls,resetOpportunityCalls} from './providers.mjs';
+import {setHistoryResult,setOpportunityResearchResult,setUniverse,setBulkQuoteTransform,universeCalls,setIntradayResult,opportunityCalls,resetOpportunityCalls} from './providers.mjs';
 import {evaluateStrategy} from '../../.test-build/engine.mjs';
 import {proxyOpportunityEvidence} from '../../.test-build/opportunity-proxies.mjs';
 import {fixtures} from '../../.test-build/fixtures.mjs';
@@ -18,6 +18,7 @@ import {GET as reportGET} from '../../.test-build/scan-report-api.mjs';
 import {GET as companyGET} from '../../.test-build/company-api.mjs';
 import {GET as exportGET} from '../../.test-build/export-api.mjs';
 import {reserveProviderRequest} from '../../.test-build/provider-quota.mjs';
+import {publishDirectoryRatings} from '../../.test-build/directory-rating.mjs';
 import {scheduledScanTick} from '../../.test-build/scheduled-scan.mjs';
 import {archivedWriteStatements,restoreArchivedRow} from '../../.test-build/snapshot-archive.mjs';
 import {GET as favoriteQuotesGET} from '../../.test-build/favorite-quotes-api.mjs';
@@ -574,9 +575,11 @@ test('15000 directory rows use bounded durable pages and resume quote progress',
  await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,strategy_hash) VALUES('large-directory','2000-01-01','2000-01-01','running','Bulk Quotes/SEC Frames v7 · full',?)").bind(currentHash()).run();
  try{
   const initialized=await processScanBatch('large-directory');assert.equal(initialized.run.total,15000);assert.equal(initialized.run.stage,1);
-  const max=sqlite.prepare("SELECT MAX(length(payload)) AS bytes,COUNT(*) AS pages FROM raw_cache WHERE key LIKE 'universe:large-directory:quotes:%'").get();assert.equal(max.pages,15);assert(max.bytes<1_000_000);
-  for(let page=0;page<15;page++){const result=await processScanBatch('large-directory');assert.equal(result.run.stage,page===14?4:1);if(page<14)assert.equal(result.run.offset,(page+1)*1000);}
-  assert.equal(sqlite.prepare("SELECT universe FROM strategy_runs WHERE id='large-directory'").get().universe,'paged-v1');
+  const max=sqlite.prepare("SELECT MAX(length(payload)) AS bytes,COUNT(*) AS pages FROM raw_cache WHERE key LIKE 'universe:large-directory:quotes:%'").get();assert.equal(max.pages,150);assert(max.bytes<1_000_000);
+  for(let chunk=0;chunk<188;chunk++)await publishDirectoryRatings(initialized.run,100);
+  const ratings=await readState({runId:'large-directory:ratings',limit:1});assert.equal(ratings.summary.total,15000);assert.equal(ratings.summary.opportunityRanked,15000);assert.equal(ratings.summary.missingFactorScores,0);assert.equal(ratings.summary.missingFinalGrades,0);assert.equal(ratings.storedEvaluations[0].opportunity.factors.length,8);assert.equal(ratings.rankPositions[0],1);assert.notEqual(ratings.run.id,ratings.dataRunId,'complete directory publication does not hide ongoing acquisition');
+  for(let page=0;page<150;page++){const result=await processScanBatch('large-directory');assert.equal(result.run.stage,page===149?4:1);if(page<149)assert.equal(result.run.offset,(page+1)*100);}
+  assert.equal(sqlite.prepare("SELECT universe FROM strategy_runs WHERE id='large-directory'").get().universe,'paged-v2');
   await db().prepare("UPDATE strategy_runs SET stage=9,offset=1200 WHERE id='large-directory'").run();
   const scored=await processScanBatch('large-directory');assert.equal(scored.run.offset,1400);assert.equal(sqlite.prepare("SELECT COUNT(*) n FROM fundamental_snapshots WHERE run_id='large-directory'").get().n,200);
  }finally{setUniverse([]);}
@@ -769,4 +772,41 @@ test('production scheduler requires native capacity and never queries prohibited
  assert.throws(()=>db().prepare('PRAGMA freelist_count'),/not authorized/);
  const missing=await worker.fetch(new Request('https://radar.test/__radar-scheduled',{method:'POST',headers:{'X-Radar-Background':'capacity-secret'}}),{BACKGROUND_SCAN_SECRET:'capacity-secret',RAILWAY_VOLUME_MOUNT_PATH:'/app/data'},{waitUntil:()=>{}});assert.equal(missing.status,503);
  const malformed=await worker.fetch(new Request('https://radar.test/__radar-scheduled',{method:'POST',headers:{'X-Radar-Background':'capacity-secret','X-Radar-Reusable-Bytes':'-1','X-Radar-Filesystem-Free-Bytes':'Infinity'}}),{BACKGROUND_SCAN_SECRET:'capacity-secret',RAILWAY_VOLUME_MOUNT_PATH:'/app/data'},{waitUntil:()=>{}});assert.equal(malformed.status,503);
+});
+
+
+test('directory publication preserves dated issuer facts, retains missing CIKs and resumes an immutable full release',async()=>{
+ const priorId='directory-prior',runId='directory-next',date=new Date(Date.now()-3600000).toISOString();
+ await db().prepare("UPDATE strategy_runs SET created_at='2000-01-01'").run();invalidateStateCache();
+ const old={...base,symbol:'KEEP-DATED',cik:777,securityType:'common'};
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,strategy_hash) VALUES(?,?,?,'complete','Directory fixture · full',3,13,?)").bind(priorId,date,date,currentHash()).run();await insertSnapshot(priorId,old).run();await insertSnapshot(priorId,{...old,symbol:'CHANGED-ISSUER',cik:888,revenue:123}).run();await insertSnapshot(priorId,{...old,symbol:'NEW-NO-CIK',cik:undefined,securityType:'unknown',revenue:123}).run();
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe_total,stage,strategy_hash) VALUES(?,?,?,'running','Bulk Quotes/SEC Frames · full',3,3,1,?)").bind(runId,date,date,currentHash()).run();
+ const directory=[{ticker:old.symbol,name:'same issuer',cik:777,securityType:'common',exchange:'NYSE'},{ticker:'NEW-NO-CIK',name:'missing CIK',securityType:'unknown'},{ticker:'CHANGED-ISSUER',name:'another issuer',cik:999,securityType:'common'}];
+ await db().prepare("INSERT INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)").bind(`universe:${runId}:quotes:0`,'fixture',date,JSON.stringify(directory)).run();
+ const first=await publishDirectoryRatings({id:runId,strategy_hash:currentHash(),universe_total:3},1000,1);assert.equal(first.offset,1);assert.equal(first.done,false);
+ assert.equal((await readState({limit:1})).dataRunId,priorId,'unfinished publication cannot replace the published release');
+ const saved=JSON.parse((await db().prepare('SELECT payload FROM fundamental_snapshots WHERE run_id=? AND symbol=?').bind(first.id,old.symbol).first()).payload);
+ assert.equal(saved.revenue,old.revenue);assert.deepEqual(saved.provenance.revenue,old.provenance.revenue);assert.notEqual(saved.asOf,old.asOf,'rating cut advances while factual dates remain unchanged');
+ const finished=await publishDirectoryRatings({id:runId,strategy_hash:currentHash(),universe_total:3},1000,2);assert.equal(finished.done,true);
+ const state=await readState({runId:first.id,limit:10});assert.equal(state.summary.total,3);assert.equal(state.summary.opportunityRanked,3);assert.deepEqual(new Set(state.snapshots.map(row=>row.symbol)),new Set(directory.map(row=>row.ticker)));
+ for(const stored of state.storedEvaluations){assert.equal(stored.opportunity.factors.length,8);assert.ok(Number.isFinite(stored.opportunity.score));}
+ for(const symbol of ['CHANGED-ISSUER','NEW-NO-CIK']){const snapshot=JSON.parse((await db().prepare('SELECT payload FROM fundamental_snapshots WHERE run_id=? AND symbol=?').bind(first.id,symbol).first()).payload);assert.equal(snapshot.revenue,undefined,'unmatched or missing CIK must not inherit issuer financials');}
+ const revision=state.release.revision;await publishDirectoryRatings({id:runId,strategy_hash:currentHash(),universe_total:3});assert.equal((await readState({runId:first.id})).release.revision,revision,'completed directory publication never mutates under acquisition ticks');
+});
+
+
+test('legacy quote checkpoints convert without dropping listings and long source URLs fit actual D1 bounds',async()=>{
+ const id='long-quote-directory',now=new Date().toISOString(),companies=Array.from({length:1000},(_,index)=>({ticker:'LONG'+index,name:'TEST ONLY',cik:index+1,securityType:'common'}));
+ const sourceUrl='https://query1.finance.yahoo.com/v7/finance/quote?symbols='+Array.from({length:250},(_,index)=>'SYMBOL'+String(index).padStart(12,'0')).join('%2C');
+ assert.throws(()=>db().prepare('SELECT ?').bind('x'.repeat(2_000_001)),/SQLITE_TOOBIG/);
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe_total,universe,stage,strategy_hash) VALUES(?,?,?,'running','Bulk Quotes/SEC Frames · full',1000,1000,'paged-v1',1,?)").bind(id,now,now,currentHash()).run();
+ await db().prepare('INSERT INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(`universe:${id}:quotes:0`,'test',now,JSON.stringify(companies)).run();
+ setBulkQuoteTransform(rows=>rows.map(row=>({...row,price:10,priceUrl:sourceUrl,priceAvailableAt:now,marketCap:100e6,marketCapUrl:sourceUrl,marketCapAvailableAt:now})));
+ try{
+  const migrated=await processScanBatch(id);assert.equal((await db().prepare('SELECT universe FROM strategy_runs WHERE id=?').bind(id).first()).universe,'paged-v2');assert.equal(migrated.run.offset,0);
+  for(let offset=0;offset<1000;offset+=80)await publishDirectoryRatings(migrated.run,100);
+  for(let page=0;page<10;page++){const result=await processScanBatch(id);assert.equal(result.run.offset,page===9?0:(page+1)*100);assert.equal(result.run.stage,page===9?4:1);}
+  const pages=(await db().prepare('SELECT payload FROM raw_cache WHERE key LIKE ? ORDER BY key').bind(`universe:${id}:quotes:%`).all()).results;
+  assert.equal(pages.length,10);const records=pages.flatMap(row=>{assert.ok(Buffer.byteLength(row.payload)<2_000_000);return JSON.parse(row.payload);});assert.equal(records.length,1000);assert.equal(new Set(records.map(row=>row.ticker)).size,1000);assert.ok(records.every(row=>row.priceUrl===sourceUrl&&row.marketCapUrl===sourceUrl));
+ }finally{setBulkQuoteTransform(null);}
 });

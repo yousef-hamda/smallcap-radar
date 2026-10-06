@@ -15,7 +15,7 @@ Active rubric: `1.2.1-reproducible-opportunity-system`. This is the final mathem
 | management | 5% |
 | technicalTiming | 3% |
 
-Every factor grade is bounded to 0–10 and normalized to two decimals. Its contribution is `grade × weight / 10`. The final grade is the sum, rounded to two decimals. Implementation uses integer hundredths: `round(sum(round(grade × 100) × weight) / 10) / 100`, preventing binary floating point errors at half cents. Contributions retain three-decimal precision internally. All 6,954 listings, including zero grades, are sorted by this saved final grade descending, then symbol ascending using SQLite BINARY ordering. There is no coverage-based reweighting or issuer-specific weight adjustment.
+Every factor grade is bounded to 0–10 and normalized to two decimals. Its contribution is `grade × weight / 10`. The final grade is the sum, rounded to two decimals. Implementation uses integer hundredths: `round(sum(round(grade × 100) × weight) / 10) / 100`, preventing binary floating point errors at half cents. Contributions retain three-decimal precision internally. All production listings, including zero grades, are sorted by this saved final grade descending, then symbol ascending using SQLite BINARY ordering. There is no coverage-based reweighting or issuer-specific weight adjustment.
 
 ## Deterministic models
 
@@ -55,3 +55,7 @@ Peer context uses at least five distinct issuer CIKs with the same SEC SIC, fisc
 Run/revision/rubric release tokens pin radar pages, profiles, reports and complete streamed exports. Database leases coordinate builders; conditional rank publication rejects concurrent raw mutation. Compact radar cards retain canonical scores and hashes. Historical source snapshots/evaluations are restored losslessly from compressed archives. The independent production scheduler resumes durable jobs, maintains history storage, shares a persistent SEC quota and uses issuer-verified compressed artifact caches. It may begin a refresh during compression when at least 512 MiB of reusable SQLite pages are available.
 
 Probability remains null until a genuine point-in-time study, delisted outcomes, dividend/action coverage, executable entries, costs, purged chronological splits and issuer holdouts pass. Investment evidence and source rights are never certified by numerical completeness alone.
+
+## Directory publication before acquisition
+
+A full scan publishes an immutable `Directory ratings · full` release from the complete saved directory before waiting for SEC/history/filing acquisition. `directory-rating:<scanId>` is a durable bounded cursor; `<scanId>:ratings` owns the saved ratings and rank manifest. Observations are carried forward only across matching positive CIK and security type; original source dates remain unchanged while the evaluation cut advances. Missing CIKs/facts retain numeric conservative grades. Publication validates the entire listing count and materialized ranks before terminal partial status; partial describes evidence acquisition, not absent final grades. The previous release remains usable until publication finishes. Enrichment runs separately and eventually publishes a newer complete full universe. Default radar/profile selection prefers newest finished full run; pagination/profile/report/export use one pinned release.

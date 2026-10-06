@@ -18,8 +18,8 @@ if(process.env.RAILWAY_VOLUME_MOUNT_PATH||process.env.RADAR_SCHEDULER_ENABLED===
     const capacityHeaders=capacity?{'X-Radar-Reusable-Bytes':String(capacity.reusableBytes),'X-Radar-Filesystem-Free-Bytes':String(capacity.filesystemFreeBytes)}:{};
     const response=await fetch(`http://127.0.0.1:${process.env.PORT||4173}/__radar-scheduled`,{method:'POST',headers:{...capacityHeaders,'X-Radar-Background':process.env.BACKGROUND_SCAN_SECRET},signal:AbortSignal.timeout(150_000)});
     const result=await response.json();
-    if(!response.ok)console.error(`[scheduler] tick HTTP ${response.status}`);
-    else {const phase=String(result.run?.id??'')+':'+String(result.run?.stage??'')+':'+String(result.pausedForCapacity??result.idle??'maintenance');if(phase!==lastPhase||Date.now()-lastLoggedAt>30000){console.log('[scheduler] progress',JSON.stringify({runId:result.run?.id,stage:result.run?.stage,processed:result.run?.processed,total:result.run?.total,archived:result.maintenance?.archived,pausedForCapacity:result.pausedForCapacity,idle:result.idle}));lastLoggedAt=Date.now();lastPhase=phase;}}
+    if(!response.ok)console.error(`[scheduler] tick HTTP ${response.status}`,String(result.error??'').replace(/https?:\/\/\S+/g,'[source URL]').slice(0,300));
+    else {const phase=String(result.run?.id??'')+':'+String(result.run?.stage??'')+':'+String(result.pausedForCapacity??result.idle??'maintenance');if(phase!==lastPhase||Date.now()-lastLoggedAt>30000){console.log('[scheduler] progress',JSON.stringify({runId:result.run?.id,stage:result.run?.stage,processed:result.run?.processed,total:result.run?.total,ratingPublication:result.ratingPublication?{total:result.ratingPublication.total,offset:result.ratingPublication.offset,done:result.ratingPublication.done}:undefined,archived:result.maintenance?.archived,pausedForCapacity:result.pausedForCapacity,idle:result.idle}));lastLoggedAt=Date.now();lastPhase=phase;}}
    }catch(error){console.error('[scheduler] tick failed',error instanceof Error?error.name:'UnknownError');}
    await delay(2000);
   }
