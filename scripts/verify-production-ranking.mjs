@@ -8,7 +8,7 @@ const directory='/app/data/state/v3/d1/miniflare-D1DatabaseObject';
 const databasePath=process.argv[2]??`${directory}/${readdirSync(directory).find(name=>name.endsWith('.sqlite')&&name!=='metadata.sqlite')}`;
 const base=process.argv[3]??`http://127.0.0.1:${process.env.PORT??8080}`;
 const database=new DatabaseSync(databasePath,{readOnly:true});
-const run=database.prepare("SELECT id FROM strategy_runs r WHERE status IN ('complete','partial') AND (stage>=13 OR source='import') AND EXISTS(SELECT 1 FROM fundamental_snapshots s WHERE s.run_id=r.id) ORDER BY CASE WHEN source LIKE '%· full' THEN 0 ELSE 1 END,CASE WHEN status='complete' THEN 0 ELSE 1 END,created_at DESC LIMIT 1").get();
+const run=database.prepare("SELECT id FROM strategy_runs r WHERE status IN ('complete','partial') AND (stage>=13 OR source='import') AND EXISTS(SELECT 1 FROM fundamental_snapshots s WHERE s.run_id=r.id) ORDER BY CASE WHEN source LIKE '%· full' THEN 0 ELSE 1 END,created_at DESC LIMIT 1").get();
 const warmResponse=await fetch(base+'/api/radar?limit=1&runId='+encodeURIComponent(run.id),{signal:AbortSignal.timeout(180000)});assert.equal(warmResponse.status,200);await warmResponse.json();
 const rows=database.prepare('SELECT s.symbol,s.evaluation,r.score,r.rank_position,r.evaluation_hash FROM fundamental_snapshots s JOIN opportunity_rankings r ON r.run_id=s.run_id AND r.symbol=s.symbol WHERE s.run_id=? ORDER BY r.rank_position').all(run.id);
 const factorGrades=new Map();

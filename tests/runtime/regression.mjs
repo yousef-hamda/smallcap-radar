@@ -240,9 +240,20 @@ test('Company Facts recovery stage advances when the durable Frames row is alrea
  await db().prepare('INSERT INTO bulk_fundamentals(run_id,cik,payload) VALUES(?,?,?)').bind('facts-stage',company.cik,JSON.stringify({revenue:fact('revenue'),netIncome:fact('netIncome'),ocf:fact('ocf'),capex:fact('capex'),shares:instant('shares'),priorShares:{...instant('priorShares'),end:'2025-06-30'},cash:instant('cash'),debtCurrent:instant('debtCurrent'),debtNoncurrent:instant('debtNoncurrent')})).run();
  const result=await processScanBatch('facts-stage');assert.equal(result.run.stage,9);assert.equal(result.run.offset,0);assert.equal(result.run.sec_requests,0);
 });
-test('completed result with legacy processed=0 remains selectable; partial never replaces it',async()=>{
- await db().prepare("UPDATE strategy_runs SET processed=0 WHERE id='scan-test'").run();assert.equal((await readState()).dataRunId,'scan-test');
- await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,strategy_hash) VALUES('partial-test','2026-09-09','2026-09-09','partial','Bulk Quotes/SEC Frames v7 · full',1,13,?)").bind(currentHash()).run();await insertSnapshot('partial-test',{...base,symbol:'PARTIAL'}).run();assert.equal((await readState()).dataRunId,'scan-test');
+test('newest finished full universe remains canonical despite partial provider coverage',async()=>{
+ await db().prepare("UPDATE strategy_runs SET processed=0 WHERE id='scan-test'").run();invalidateStateCache();assert.equal((await readState()).dataRunId,'scan-test');
+ const created=new Date(Date.now()+86400000).toISOString(),id='partial-test';
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe_total,stage,strategy_hash) VALUES(?,?,?,'partial','Bulk Quotes/SEC Frames · full',2,2,13,?)").bind(id,created,created,currentHash()).run();
+ try{
+  await insertSnapshot(id,{...base,symbol:'PARTIAL-A'}).run();await insertSnapshot(id,{symbol:'PARTIAL-Z',name:'Missing provider data',asOf:base.asOf,securityType:'unknown',provenance:{}}).run();
+  invalidateStateCache();const current=await readState({limit:10});assert.equal(current.dataRunId,id);assert.equal(current.summary.opportunityRanked,2);assert.equal(current.summary.missingFinalGrades,0);
+  const report=await(await reportGET(new Request('https://radar.test/api/scan-report?runId='+id))).json();assert.equal(report.counts.passed,2);
+  for(const [index,snapshot]of current.snapshots.entries()){
+   const expected=current.storedEvaluations[index].opportunity;
+   const company=await(await companyGET(new Request('https://radar.test/api/company?symbol='+snapshot.symbol))).json();assert.deepEqual(company.evaluation,expected);assert.equal(company.ranking.runId,id);assert.equal(company.ranking.position,current.rankPositions[index]);
+   const row=report.rows.find(row=>row.symbol===snapshot.symbol);assert.deepEqual(row.evaluation,expected);assert.equal(row.rank,current.rankPositions[index]);
+  }
+ }finally{await db().prepare('DELETE FROM fundamental_snapshots WHERE run_id=?').bind(id).run();await db().prepare('DELETE FROM strategy_runs WHERE id=?').bind(id).run();invalidateStateCache();}
 });
 test('API personal favorites start at zero, writes are idempotent and isolated',async()=>{
  await db().prepare("INSERT INTO watchlist(symbol,created_at) VALUES('OLD_SHARED','2026-01-01')").run();

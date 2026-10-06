@@ -114,9 +114,9 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
  // result set with its still-enriching (and therefore often empty) rows.
  // Prefer the newest completed/partial market run; only fall back to running
  // when no finished result exists yet (first-ever scan).
- const finished=await d.prepare("SELECT * FROM strategy_runs r WHERE status IN ('complete','partial') AND (stage>=13 OR source='import') AND EXISTS(SELECT 1 FROM fundamental_snapshots s WHERE s.run_id=r.id) ORDER BY CASE WHEN source LIKE '%· full' THEN 0 ELSE 1 END, CASE WHEN status='complete' THEN 0 ELSE 1 END, created_at DESC LIMIT 1").first();
- const running=await d.prepare("SELECT * FROM strategy_runs WHERE status='running' AND processed>0 AND strategy_hash=? ORDER BY CASE WHEN source LIKE '%· full' THEN 0 ELSE 1 END, CASE WHEN status='complete' THEN 0 ELSE 1 END, created_at DESC LIMIT 1").bind(currentHash()).first();
- const fallback=finished?null:await d.prepare("SELECT * FROM strategy_runs r WHERE status IN ('complete','partial') AND (stage>=13 OR source='import') AND EXISTS(SELECT 1 FROM fundamental_snapshots s WHERE s.run_id=r.id) ORDER BY CASE WHEN source LIKE '%· full' THEN 0 ELSE 1 END, CASE WHEN status='complete' THEN 0 ELSE 1 END, created_at DESC LIMIT 1").first();
+ const finished=await d.prepare("SELECT * FROM strategy_runs r WHERE status IN ('complete','partial') AND (stage>=13 OR source='import') AND EXISTS(SELECT 1 FROM fundamental_snapshots s WHERE s.run_id=r.id) ORDER BY CASE WHEN source LIKE '%· full' THEN 0 ELSE 1 END, created_at DESC LIMIT 1").first();
+ const running=await d.prepare("SELECT * FROM strategy_runs WHERE status='running' AND processed>0 AND strategy_hash=? ORDER BY CASE WHEN source LIKE '%· full' THEN 0 ELSE 1 END, created_at DESC LIMIT 1").bind(currentHash()).first();
+ const fallback=finished?null:await d.prepare("SELECT * FROM strategy_runs r WHERE status IN ('complete','partial') AND (stage>=13 OR source='import') AND EXISTS(SELECT 1 FROM fundamental_snapshots s WHERE s.run_id=r.id) ORDER BY CASE WHEN source LIKE '%· full' THEN 0 ELSE 1 END, created_at DESC LIMIT 1").first();
  const pinned=options.runId?await d.prepare("SELECT * FROM strategy_runs WHERE id=? AND status IN ('complete','partial') AND (stage>=13 OR source='import')").bind(options.runId).first():null;
  if(options.runId&&!pinned)throw Object.assign(Error('جولة التقييم المطلوبة غير متاحة كنسخة مكتملة.'),{status:409});
  const latest=pinned||finished||fallback||running;
@@ -339,7 +339,7 @@ export async function ensureRunEvaluations(runId:string) {
 /** The same completed full universe selection used by radar and profiles. */
 export async function readCanonicalCompany(symbol:string,runId?:string,releaseToken?:string) {
  await ensureSchema();const d=db();
- const run=runId?await d.prepare("SELECT id FROM strategy_runs WHERE id=? AND status IN ('complete','partial') AND (stage>=13 OR source='import')").bind(runId).first() as any:await d.prepare("SELECT id FROM strategy_runs r WHERE status IN ('complete','partial') AND (stage>=13 OR source='import') AND EXISTS(SELECT 1 FROM fundamental_snapshots s WHERE s.run_id=r.id) ORDER BY CASE WHEN source LIKE '%· full' THEN 0 ELSE 1 END, CASE WHEN status='complete' THEN 0 ELSE 1 END, created_at DESC LIMIT 1").first() as any;
+ const run=runId?await d.prepare("SELECT id FROM strategy_runs WHERE id=? AND status IN ('complete','partial') AND (stage>=13 OR source='import')").bind(runId).first() as any:await d.prepare("SELECT id FROM strategy_runs r WHERE status IN ('complete','partial') AND (stage>=13 OR source='import') AND EXISTS(SELECT 1 FROM fundamental_snapshots s WHERE s.run_id=r.id) ORDER BY CASE WHEN source LIKE '%· full' THEN 0 ELSE 1 END, created_at DESC LIMIT 1").first() as any;
  if(runId&&!run)throw Object.assign(Error('جولة التقييم المطلوبة غير متاحة.'),{status:409});
  if(!run)return null;
  await ensureRunEvaluations(run.id);

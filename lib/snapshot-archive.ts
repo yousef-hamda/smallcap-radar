@@ -31,7 +31,7 @@ export async function archivedWriteStatements(id:string,payload:string,evaluatio
 }
 export async function maintainHistoricalStorage(limit=50){
  await schema();
- const protectedRuns=(await db().prepare("SELECT id FROM strategy_runs WHERE status IN ('complete','partial') AND stage>=13 AND source LIKE '%· full' ORDER BY CASE WHEN status='complete' THEN 0 ELSE 1 END,created_at DESC LIMIT 3").all()).results as any[];
+ const protectedRuns=(await db().prepare("SELECT id FROM strategy_runs WHERE status IN ('complete','partial') AND stage>=13 AND source LIKE '%· full' ORDER BY created_at DESC LIMIT 3").all()).results as any[];
  const excluded=protectedRuns.map(row=>String(row.id));
  const candidates=(await db().prepare(`SELECT s.id,s.payload,s.evaluation FROM (SELECT s.id FROM fundamental_snapshots s JOIN strategy_runs r ON r.id=s.run_id LEFT JOIN snapshot_archives a ON a.id=s.id WHERE r.status IN ('complete','partial','failed') AND (r.stage>=13 OR r.status='failed') AND a.id IS NULL ${excluded.length?`AND s.run_id NOT IN (${excluded.map(()=>'?').join(',')})`:''} ORDER BY s.id LIMIT ?) candidates JOIN fundamental_snapshots s ON s.id=candidates.id`).bind(...excluded,limit).all()).results as any[];
  for(const row of candidates)await db().batch(await archivedWriteStatements(row.id,row.payload,row.evaluation));
