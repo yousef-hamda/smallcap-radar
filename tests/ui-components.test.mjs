@@ -114,7 +114,7 @@ test('company profile consumes only the canonical Opportunity evaluation',async(
 test('radar displays numeric final grades, source coverage and stable database ranks',async()=>{
  const source=await readFile(path.join(root,'app/page.tsx'),'utf8');
  const storage=await readFile(path.join(root,'lib/storage.ts'),'utf8');
- assert.match(source,/e\.score\.toFixed\(2\)/);assert.match(source,/f\.points\.toFixed\(2\)/);
+ assert.match(source,/e\.score\.toFixed\(2\)/);assert.match(source,/f\.points\.toFixed\(3\)/);
  assert.match(source,/تغطية المصادر/);assert.match(source,/rankBySymbol\[s\.symbol\]/);
  assert.match(storage,/ROW_NUMBER\(\) OVER/);assert.match(storage,/symbol COLLATE BINARY ASC/);
  assert.match(storage,/ensureRunEvaluations/);
@@ -289,7 +289,7 @@ test('unified opportunity view displays final grades and complete ranking',async
  assert.match(source,/state=\$\{opportunityState\}/);
  assert.match(source,/e\.state===opportunityState/);
  assert.match(source,/e\.score\.toFixed\(2\)/);
- assert.match(source,/\$\{f\.points\.toFixed\(2\)\} نقطة/);
+ assert.match(source,/\$\{f\.points\.toFixed\(3\)\} نقطة/);
  assert.match(source,/operatingCandidateSignals\(s\)/);
  assert.match(source,/candidate-signals/);
  assert.match(source,/الترتيب النهائي لجميع الأسهم/);assert.doesNotMatch(source,/ليست درجة نهائية|نقاط موثقة مؤقتة/);

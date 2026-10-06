@@ -477,7 +477,7 @@ test('SEC research stage records mismatched-issuer payloads as validation failur
 });
 test('concurrent quick/full starts share one durable run before any network call',async()=>{
   await db().prepare("UPDATE strategy_runs SET stage=13,status='complete',lease_until=0 WHERE status='running'").run();
- await db().prepare("UPDATE strategy_runs SET created_at='2000-01-01' WHERE status IN ('complete','partial')").run();
+ await db().prepare("UPDATE strategy_runs SET created_at='2000-01-01',updated_at='2000-01-01' WHERE status IN ('complete','partial')").run();
  const before=universeCalls;
  const results=await Promise.all([startScan('full'),startScan('quick'),startScan('full')]);
  assert.equal(new Set(results.map(r=>r.id)).size,1);assert.equal(results[0].stage,0);assert.equal(universeCalls,before);
@@ -684,7 +684,7 @@ test('report conflict count avoids repeated full payload scans and follows snaps
 test('publication pins pages, profiles, reports and complete export; rejects mutated releases',async()=>{
  const prior=await readState({limit:1});assert(prior.release);
  const pin=`runId=${prior.release.runId}&release=${prior.release.token}`;
- await db().prepare("UPDATE strategy_runs SET created_at='9998-12-31T23:59:59.999Z' WHERE id=?").bind(prior.dataRunId).run();
+ await db().prepare("UPDATE strategy_runs SET created_at='9998-12-31T23:59:59.999Z',updated_at='9998-12-31T23:59:59.999Z' WHERE id=?").bind(prior.dataRunId).run();
  const now='9999-12-31T23:59:59.999Z',id='release-new-full';
  await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES(?,?,?,'complete','Release · full',1,1,13,?)").bind(id,now,now,currentHash()).run();
  await insertSnapshot(id,{...base,symbol:'NEW-RELEASE'}).run();invalidateStateCache();
@@ -777,7 +777,7 @@ test('production scheduler requires native capacity and never queries prohibited
 
 test('directory publication preserves dated issuer facts, retains missing CIKs and resumes an immutable full release',async()=>{
  const priorId='directory-prior',runId='directory-next',date=new Date(Date.now()-3600000).toISOString();
- await db().prepare("UPDATE strategy_runs SET created_at='2000-01-01'").run();invalidateStateCache();
+ await db().prepare("UPDATE strategy_runs SET created_at='2000-01-01',updated_at='2000-01-01'").run();invalidateStateCache();
  const old={...base,symbol:'KEEP-DATED',cik:777,securityType:'common'};
  await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,strategy_hash) VALUES(?,?,?,'complete','Directory fixture · full',3,13,?)").bind(priorId,date,date,currentHash()).run();await insertSnapshot(priorId,old).run();await insertSnapshot(priorId,{...old,symbol:'CHANGED-ISSUER',cik:888,revenue:123}).run();await insertSnapshot(priorId,{...old,symbol:'NEW-NO-CIK',cik:undefined,securityType:'unknown',revenue:123}).run();
  await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe_total,stage,strategy_hash) VALUES(?,?,?,'running','Bulk Quotes/SEC Frames · full',3,3,1,?)").bind(runId,date,date,currentHash()).run();
@@ -809,4 +809,13 @@ test('legacy quote checkpoints convert without dropping listings and long source
   const pages=(await db().prepare('SELECT payload FROM raw_cache WHERE key LIKE ? ORDER BY key').bind(`universe:${id}:quotes:%`).all()).results;
   assert.equal(pages.length,10);const records=pages.flatMap(row=>{assert.ok(Buffer.byteLength(row.payload)<2_000_000);return JSON.parse(row.payload);});assert.equal(records.length,1000);assert.equal(new Set(records.map(row=>row.ticker)).size,1000);assert.ok(records.every(row=>row.priceUrl===sourceUrl&&row.marketCapUrl===sourceUrl));
  }finally{setBulkQuoteTransform(null);}
+});
+
+
+test('finished enrichment supersedes its directory publication despite an earlier scan start',async()=>{
+ const root='finish-after-directory',baseline=root+':ratings',cut='9999-12-31T23:59:59.999Z';
+ await db().prepare("UPDATE strategy_runs SET updated_at='2000-01-01'").run();invalidateStateCache();
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,strategy_hash) VALUES(?,'2001-01-01',?,'partial','Directory ratings · full',1,13,?)").bind(baseline,'9999-12-30',currentHash()).run();await insertSnapshot(baseline,{...base,symbol:'NEW-DIRECTORY'}).run();
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,strategy_hash) VALUES(?,'2000-01-01',?,'complete','Bulk Quotes/SEC Frames · full',1,13,?)").bind(root,cut,currentHash()).run();await insertSnapshot(root,{...base,symbol:'ENRICHED-LATER'}).run();
+ const current=await readState({limit:10});assert.equal(current.dataRunId,root);assert.equal(current.snapshots[0].symbol,'ENRICHED-LATER');const profile=await(await companyGET(new Request('https://radar.test/api/company?symbol=ENRICHED-LATER'))).json();assert.equal(profile.ranking.runId,root);assert.deepEqual(profile.evaluation,current.storedEvaluations[0].opportunity);
 });
