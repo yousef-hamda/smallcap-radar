@@ -791,6 +791,13 @@ test('directory publication preserves dated issuer facts, retains missing CIKs a
  const state=await readState({runId:first.id,limit:10});assert.equal(state.summary.total,3);assert.equal(state.summary.opportunityRanked,3);assert.deepEqual(new Set(state.snapshots.map(row=>row.symbol)),new Set(directory.map(row=>row.ticker)));
  for(const stored of state.storedEvaluations){assert.equal(stored.opportunity.factors.length,8);assert.ok(Number.isFinite(stored.opportunity.score));}
  for(const symbol of ['CHANGED-ISSUER','NEW-NO-CIK']){const snapshot=JSON.parse((await db().prepare('SELECT payload FROM fundamental_snapshots WHERE run_id=? AND symbol=?').bind(first.id,symbol).first()).payload);assert.equal(snapshot.revenue,undefined,'unmatched or missing CIK must not inherit issuer financials');}
+ const pin='runId='+encodeURIComponent(first.id)+'&release='+encodeURIComponent(state.release.token);
+ const response=await GET(new Request('https://radar.test/api/radar?'+pin+'&limit=2'));assert.equal(response.status,200);const page=await response.json();assert.equal(page.release.token,state.release.token);assert.equal(page.snapshots.length,2);
+ const nextResponse=await GET(new Request('https://radar.test/api/radar?'+pin+'&offset=2'));assert.equal(nextResponse.status,200);const next=await nextResponse.json();assert.equal(next.snapshots.length,1);assert.equal(next.rankPositions[0],3);
+ const companyResponse=await companyGET(new Request('https://radar.test/api/company?'+pin+'&symbol='+encodeURIComponent(page.snapshots[0].symbol)));assert.equal(companyResponse.status,200);assert.deepEqual((await companyResponse.json()).evaluation,page.storedEvaluations[0].opportunity);
+ const reportResponse=await reportGET(new Request('https://radar.test/api/scan-report?'+pin));assert.equal(reportResponse.status,200);assert.equal((await reportResponse.json()).rows.length,3);
+ const exportResponse=await exportGET(new Request('https://radar.test/api/export?'+pin));assert.equal(exportResponse.status,200);assert.equal((await exportResponse.json()).results.length,3);
+ const status=await(await GET(new Request('https://radar.test/api/radar?status=1'))).json();assert.equal(status.run.id,state.run.id);assert.notEqual(status.run.id,first.id,'status polling preserves ongoing acquisition and loaded pages');
  const revision=state.release.revision;await publishDirectoryRatings({id:runId,strategy_hash:currentHash(),universe_total:3});assert.equal((await readState({runId:first.id})).release.revision,revision,'completed directory publication never mutates under acquisition ticks');
 });
 

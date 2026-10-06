@@ -15,7 +15,7 @@ export async function GET(req:Request){
   const url=new URL(req.url), identity=await resolveVisitor(req);
   if(url.searchParams.get('status')==='1'){
    await ensureSchema();
-   const row=await db().prepare('SELECT id,status,source,stage,offset,processed,total,failed,created_at,updated_at,error,lease_until,universe_total,quote_coverage,fundamental_coverage,sec_failed,sec_success,sec_requests,json_array_length(retry_queue) AS retryPending FROM strategy_runs WHERE strategy_hash=? ORDER BY created_at DESC LIMIT 1').bind(currentHash()).first();
+   const row=await db().prepare("SELECT id,status,source,stage,offset,processed,total,failed,created_at,updated_at,error,lease_until,universe_total,quote_coverage,fundamental_coverage,sec_failed,sec_success,sec_requests,json_array_length(retry_queue) AS retryPending FROM strategy_runs WHERE strategy_hash=? ORDER BY CASE WHEN source LIKE 'Bulk Quotes/%' AND status IN ('running','partial') AND stage<13 THEN 0 ELSE 1 END,updated_at DESC,created_at DESC LIMIT 1").bind(currentHash()).first();
    return json({run:row});
   }
   const strategy=url.searchParams.get('strategy'),limit=Number(url.searchParams.get('limit')||40),offset=Number(url.searchParams.get('offset')||0);
