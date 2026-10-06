@@ -2,6 +2,9 @@ import type { Snapshot, Provenance } from './engine';
 import type { OpportunityEvidenceSet } from './opportunity-engine';
 import { derivedEvidence, usableEvidence } from './evidence';
 import { OPPORTUNITY_SPEC, type OpportunityFactorId } from './opportunity-spec';
+import { compatibleSnapshotMetrics, commercialObservationKind, operatingIssuerMetricsApplicable, commonPerShareMetricsApplicable } from './financial-integrity';
+import {peerObservation,peerContext,uniqueIssuerPeers} from './opportunity-peers';
+import {buildOpportunityThesis,intrinsicValuationGrade} from './opportunity-thesis';
 
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 const clamp = (value: number, low = 0, high = 10) => Math.max(low, Math.min(high, value));
@@ -11,9 +14,14 @@ type Component = { name: string; weight: number; grade: number | null; keys: str
  * These are model estimates, not assertions of fair value, a moat, or reviewed governance. */
 export function proxyOpportunityEvidence(snapshot: Snapshot): OpportunityEvidenceSet {
   const output: OpportunityEvidenceSet = {};
+  const ownPeer=peerObservation(snapshot);
+  const validatedPeerContext=snapshot.peerContext?peerContext(snapshot,uniqueIssuerPeers(snapshot.peerContext.peers)):undefined;
   const derivedGrowth = deriveRevenueGrowth(snapshot);
   const growthTrace = derivedGrowth?.inputs ?? [];
   const observation = (key: string): number | null => {
+    if (key === 'dilution' && snapshot.splitAdjusted !== true) return null;
+    if (['ps','evSales','fcfYield'].includes(key) && !commonPerShareMetricsApplicable(snapshot)) return null;
+    if (!operatingIssuerMetricsApplicable(snapshot) && !['price','ma30w','low52w','high52w','return12m','nextEarnings'].includes(key)) return null;
     const value = key==='revenueGrowth' && !finite(snapshot.revenueGrowth) ? derivedGrowth?.value : snapshot[key as keyof Snapshot];
     const source = key==='revenueGrowth' && !finite(snapshot.revenueGrowth) ? derivedGrowth?.source : snapshot.provenance?.[key];
     if (!finite(value) || !source || !usableEvidence(source, snapshot.asOf)
@@ -34,7 +42,15 @@ export function proxyOpportunityEvidence(snapshot: Snapshot): OpportunityEvidenc
   };
   const component = (name: string, weight: number, keys: string[], calculate: (...values: number[]) => number): Component => {
     const values = keys.map(observation);
-    return { name, weight, keys, values: values.map(value => value ?? 'missing-or-ineligible'), grade: values.every(finite) ? clamp(calculate(...values as number[])) : null };
+    const flows = keys.filter(key => ['revenue','fcf','netIncome'].includes(key));
+    const balances = keys.filter(key => ['cash','debt'].includes(key));
+    const specialized=snapshot.opportunityResearch?.financialStrength && snapshot.opportunityResearch.financialStrength.industryModel!=='industrial-operating-company';
+    const annualFlow=keys.includes('fcf')&&keys.includes('cash')?snapshot.provenance.fcf:undefined;
+    const annualDays=annualFlow?.periodStart?(Date.parse(annualFlow.periodEnd)-Date.parse(annualFlow.periodStart))/864e5:0;
+    const runwayCompatible=!keys.includes('cash')||!keys.includes('fcf')||(annualDays>=330&&annualDays<=380&&annualFlow?.currency===snapshot.provenance.cash?.currency&&annualFlow?.periodEnd===snapshot.provenance.cash?.periodEnd);
+    const compatible = !(specialized&&['cash-debt','fcf-margin','runway','cash-conversion'].includes(name)) && runwayCompatible && (flows.length < 2 || compatibleSnapshotMetrics(snapshot, flows, 'flow'))
+      && (balances.length < 2 || compatibleSnapshotMetrics(snapshot, balances, 'balance'));
+    return { name, weight, keys, values: values.map(value => value ?? 'missing-or-ineligible'), grade: compatible && values.every(finite) ? clamp(calculate(...values as number[])) : null };
   };
   const set = (id: OpportunityFactorId, rationale: string, components: Component[]) => {
     const conflicts = snapshot.sourceConflicts ?? [];
@@ -49,7 +65,7 @@ export function proxyOpportunityEvidence(snapshot: Snapshot): OpportunityEvidenc
       score: Math.round(usable.reduce((sum, item) => sum + item.grade! * item.weight / 100, 0) * 100) / 100,
       proxy: true, coveragePct, confidence: 'low', sources, conflicts,
       rationale: `${rationale} Model components use a fixed denominator; missing components earn zero. Input coverage ${coveragePct}%; this is a model rating, not a qualitative review.${conflicts.length ? ' Unresolved snapshot conflicts withhold model points.' : ''}`,
-      calculation: { rubricId: `${id}-model-v3`, inputs: [...components.flatMap(item => [
+      calculation: { rubricId: `${id}-model-v5-opportunity`, inputs: [...components.flatMap(item => [
         { name: `${item.name}:weight`, value: item.weight },
         { name: `${item.name}:grade`, value: conflicts.length ? 'withheld-conflict' : item.grade ?? 'missing-zero' },
         ...item.keys.map((key, index) => ({ name: `${item.name}:${key}`, value: item.values[index] })),
@@ -58,13 +74,22 @@ export function proxyOpportunityEvidence(snapshot: Snapshot): OpportunityEvidenc
   };
   const evSales=observation('evSales');
   const multiple = evSales!==null&&evSales>0 ? 'evSales' : 'ps';
-  set('valuation', 'Relative valuation uses sales multiples, FCF yield and growth; no fair value is invented.', [
-    component('sales-multiple', 70, [multiple], value => value <= 0 ? 0 : value <= 1 ? 9 : value <= 3 ? 7.5 : value <= 6 ? 5.5 : value <= 10 ? 3.5 : 1.5),
+  const thesis=buildOpportunityThesis(snapshot),intrinsicGrade=intrinsicValuationGrade(thesis);
+  set('valuation', 'Intrinsic downside protection and base upside account for 60% of the fixed valuation denominator; relative sales pricing and observed FCF yield account for 25% and 15%. Unsupported intrinsic value earns zero.', [
+    {name:'intrinsic-value-sensitivity',weight:60,grade:intrinsicGrade,keys:[],values:[intrinsicGrade??'missing-intrinsic-zero']},
+    component('sales-multiple',25,[multiple],value=>value<=0?0:value<=1?9:value<=3?7.5:value<=6?5.5:value<=10?3.5:1.5),
     observation('fcfYield')!==null
-      ? component('fcf-yield',20,['fcfYield'],value=>clamp(value*100))
-      : component('fcf-yield-from-margin-and-sales-multiple',20,['fcf','revenue','ps'],(fcf,sales,ps)=>sales>0&&ps>0?clamp(fcf/sales/ps*100):0),
-    component('growth', 10, ['revenueGrowth',multiple], (growth,pricing) => pricing>0?clamp(growth*25):0),
+      ?component('fcf-yield',15,['fcfYield'],value=>clamp(value*100))
+      :component('fcf-yield-from-margin-and-sales-multiple',15,['fcf','revenue','ps'],(fcf,sales,ps)=>sales>0&&ps>0?clamp(fcf/sales/ps*100):0),
   ]);
+  if(intrinsicGrade!==null&&output.valuation){
+    output.valuation.sources.push(...thesis.valuation.sources);
+    output.valuation.calculation!.inputs.push(
+      {name:'normalized owner cash flow',value:thesis.valuation.normalizedCashflow!,unit:'USD'},
+      {name:'normalized net income',value:thesis.valuation.normalizedEarnings!,unit:'USD'},
+      ...thesis.valuation.scenarios.flatMap(item=>[{name:item.name+':intrinsic estimate',value:item.valuePerSecurity,unit:'USD'},{name:item.name+':upside',value:item.upside},{name:item.name+':required return assumption',value:item.requiredReturn},{name:item.name+':growth assumption',value:item.initialGrowth}])
+    );
+  }
   const earningsDate = Date.parse(snapshot.nextEarnings ?? '');
   const inHorizon = Number.isFinite(earningsDate) && earningsDate > Date.parse(snapshot.asOf)
     && earningsDate <= Date.parse(snapshot.asOf) + OPPORTUNITY_SPEC.defaultHorizonMonths * 30.4375 * 86_400_000
@@ -72,6 +97,9 @@ export function proxyOpportunityEvidence(snapshot: Snapshot): OpportunityEvidenc
   const backlog = snapshot.backlog;
   const revenue = observation('revenue');
   const backlogEligible = finite(backlog?.amount) && backlog!.amount! >= 0 && revenue !== null && revenue > 0
+    && ['backlog','remaining-performance-obligation'].includes(commercialObservationKind(snapshot))
+    && !!backlog?.expectedRecognitionBy && Date.parse(backlog.expectedRecognitionBy) > Date.parse(snapshot.asOf)
+    && Date.parse(backlog.expectedRecognitionBy) <= Date.parse(snapshot.asOf) + OPPORTUNITY_SPEC.defaultHorizonMonths * 30.4375 * 86_400_000
     && !!snapshot.provenance?.backlog && usableEvidence(snapshot.provenance.backlog, snapshot.asOf);
   set('catalysts', 'Observed growth and disclosed backlog approximate business momentum; a scheduled earnings event earns only limited timing credit, not positive impact.', [
     component('growth-momentum', 50, ['revenueGrowth'], value => clamp(value * 25)),
@@ -79,10 +107,12 @@ export function proxyOpportunityEvidence(snapshot: Snapshot): OpportunityEvidenc
     { name: 'earnings-window', weight: 20, grade: inHorizon ? 2 : null, keys: ['nextEarnings'], values: [snapshot.nextEarnings ?? 'missing'] },
   ]);
   set('competitivePosition', 'Margins and growth approximate business quality; they do not establish a durable competitive moat.', [
-    component('gross-margin', 50, ['grossMargin'], value => value * 15),
+    component('gross-margin', 30, ['grossMargin'], value => value * 15),
+    {name:'industry-peer-gross-margin',weight:20,grade:validatedPeerContext?.grade??null,keys:[],values:[snapshot.peerContext?.method??'missing comparable issuer peers']},
     component('margin-trend', 30, ['operatingMarginTrend'], value => value > 0 ? clamp(value * 100) : 0),
     component('growth', 20, ['revenueGrowth'], value => clamp(value * 25)),
   ]);
+  if(output.competitivePosition&&validatedPeerContext?.grade!=null){output.competitivePosition.sources.push(...(ownPeer?.sources??[]),...validatedPeerContext.peers.flatMap(peer=>peer.sources));output.competitivePosition.calculation?.inputs.push(...(ownPeer?[{name:"issuer:annual-gross-margin",value:ownPeer.grossMargin,unit:"ratio"}]:[]),...validatedPeerContext.peers.map(peer=>({name:'peer:'+peer.symbol+':gross-margin',value:peer.grossMargin,unit:'ratio'})));}
   const financingSource = snapshot.provenance?.deathSpiral;
   const financingKnown = !!financingSource && usableEvidence(financingSource, snapshot.asOf)
     && ['clean','moderate','severe'].includes(snapshot.deathSpiral ?? '');

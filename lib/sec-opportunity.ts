@@ -1,6 +1,6 @@
 import type { Provenance } from './engine';
 import type { EarningsPeriod, EarningsQualityAssessment, FinancialStrengthAssessment, SourcedValue } from './opportunity-scoring';
-import { REVENUE_TAGS } from './sec';
+import { REVENUE_TAGS, reportedBorrowings } from './sec';
 import { isOpportunityProvenanceValid } from './opportunity-engine';
 
 type SecRow = { start?: string; end?: string; val?: number; filed?: string; form?: string; accn?: string };
@@ -276,6 +276,7 @@ function derivedSourcedValue(value: number, unit: string, source: string, tag: s
     unit,
     source: {
       source,
+      dependencies: inputs.map(item => item.source),
       url: inputs[0].source.url,
       periodStart: inputs.map(item => item.source.periodStart).filter((date): date is string => !!date).sort()[0],
       periodEnd: inputs.map(item => item.source.periodEnd).sort().at(-1)!,
@@ -318,6 +319,15 @@ export function buildSecFinancialStrengthInputs(
   if (currentDebt && noncurrentDebt) {
     if (currentDebt.source.periodEnd !== noncurrentDebt.source.periodEnd) missing.push('total debt: current and noncurrent balances end on different dates');
     else metrics.totalDebt = derivedSourcedValue(currentDebt.value + noncurrentDebt.value, unit, 'SEC Company Facts · current + noncurrent debt', `${currentDebt.source.tag} + ${noncurrentDebt.source.tag}`, [currentDebt, noncurrentDebt]);
+  }
+  const borrowing = reportedBorrowings(record.facts,asOf,unit);
+  if (borrowing) {
+    const sources=borrowing.components.map(item=>({ value:item.val, unit,
+      source:{ source:`SEC Company Facts · ${item.tag}`, url:`https://data.sec.gov/api/xbrl/companyfacts/CIK${String(cik).padStart(10,'0')}.json`,
+        periodEnd:item.end,availableAt:`${item.filed}T23:59:59Z`,retrievedAt,currency:unit,rightsStatus:'redistribution-permitted' as const,
+        accession:item.accn,tag:item.tag,confidence:'high' as const } }));
+    metrics.totalDebt=derivedSourcedValue(borrowing.val,unit,'SEC reported borrowings',borrowing.method,sources);
+    metrics.totalDebt.source.metricScope=borrowing.scope;
   }
   if (currentDebt && yearTwoMaturities) {
     if (currentDebt.source.periodEnd !== yearTwoMaturities.source.periodEnd) missing.push('24-month maturities: current debt and year-two maturity facts end on different dates');

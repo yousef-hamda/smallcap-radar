@@ -1,6 +1,7 @@
+import { requestedRankRelease } from '@/lib/rank-release';
 import { resolveCompanyBySymbol, companySnapshot } from '@/lib/providers';
 import { db, ensureSchema, readCanonicalCompany } from '@/lib/storage';
-import { json } from '@/lib/http';
+import { json, statusOf } from '@/lib/http';
 
 import { reconcile } from '@/lib/reconcile';
 import { secUserAgentCacheVersion } from '@/lib/sec-user-agent';
@@ -13,7 +14,10 @@ export async function GET(request: Request) {
     const symbol = new URL(request.url).searchParams.get('symbol')?.trim().toUpperCase() ?? '';
     if (!/^[A-Z0-9.^-]{1,16}$/.test(symbol)) return json({ error: 'رمز غير صالح' }, 400);
     await ensureSchema();
-    const canonical=await readCanonicalCompany(symbol);
+    const params=new URL(request.url).searchParams;
+    const pin=requestedRankRelease(params);
+    const canonical=await readCanonicalCompany(symbol,pin.runId,pin.releaseToken);
+    if(pin.runId&&!canonical)return json({error:'الشركة غير موجودة في إصدار الترتيب المطلوب'},404);
     if(canonical)return json({...canonical,cached:true,ratingSource:'saved-production-universe'});
     // Version the deep cache whenever the enrichment contract changes so a
     // previous partial response cannot mask newly available fields.
@@ -44,6 +48,6 @@ export async function GET(request: Request) {
     const snapshot=await work;
     return json({ snapshot, evaluation:evaluateOpportunityDossier(snapshot,opportunityDossierFromSnapshot(snapshot)), cached: false });
   } catch (error) {
-    return json({ error: error instanceof Error ? error.message : 'تعذّر تحميل التحقق العميق' }, 503);
+    return json({ error: error instanceof Error ? error.message : 'تعذّر تحميل التحقق العميق' }, statusOf(error,503));
   }
 }

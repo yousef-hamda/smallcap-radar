@@ -1,3 +1,5 @@
+import {restoreArchivedRow} from '@/lib/snapshot-archive';
+import { requestedRankRelease } from '@/lib/rank-release';
 import {readState,db,createRun,insertSnapshot,ensureSchema,currentHash,invalidateStateCache} from '@/lib/storage';
 import {sameOrigin,sameSecret,json,body,statusOf} from '@/lib/http';
 import {completeSnapshotSchema,importSchema} from '@/lib/validation';
@@ -23,7 +25,7 @@ export async function GET(req:Request){
   // send core/bounce are routed to the unified result set during migration;
   // favorites remains a separate saved-items view.
   const activeStrategy=strategy==='favorites'?'favorites':'opportunity';
-  const response=json(await readState({strategy:activeStrategy,opportunityState,owner:identity.owner,query:url.searchParams.get('q')||'',limit:Number.isFinite(limit)?limit:40,offset:Number.isFinite(offset)?offset:0}));
+  const response=json(await readState({strategy:activeStrategy,opportunityState,owner:identity.owner,query:url.searchParams.get('q')||'',limit:Number.isFinite(limit)?limit:40,offset:Number.isFinite(offset)?offset:0,...requestedRankRelease(url.searchParams),...(url.searchParams.get('view')==='compact'?{view:'compact' as const}:{})}));
   if(identity.cookie)response.headers.set('Set-Cookie',identity.cookie);
   return response;
  }catch(error){
@@ -32,7 +34,7 @@ export async function GET(req:Request){
   // regression without logging request parameters or stored portfolio data.
   const detail=error instanceof Error?{name:error.name,message:error.message.slice(0,240)}:{name:'UnknownError',message:'Non-Error exception'};
   console.error('[radar:read] request failed',detail);
-  return json({error:'تعذّر قراءة قاعدة البيانات'},503);
+  return json({error:statusOf(error,503)===409&&error instanceof Error?error.message:'تعذّر قراءة قاعدة البيانات'},statusOf(error,503));
  }
 }
 export async function POST(req:Request){
@@ -43,8 +45,8 @@ export async function POST(req:Request){
    const identity=await resolveVisitor(req);
    if(!b.saved)await db().prepare('DELETE FROM personal_watchlist WHERE owner=? AND symbol=?').bind(identity.owner,b.symbol).run();
    else {
-    const row=await db().prepare('SELECT payload FROM fundamental_snapshots WHERE symbol=? ORDER BY as_of DESC LIMIT 1').bind(b.symbol).first() as any;
-    let cached=row;
+    const row=await db().prepare('SELECT id,payload,evaluation FROM fundamental_snapshots WHERE symbol=? ORDER BY as_of DESC LIMIT 1').bind(b.symbol).first() as any;
+    let cached=row?await restoreArchivedRow(row):null;
     for(const version of [secUserAgentCacheVersion(),'v21','v20','v19','v18','v17','v16','v15','v14','v13','v12','v11','v10','v9','v8','v7','v6','v5','v4']){
      if(cached)break;
      cached=await db().prepare('SELECT payload FROM raw_cache WHERE key=?').bind(`deep:${version}:${b.symbol}`).first() as any;

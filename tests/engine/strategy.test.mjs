@@ -46,10 +46,10 @@ test('Core liquidity and EV/S boundaries',()=>{assert.equal(gate({...base,median
 test('profitability OR and missing data semantics',()=>{assert.equal(gate({...base,netIncome:-1,fcf:1},'profitability'),'PASS');assert.equal(gate({...base,netIncome:null,fcf:-1},'profitability'),'UNKNOWN');assert.equal(gate({...base,netIncome:0,fcf:0},'profitability'),'FAIL');const fcfOnly={...base,netIncome:5,fcf:1,provenance:{...base.provenance,netIncome:undefined}};assert.equal(gate(fcfOnly,'profitability'),'PASS')});
 test('unresolved death spiral never passes without evidence',()=>{assert.equal(gate({...base,deathSpiral:'unknown'},'deathSpiral'),'UNKNOWN');assert.equal(gate({...base,riskEvidence:undefined},'deathSpiral'),'UNKNOWN');assert.equal(gate({...base,deathSpiral:'severe'},'deathSpiral'),'FAIL')});
 test('financing risk review turns complete SEC solvency evidence into a usable Core gate',()=>{
- const p={source:'SEC test',periodEnd:'2026-06-30',availableAt:'2026-08-01T00:00:00Z',retrievedAt:base.asOf,confidence:'high'};
- const reviewed=applyFinancingRisk({...base,cash:20e6,debt:5e6,provenance:{...base.provenance,cash:p,debt:p}});
+ const p={source:'SEC test',currency:'USD',periodEnd:'2026-06-30',availableAt:'2026-08-01T00:00:00Z',retrievedAt:base.asOf,confidence:'high'};
+ const reviewed=applyFinancingRisk({...base,cash:20e6,debt:5e6,provenance:{...base.provenance,cash:p,debt:p,revenue:{...p,periodStart:'2025-07-01'},netIncome:{...p,periodStart:'2025-07-01'},fcf:{...p,periodStart:'2025-07-01'}}});
  assert.equal(reviewed.deathSpiral,'clean');assert.match(reviewed.riskEvidence,/لا توجد إشارة/);assert.equal(gate(reviewed,'deathSpiral'),'PASS');
- const distressed=applyFinancingRisk({...reviewed,cash:1e6,debt:10e6,fcf:-2e6,provenance:{...reviewed.provenance,fcf:p}});
+ const distressed=applyFinancingRisk({...reviewed,cash:1e6,debt:10e6,fcf:-2e6,provenance:{...reviewed.provenance,fcf:{...p,periodStart:'2025-07-01'}}});
  assert.equal(distressed.deathSpiral,'severe');assert.equal(gate(distressed,'deathSpiral'),'FAIL');
 });
 test('financial freshness uses filing availability while bounding the reporting period',()=>{
@@ -259,7 +259,7 @@ test('deep financial enrichment derives cash debt EV/S without treating missing 
  const missing=structuredClone(facts);delete missing['us-gaap'].LongTermDebtCurrent;
  const partial=enrichFinancials({...base,evSales:undefined},missing,'https://data.sec.gov/test');assert.equal(partial.debt,undefined);assert.equal(partial.evSales,undefined);
 });
-test('deep financial enrichment derives gross margin and contracted backlog from standard SEC facts',()=>{
+test('deep financial enrichment separates contract liabilities from backlog',()=>{
  const facts={
   'us-gaap':{
    Revenues:{units:{USD:[{start:'2025-01-01',end:'2025-12-31',val:100,filed:'2026-02-01',form:'10-K'}]}},
@@ -268,7 +268,7 @@ test('deep financial enrichment derives gross margin and contracted backlog from
   }
  };
  const s=enrichFinancials({...base,asOf:'2026-09-01T00:00:00Z'},facts,'https://data.sec.gov/test');
- assert.equal(s.grossMargin,.6);assert.equal(s.backlog.amount,25);assert.equal(s.provenance.grossMargin.source,'SEC revenue and cost of revenue');assert.equal(s.provenance.backlog.source,'SEC EDGAR');
+ assert.equal(s.grossMargin,.6);assert.equal(s.backlog,undefined);assert.equal(s.contractLiabilities.amount,25);assert.equal(s.provenance.grossMargin.source,'SEC revenue and cost of revenue');assert.equal(s.provenance.contractLiabilities.source,'SEC EDGAR');
 });
 test('Cboe fallback parser keeps only bounded positive dated OHLCV rows',()=>{
  const rows=parseCboeDaily({data:[{date:'2026-01-02',close:12,open:11,high:13,low:10,volume:100},{date:'2025-12-31',close:9},{date:'2026-02-01',close:0},{date:'bad',close:20}]},'2026-01-01','2026-01-31');
@@ -312,10 +312,10 @@ test('SEC 8-K item acquisition is identity checked and bounded to four recent va
   const invalid=await fetchSec8KItemIndex(payload,cik+1,'2026-09-30T12:00:00.000Z','2026-09-30T12:00:00.000Z');assert.equal(invalid.providerStatus,'unavailable');assert.equal(requests,4);
  }finally{globalThis.fetch=original;if(previousAgent===undefined)delete process.env.SEC_USER_AGENT;else process.env.SEC_USER_AGENT=previousAgent;}
 });
-test('bulk Opportunity enrichment omits the large filing list while profile-only discovery remains available',async()=>{
+test('bulk Opportunity enrichment persists filing and insider coverage for every issuer',async()=>{
  const original=globalThis.fetch,cik=9876543,previousAgent=process.env.SEC_USER_AGENT;process.env.SEC_USER_AGENT='SmallCapRadar/2.2 (contact: test@example.com)';
  globalThis.fetch=async url=>String(url).includes('/submissions/CIK')?Response.json({cik:String(cik),sic:'7372',sicDescription:'Services-Prepackaged Software',filings:{recent:{form:['8-K'],accessionNumber:[`${String(cik).padStart(10,'0')}-26-000001`],primaryDocument:['current.htm'],filingDate:['2026-09-20']}}}):Response.json({cik,facts:{}});
- try{const snapshot={...opportunitySnapshot,cik,provenance:{...opportunitySnapshot.provenance}};await enrichSnapshotsWithSecOpportunity([snapshot]);assert.equal(snapshot.opportunityResearch.secFilings,undefined,'do not persist up to 60 SEC rows per issuer in every scan snapshot');assert.equal(snapshot.opportunityResearch.earnings.providerStatus,'retrieved');}
+ try{const snapshot={...opportunitySnapshot,cik,provenance:{...opportunitySnapshot.provenance}};await enrichSnapshotsWithSecOpportunity([snapshot]);assert.equal(snapshot.opportunityResearch.secFilings.items.length,1);assert.equal(snapshot.opportunityResearch.secFilings.form8KItemIndex.failedDocuments,1,'invalid HTML remains explicit failed coverage');assert(snapshot.insiderResearch);assert.equal(snapshot.opportunityResearch.earnings.providerStatus,'retrieved');}
  finally{globalThis.fetch=original;if(previousAgent===undefined)delete process.env.SEC_USER_AGENT;else process.env.SEC_USER_AGENT=previousAgent;}
 });
 
@@ -337,20 +337,20 @@ test('Form 4 coverage is partial when SEC submission history does not reach the 
 });
 test('Form 4 retrieval distinguishes inaccessible filing documents from absent code-P purchases',async()=>{
  const original=globalThis.fetch,previousAgent=process.env.SEC_USER_AGENT,filingDates=[...Array(54).fill('2026-09-20'),'2025-09-29'];process.env.SEC_USER_AGENT='SmallCapRadar/2.2 (contact: test@example.com)';
- const payload={filings:{recent:{form:filingDates.map((_,i)=>i===8?'10-Q':'4'),accessionNumber:filingDates.map((_,i)=>`0000999999-26-${String(i+1).padStart(6,'0')}`),primaryDocument:filingDates.map((_,i)=>i===8?'q.htm':'f4.xml'),filingDate:filingDates}}};
+ const payload={cik:9999999,filings:{recent:{form:filingDates.map((_,i)=>i===8?'10-Q':'4'),accessionNumber:filingDates.map((_,i)=>`0000999999-26-${String(i+1).padStart(6,'0')}`),primaryDocument:filingDates.map((_,i)=>i===8?'q.htm':'f4.xml'),filingDate:filingDates}}};
  globalThis.fetch=async url=>String(url).includes('/submissions/CIK')?Response.json(payload):new Response('',{status:403});
  try{const result=await fetchInsiderPurchases(9999999,'2026-09-30T18:00:00.000Z');assert.equal(result.purchases.length,0);assert.equal(result.coverage.state,'partial');assert.equal(result.coverage.availableForm4Count,53);assert.equal(result.coverage.selectedForm4Count,53);assert.equal(result.coverage.fetchedForm4Count,0);assert.equal(result.coverage.failedForm4Count,53);assert.equal(result.coverage.httpStatusCounts['403'],53);assert.match(result.coverage.message,/53 of 53/);assert.match(result.coverage.message,/HTTP 403: 53/);}finally{globalThis.fetch=original;if(previousAgent===undefined)delete process.env.SEC_USER_AGENT;else process.env.SEC_USER_AGENT=previousAgent;}
 });
 test('Form 4 HTTP 200 error bodies are invalid and never marked reviewed or complete',async()=>{
  const original=globalThis.fetch,previousAgent=process.env.SEC_USER_AGENT,cik=9999998;process.env.SEC_USER_AGENT='SmallCapRadar/2.2 (contact: test@example.com)';
- const payload={filings:{recent:{form:['4','4','10-Q'],accessionNumber:['0000999999-26-000001','0000999999-25-000002','0000999999-25-000003'],primaryDocument:['f4.xml','f4-old.xml','q.htm'],filingDate:['2026-09-20','2025-10-01','2025-09-20']}}};
+ const payload={cik:9999998,filings:{recent:{form:['4','4','10-Q'],accessionNumber:['0000999999-26-000001','0000999999-25-000002','0000999999-25-000003'],primaryDocument:['f4.xml','f4-old.xml','q.htm'],filingDate:['2026-09-20','2025-10-01','2025-09-20']}}};
  globalThis.fetch=async url=>String(url).includes('/submissions/CIK')?Response.json(payload):new Response('<html><body>temporarily unavailable</body></html>',{status:200});
  try{const result=await fetchInsiderPurchases(cik,'2026-09-30T18:00:00.000Z');assert.equal(result.coverage.state,'partial');assert.equal(result.coverage.fetchedForm4Count,2);assert.equal(result.coverage.reviewedForm4Count,0);assert.equal(result.coverage.invalidForm4Count,2);assert.equal(result.coverage.failedForm4Count,0);assert.match(result.coverage.message,/malformed/);}finally{globalThis.fetch=original;if(previousAgent===undefined)delete process.env.SEC_USER_AGENT;else process.env.SEC_USER_AGENT=previousAgent;}
 });
 test('Form 4 validated ownership documents with no code-P purchases can complete review',async()=>{
  const original=globalThis.fetch,previousAgent=process.env.SEC_USER_AGENT,cik=9999997;process.env.SEC_USER_AGENT='SmallCapRadar/2.2 (contact: test@example.com)';
- const payload={filings:{recent:{form:['4','4','10-Q'],accessionNumber:['0000999999-26-000001','0000999999-25-000002','0000999999-25-000003'],primaryDocument:['f4.xml','f4-old.xml','q.htm'],filingDate:['2026-09-20','2025-10-01','2025-09-20']}}};
- const xml='<?xml version="1.0"?><ownershipDocument><issuer><issuerCik>9999999</issuerCik></issuer><reportingOwner><rptOwnerName>Test Officer</rptOwnerName></reportingOwner></ownershipDocument>';
+ const payload={cik:9999997,filings:{recent:{form:['4','4','10-Q'],accessionNumber:['0000999999-26-000001','0000999999-25-000002','0000999999-25-000003'],primaryDocument:['f4.xml','f4-old.xml','q.htm'],filingDate:['2026-09-20','2025-10-01','2025-09-20']}}};
+ const xml='<?xml version="1.0"?><ownershipDocument><issuer><issuerCik>9999997</issuerCik></issuer><reportingOwner><rptOwnerName>Test Officer</rptOwnerName></reportingOwner></ownershipDocument>';
  globalThis.fetch=async url=>String(url).includes('/submissions/CIK')?Response.json(payload):new Response(xml,{status:200});
  try{const result=await fetchInsiderPurchases(cik,'2026-09-30T18:00:00.000Z');assert.equal(result.coverage.state,'complete');assert.equal(result.coverage.fetchedForm4Count,2);assert.equal(result.coverage.reviewedForm4Count,2);assert.equal(result.coverage.invalidForm4Count,0);assert.equal(result.purchases.length,0);}finally{globalThis.fetch=original;if(previousAgent===undefined)delete process.env.SEC_USER_AGENT;else process.env.SEC_USER_AGENT=previousAgent;}
 });
@@ -1047,7 +1047,7 @@ test('IFRS financial-strength aliases select explicit current/noncurrent concept
  assert.equal(result.metrics.unrestrictedCash.value,700);
  assert.equal(result.metrics.totalDebt.value,400,'choose one reported current alias and one noncurrent alias; do not sum competing tags');
  assert.equal(result.metrics.debtDueWithin24Months.value,160);
- assert.equal(result.metrics.totalDebt.source.tag,'CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings + LongtermBorrowings');
+ assert.equal(result.metrics.totalDebt.source.tag,'Borrowings');assert.equal(result.metrics.totalDebt.source.dependencies.length,1);
  assert.equal(result.metrics.debtDueWithin24Months.source.periodEnd,'2026-06-30');
 });
 test('IFRS financial-strength recognizes the separate current-borrowings concept and prefers specific interest over aggregate finance costs',()=>{
@@ -1181,7 +1181,7 @@ test('partial review grade is reduced once and its displayed grade exactly deter
 });
 
 test('missing qualitative review dimensions do not suppress observable business and alignment model grades',()=>{
- const snapshot={...opportunitySnapshot,grossMargin:.4,dilution:.02,provenance:{...opportunitySnapshot.provenance,grossMargin:opportunityProvenance,dilution:opportunityProvenance}};
+ const snapshot={...opportunitySnapshot,grossMargin:.4,dilution:.02,splitAdjusted:true,provenance:{...opportunitySnapshot.provenance,grossMargin:opportunityProvenance,dilution:opportunityProvenance}};
  const result=evaluateOpportunityDossier(snapshot,opportunityDossierFromSnapshot(snapshot));
  assert.ok(result.factors.find(factor=>factor.id==='competitivePosition').score>0);
  assert.ok(result.factors.find(factor=>factor.id==='management').score>0);
@@ -1209,15 +1209,38 @@ test('valuation uses fresh market availability with fiscal-period ratio provenan
  const quote={...financial,periodEnd:'2026-10-02'};
  const snapshot={...opportunitySnapshot,asOf,ps:2,price:10,fcf:10,revenue:100,provenance:{...opportunitySnapshot.provenance,ps:financial,price:quote,fcf:financial,revenue:financial}};
  const evaluation=evaluateOpportunityDossier(snapshot,opportunityDossierFromSnapshot(snapshot)),factor=evaluation.factors.find(item=>item.id==='valuation');
- assert.ok(factor.score>5);assert.ok(factor.points>12.5);assert.ok(factor.calculation.inputs.some(input=>input.name.includes('fcf-yield-from-margin')));
+ assert.ok(factor.score>0&&factor.score<=4,'relative inputs cannot earn the missing 60% intrinsic-value component');assert.ok(factor.points>0&&factor.points<=10);assert.ok(factor.calculation.inputs.some(input=>input.name.includes('fcf-yield-from-margin')));
  const stale={...snapshot,provenance:{...snapshot.provenance,price:{...quote,periodEnd:'2026-09-01'}}};
  assert.equal(evaluateOpportunityDossier(stale,opportunityDossierFromSnapshot(stale)).factors.find(item=>item.id==='valuation').score,0);
 });
 test('growth model derives comparable observed revenue growth with source values and blocks source conflicts',()=>{
  const asOf='2026-10-03T12:00:00Z';
  const period=(end,value)=>({metrics:{revenue:{value,unit:'USD',source:{...opportunityProvenance,periodEnd:end,availableAt:'2026-08-01T00:00:00Z',retrievedAt:asOf}}}});
- const snapshot={symbol:'GROWTH',name:'Observed growth fixture',asOf,provenance:{},opportunityResearch:{earnings:{annual:[period('2024-12-31',100),period('2025-12-31',140)],quarterly:[],conflicts:[]}}};
+ const snapshot={symbol:'GROWTH',securityType:'common',name:'Observed growth fixture',asOf,provenance:{},opportunityResearch:{earnings:{annual:[period('2024-12-31',100),period('2025-12-31',140)],quarterly:[],conflicts:[]}}};
  const result=evaluateOpportunity(snapshot),factor=result.factors.find(item=>item.id==='catalysts');assert.ok(factor.score>0);assert.equal(factor.calculation.inputs.find(input=>input.name==='derived-observed-revenue-growth').value,140/100-1);
  const conflicted={...snapshot,opportunityResearch:{earnings:{...snapshot.opportunityResearch.earnings,conflicts:['revenue concepts disagree']}}};assert.equal(evaluateOpportunity(conflicted).factors.find(item=>item.id==='catalysts').score,0);
  const mixed={...snapshot,opportunityResearch:{earnings:{...snapshot.opportunityResearch.earnings,annual:[period('2024-12-31',100),{metrics:{revenue:{...period('2025-12-31',140).metrics.revenue,unit:'EUR'}}}]}}};assert.equal(evaluateOpportunity(mixed).factors.find(item=>item.id==='catalysts').score,0);
+});
+
+test('financing risk rejects incompatible periods and replaces unsupported legacy clean results',()=>{
+ const p={source:'SEC',url:'https://example.test/filing',currency:'USD',periodEnd:'2026-06-30',periodStart:'2025-07-01',availableAt:'2026-08-01T00:00:00Z',retrievedAt:base.asOf,confidence:'high'};
+ const snapshot={...base,securityType:'common',cash:20,debt:5,revenue:100,netIncome:10,fcf:12,deathSpiral:'clean',riskEvidence:'old heuristic',provenance:{cash:{...p,periodStart:undefined},debt:{...p,periodStart:undefined,periodEnd:'2026-03-31'},revenue:p,netIncome:p,fcf:p}};
+ assert.equal(applyFinancingRisk(snapshot).deathSpiral,'unknown');
+ assert.equal(applyFinancingRisk({...snapshot,securityType:'preferred'}).deathSpiral,'unknown');
+});
+test('Form 4 verifies issuer, security, transaction window, full totals and amendments',async()=>{
+ const original=globalThis.fetch,cik=9999995,asOf='2026-09-30T23:59:59.999Z';
+ const payload={cik,filings:{recent:{form:['4','10-Q'],accessionNumber:['0000999995-26-000001','0000999995-25-000002'],primaryDocument:['f4.xml','q.htm'],filingDate:['2026-09-20','2025-09-20']}}};
+ const transaction=(title,date='2026-09-19')=>'<nonDerivativeTransaction><securityTitle><value>'+title+'</value></securityTitle><transactionCoding><transactionCode>P</transactionCode></transactionCoding><transactionAcquiredDisposedCode><value>A</value></transactionAcquiredDisposedCode><transactionDate><value>'+date+'</value></transactionDate><transactionShares><value>10</value></transactionShares><transactionPricePerShare><value>2</value></transactionPricePerShare></nonDerivativeTransaction>';
+ let xml='<ownershipDocument><issuer><issuerCik>'+cik+'</issuerCik></issuer><reportingOwner><rptOwnerName>Officer</rptOwnerName></reportingOwner>'+transaction('Common Stock').repeat(25)+transaction('Preferred Stock')+'</ownershipDocument>';
+ globalThis.fetch=async()=>new Response(xml);
+ try{
+  let result=await fetchInsiderPurchases(cik,asOf,payload);assert.equal(result.coverage.state,'complete');assert.equal(result.purchases.length,20);assert.equal(result.observedPurchaseValue,500);assert.match(result.purchases[0].contentHash,/^[a-f0-9]{64}$/);
+  xml=xml.replace('<issuerCik>'+cik+'</issuerCik>','<issuerCik>1</issuerCik>');result=await fetchInsiderPurchases(cik,asOf,payload);assert.equal(result.coverage.state,'partial');assert.equal(result.observedPurchaseValue,0);
+  xml='<ownershipDocument><issuer><issuerCik>'+cik+'</issuerCik></issuer><reportingOwner></reportingOwner>'+transaction('Common Stock','2026-10-01')+'</ownershipDocument>';
+  result=await fetchInsiderPurchases(cik,asOf,payload);assert.equal(result.coverage.state,'partial');assert.equal(result.observedPurchaseValue,0);
+  xml=xml.replace('2026-10-01','2026-09-19');
+  const amended=structuredClone(payload);amended.filings.recent.form.push('4/A');amended.filings.recent.accessionNumber.push('0000999995-26-000003');amended.filings.recent.primaryDocument.push('amend.xml');amended.filings.recent.filingDate.push('2026-09-25');
+  result=await fetchInsiderPurchases(cik,asOf,amended);assert.equal(result.coverage.state,'partial');assert.equal(result.observedPurchaseValue,0);assert.match(result.coverage.message,/amendments/);
+ }finally{globalThis.fetch=original;}
 });

@@ -3,6 +3,8 @@ import { proxyOpportunityEvidence } from './opportunity-proxies';
 import { usableEvidence } from './evidence';
 import { OPPORTUNITY_SPEC, opportunitySpecHash, type OpportunityFactorId, type OpportunityRiskTolerance } from './opportunity-spec';
 import { INVESTABLE_EXCHANGES } from './strategy-spec';
+import { financialIntegrityFindings, operatingIssuerMetricsApplicable, commonPerShareMetricsApplicable } from './financial-integrity';
+import {buildOpportunityThesis,type OpportunityThesis} from './opportunity-thesis';
 
 export type OpportunityEvidence = {
   score: number | null;
@@ -41,6 +43,7 @@ export type OpportunityEvaluation = {
   algorithmicCoveragePct: number;
   confidence: 'low' | 'medium' | 'high';
   rankingEligible: boolean;
+  thesis: OpportunityThesis;
   factors: Array<{
     id: OpportunityFactorId;
     label: string;
@@ -180,6 +183,8 @@ export function evaluateOpportunity(
   const hardUnknown = hardStatuses.includes('UNKNOWN');
   const sourceConflict = (snapshot.sourceConflicts ?? []).length > 0;
   if (sourceConflict) add('source-conflict', 'UNKNOWN', (snapshot.sourceConflicts ?? []).join('; '), 'evidence');
+  const integrityFindings = financialIntegrityFindings(snapshot);
+  if (integrityFindings.length) add('financial-integrity', 'UNKNOWN', integrityFindings.join('; '), 'evidence');
 
   const models = proxyOpportunityEvidence(snapshot);
   let evidencedWeight = 0;
@@ -206,30 +211,32 @@ export function evaluateOpportunity(
     // A reviewed partial assessment is normalized to the full factor once.
     // Model grades already use their complete fixed component denominator.
     const model = models[spec.id]!;
-    const useReviewed = evidenced && !proxy;
-    const score = useReviewed
+    const applicable = spec.id === 'technicalTiming' || (operatingIssuerMetricsApplicable(snapshot)
+      && (spec.id !== 'valuation' || commonPerShareMetricsApplicable(snapshot)));
+    const useReviewed = applicable && evidenced && !proxy;
+    const score = !applicable ? 0 : useReviewed
       ? Math.round(Math.round(candidate!.score! * 100) * Math.round(rawCoverage * 100) / 10000) / 100
       : Math.round((proxy && conflicts.length === 0 ? candidate!.score! : conflicts.length ? 0 : model.score!) * 100) / 100;
     const algorithmicCoveragePct = 100;
-    const coveragePct = evidenced ? rawCoverage : 0;
+    const coveragePct = applicable && evidenced ? rawCoverage : 0;
     const points = Math.round(score * 100) * spec.weight / 1000;
-    const complete = evidenced && !proxy && coveragePct === 100;
-    if (evidenced) evidencedWeight += spec.weight * coveragePct / 100;
+    const complete = applicable && evidenced && !proxy && coveragePct === 100;
+    if (applicable && evidenced) evidencedWeight += spec.weight * coveragePct / 100;
     return {
       id: spec.id,
       label: spec.label,
       weight: spec.weight,
       score,
       points,
-      evidenced,
+      evidenced: applicable && evidenced,
       complete,
       coveragePct,
       algorithmicCoveragePct,
       // Missing confidence on otherwise auditable evidence is uncertainty, not
       // proof of low-quality evidence. It can never contribute to high overall
       // confidence, but it may support medium confidence for a complete rank.
-      confidence: evidenced ? candidate!.confidence ?? 'medium' : 'low',
-      rationale: useReviewed ? `${candidate!.rationale} Final factor grade includes ${rawCoverage}% reviewed coverage; missing dimensions earn zero.` : conflicts.length ? `Source conflict: ${conflicts.join('; ')}; final factor grade is zero until reconciled.` : proxy ? candidate!.rationale : `${candidate?.rationale ?? ''} ${model.rationale}`,
+      confidence: applicable && evidenced ? candidate!.confidence ?? 'medium' : 'low',
+      rationale: !applicable ? 'Instrument payoff or ADR conversion is unverified; operating-company points are withheld. This listing retains its final numeric grade and ranking.' : useReviewed ? `${candidate!.rationale} Final factor grade includes ${rawCoverage}% reviewed coverage; missing dimensions earn zero.` : conflicts.length ? `Source conflict: ${conflicts.join('; ')}; final factor grade is zero until reconciled.` : proxy ? candidate!.rationale : `${candidate?.rationale ?? ''} ${model.rationale}`,
       sources,
       calculation: useReviewed ? { ...candidate!.calculation!, inputs: [...candidate!.calculation!.inputs, { name: 'reviewed-grade', value: candidate!.score! }, { name: 'reviewed-coverage-pct', value: rawCoverage }] } : proxy && calculationValid ? candidate!.calculation : model.calculation,
       conflicts,
@@ -264,13 +271,16 @@ export function evaluateOpportunity(
         ? 'Meets safety checks and has sourced evidence for all material diligence factors; score is diagnostic, not a return probability.'
         : 'Visible for research, but one or more material factors or the evidence-coverage threshold is incomplete.';
 
+  const thesis=buildOpportunityThesis(snapshot,horizonMonths);
+  if(!sourceEligible&&thesis.action==='candidate-review')thesis.action='research-required';
   return {
     strategy: OPPORTUNITY_SPEC.id,
     version: OPPORTUNITY_SPEC.version,
     hash: opportunitySpecHash(),
     asOf: snapshot.asOf,
     snapshotHash: opportunitySnapshotHash(snapshot),
-    evaluationHash: evaluationFingerprint({ snapshot, factors, score, horizonMonths, riskTolerance }),
+    evaluationHash: evaluationFingerprint({ snapshot, factors, score, horizonMonths, riskTolerance,thesis }),
+    thesis,
     researchState,
     sourceEligible,
     horizonMonths,

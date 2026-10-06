@@ -66,15 +66,15 @@ export const DATA_FIELD_REGISTRY: readonly DataFieldFamily[] = [
     ], hardLimit: 'Partial standard-tag coverage only. Covenants, lease/factoring debt, restricted-cash adjustments, custom taxonomy and specialized financial/REIT/utility models require source-level review or a separate formula; Missing factual dimensions remain uncovered; the final model grade uses zero for missing components.',
   },
   {
-    id: 'valuation-multiples', label: 'التقييم والقيمة العادلة', fields: ['P/E', 'EV/EBITDA', 'EV/Sales', 'P/FCF', 'PEG', 'DCF', 'SOTP', 'peer multiples', 'fully diluted share count'], state: 'planned', refresh: 'filing-event',
+    id: 'valuation-multiples', label: 'التقييم والقيمة العادلة', fields: ['P/E', 'EV/EBITDA', 'EV/Sales', 'P/FCF', 'PEG', 'DCF', 'SOTP', 'peer multiples', 'fully diluted share count'], state: 'partial', refresh: 'filing-event',
     sources: [
-      { name: 'SEC facts plus market-price source', url: 'https://www.sec.gov/search-filings/edgar-application-programming-interfaces', access: 'free-no-key', primary: true, note: 'Inputs can be derived when periods, debt, cash, share count and market capitalization are comparable and sourced.' },
+      { name: 'SEC facts plus market-price source', url: 'https://www.sec.gov/search-filings/edgar-application-programming-interfaces', access: 'free-no-key', primary: true, note: 'The normalized owner-cash-flow model requires three aligned USD annual periods, a single common class, fresh observed capitalization and reviewed splits. It subtracts SBC, uses fixed bear/base/bull discount and growth assumptions, and cross-checks against normalized earnings. Specialized models and fully diluted/senior-claim reviews remain incomplete.' },
     ], hardLimit: 'Fair value is a model estimate. Each method needs disclosed assumptions and industry-specific applicability; analyst target averages alone do not qualify.',
   },
   {
     id: 'catalysts-contracts', label: 'العقود والعملاء والمحركات', fields: ['contracts', 'backlog', 'customers', 'partnerships', 'orders', 'MOU/LOI', 'capacity', 'approvals', 'earnings calendar', 'guidance'], state: 'partial', refresh: 'filing-event',
     sources: [
-      { name: 'SEC 8-K/10-Q/10-K/6-K/20-F/40-F and exhibits', url: 'https://www.sec.gov/search-filings/edgar-application-programming-interfaces', access: 'free-no-key', primary: true, note: 'Deep profiles expose up to 60 recent filing links and scan up to four recent domestic 8-K bodies for referenced item numbers within a 7-second/1.5MB bound. This is discovery metadata only; filing content, exhibits, contract value, binding status, revenue conversion and catalyst materiality are not classified or reviewed. Scan snapshots omit the profile data to limit storage.' },
+      { name: 'SEC 8-K/10-Q/10-K/6-K/20-F/40-F and exhibits', url: 'https://www.sec.gov/search-filings/edgar-application-programming-interfaces', access: 'free-no-key', primary: true, note: 'Deep profiles expose up to 60 recent filing links and scan up to four recent domestic 8-K bodies for referenced item numbers within a 7-second/1.5MB bound. All issuer scan jobs now preserve this coverage, archive compressed original bodies with SHA-256 hashes, and extract commercial/financing/governance excerpts and explicit future dates. Extracted excerpts remain unreviewed and earn no catalyst impact credit. Exhibits, binding status, funding, economics and pricing-in still require review.' },
       { name: 'Issuer investor-relations releases and earnings materials', url: 'https://www.sec.gov/edgar/search/', access: 'free-no-key', primary: true, note: 'Official but issuer-specific web content; a partnership announcement is not automatically a paying customer or recognized revenue.' },
       { name: 'ClinicalTrials.gov API v2', url: 'https://clinicaltrials.gov/data-api/about-api', access: 'free-no-key', primary: true, note: 'Primary clinical-trial registrations and status; sponsor-to-public-issuer matching is not guaranteed, and a registered trial is not proof of efficacy.' },
       { name: 'openFDA APIs', url: 'https://open.fda.gov/apis/', access: 'free-no-key', primary: true, note: 'Applicable regulatory/drug/device disclosures only; coverage varies by dataset and does not replace SEC or issuer evidence.' },
@@ -87,16 +87,16 @@ export const DATA_FIELD_REGISTRY: readonly DataFieldFamily[] = [
     ], hardLimit: '13F is delayed and does not establish current beneficial ownership; Form 144 is notice, not proof of completed sale.',
   },
   {
-    id: 'governance-litigation', label: 'الحوكمة والدعاوى والمحاسبة', fields: ['auditor', 'internal controls', 'related parties', 'board independence', 'executive pay', 'lawsuits', 'investigations', 'restatements', 'going concern'], state: 'planned', refresh: 'filing-event',
+    id: 'governance-litigation', label: 'الحوكمة والدعاوى والمحاسبة', fields: ['auditor', 'internal controls', 'related parties', 'board independence', 'executive pay', 'lawsuits', 'investigations', 'restatements', 'going concern'], state: 'partial', refresh: 'filing-event',
     sources: [
       { name: 'SEC filings and issuer proxy statements', url: 'https://www.sec.gov/search-filings/edgar-application-programming-interfaces', access: 'free-no-key', primary: true, note: 'Primary issuer disclosures; absence of a filing is not proof of no litigation or governance risk.' },
       { name: 'Public court dockets and regulator releases', url: 'https://www.courtlistener.com/', access: 'unverified-terms', primary: false, note: 'Coverage, identity matching and reuse rights must be reviewed before scoring.' },
     ], hardLimit: 'A free source cannot establish an exhaustive litigation search across every state/federal court and private investigation.',
   },
   {
-    id: 'peers-sector', label: 'المنافسون والقطاع', fields: ['industry', '3–5 comparable peers', 'market size', 'market share', 'switching cost', 'substitution', 'supply chain'], state: 'planned', refresh: 'periodic',
+    id: 'peers-sector', label: 'المنافسون والقطاع', fields: ['industry', '3–5 comparable peers', 'market size', 'market share', 'switching cost', 'substitution', 'supply chain'], state: 'partial', refresh: 'periodic',
     sources: [
-      { name: 'SEC filings and official industry/regulatory sources', url: 'https://www.sec.gov/search-filings/edgar-application-programming-interfaces', access: 'free-no-key', primary: true, note: 'Primary company and regulator disclosures; market-size and share estimates need their own source and method.' },
+      { name: 'SEC filings and official industry/regulatory sources', url: 'https://www.sec.gov/search-filings/edgar-application-programming-interfaces', access: 'free-no-key', primary: true, note: 'Annual gross-margin comparisons require at least five distinct issuers with the same SEC SIC, fiscal year ends within 45 days, USD revenue/gross profit and revenue within 0.25–4 times. Up to 20 peers are chosen by revenue distance; sources and percentile traces are persisted. SIC peers are not verified direct competitors or evidence of a moat. Market-size/share estimates still need separate evidence.' },
     ], hardLimit: 'There is no uniform SEC taxonomy or free authoritative comparable-company/market-share feed for all issuers.',
   },
   {
@@ -131,8 +131,8 @@ export const DATA_FIELD_REGISTRY: readonly DataFieldFamily[] = [
 
 export function sourceRegistrySummary() {
   return {
-    version: '1.1.0',
-    updatedAt: '2026-10-01',
+    version: '1.2.0',
+    updatedAt: '2026-10-06',
     fieldFamilies: DATA_FIELD_REGISTRY.length,
     implemented: DATA_FIELD_REGISTRY.filter(field => field.state === 'implemented').length,
     partial: DATA_FIELD_REGISTRY.filter(field => field.state === 'partial').length,

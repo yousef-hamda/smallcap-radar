@@ -1,0 +1,13 @@
+{
+  "runId": "9c059528-f468-4086-8c1e-927456f8599a",
+  "version": "1.2.0-evidence-opportunity-system",
+  "total": 6954,
+  "missingFactors": 0,
+  "missingFinalGrades": 0,
+  "sorted": 6954,
+  "recoveredDebt": 80,
+  "movedContractLiabilities": 2218,
+  "peerModels": 317,
+  "intrinsicModels": 404,
+  "candidateReviews": 0
+}

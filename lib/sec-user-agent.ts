@@ -19,8 +19,8 @@ export function secUserAgent(override?: string | null): string | null {
 /** Operator-controlled generation changes invalidate SEC identity caches without deriving keys from contact data. */
 export function secUserAgentCacheVersion(): string {
   const value = secUserAgent();
-  if (!value) return 'v26-unconfigured';
+  if (!value) return 'v27-unconfigured';
   const revision = typeof process !== 'undefined' ? process.env.SEC_USER_AGENT_CACHE_REVISION?.trim() : undefined;
   const safeRevision = revision && /^[a-zA-Z0-9_-]{1,24}$/.test(revision) ? revision : '1';
-  return `v26-configured-${safeRevision}`;
+  return `v27-configured-${safeRevision}`;
 }

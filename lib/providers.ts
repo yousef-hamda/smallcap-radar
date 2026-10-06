@@ -1,3 +1,6 @@
+import {readSecArtifact,recordSecArtifact,secArtifactCik} from './sec-artifact-cache';
+import {persistFilingDocument} from './filing-observations';
+import { reserveProviderRequest } from './provider-quota';
 import type { Snapshot, Provenance, InsiderPurchase, SecFilingResearch } from './engine';
 import { completedSessionQuote, ma30Weeks } from './research';
 import { observations, latestInstant, trailingAnnual, provenance, REVENUE_TAGS } from './sec';
@@ -14,9 +17,10 @@ import { derivedEvidence } from './evidence';
 import { buildSecEarningsQualityAssessment, buildSecFinancialStrengthInputs, classifySecCompanyFacts, classifySecIssuerModel } from './sec-opportunity';
 import { buildTechnicalTimingResearch } from './opportunity-market';
 import { secUserAgent } from './sec-user-agent';
+import {alignSnapshotFinancials} from './financial-integrity';
 import { convertEarningsPeriodsToUsd, convertFinancialMetricsToUsd, fetchEcbDailySeries, type EcbDailySeries } from './ecb-fx';
 
-export type Company = { cik: number; name: string; ticker: string; exchange: string; securityType?:import('./directory').ListedSecurityType; securityName?:string; directoryUrl?:string; directoryAvailableAt?:string; price?: number; dailyChange?: number; intradayChange?: number; marketCap?: number; volume?: number; averageVolume10d?: number; return52w?: number; low52w?: number; high52w?: number; ma50d?: number; ma200d?: number; sector?: string; industry?: string; quoteSource?: string; quoteAvailableAt?: string; priceSource?:string; priceAvailableAt?:string; marketCapSource?:string; marketCapAvailableAt?:string };
+export type Company = { cik: number; name: string; ticker: string; exchange: string; securityType?:import('./directory').ListedSecurityType; securityName?:string; directoryUrl?:string; directoryAvailableAt?:string; price?: number; dailyChange?: number; intradayChange?: number; marketCap?: number; volume?: number; averageVolume10d?: number; return52w?: number; low52w?: number; high52w?: number; ma50d?: number; ma200d?: number; sector?: string; industry?: string; quoteSource?: string; quoteAvailableAt?: string; priceSource?:string; priceAvailableAt?:string; priceUrl?:string; marketCapSource?:string; marketCapAvailableAt?:string; marketCapUrl?:string };
 type NasdaqRow = { symbol: string; name?: string; lastsale?: string; marketCap?: string; volume?: string; sector?: string; industry?: string };
 type CachedQuick = { history: NonNullable<Snapshot['history']>; financials: Record<string, number>; provenance: Record<string, Provenance>; issues: string[] };
 type MarketBar = NonNullable<Snapshot['history']>[number];
@@ -46,19 +50,13 @@ export const consumeProviderIssues = () => providerIssues.splice(0, providerIssu
 // one queue for both data.sec.gov and filing documents, with headroom for
 // retries and other requests from the same Worker isolate.
 const SEC_REQUEST_INTERVAL_MS = 125;
-let secRequestQueue: Promise<void> = Promise.resolve();
-let nextSecRequestAt = 0;
 const wait = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
 async function waitForProviderSlot(url: string) {
   const hostname=new URL(url).hostname;
   if (hostname!=='sec.gov'&&!hostname.endsWith('.sec.gov')) return;
-  const slot = secRequestQueue.then(async () => {
-    const delay = Math.max(0, nextSecRequestAt - Date.now());
-    if (delay) await wait(delay);
-    nextSecRequestAt = Date.now() + SEC_REQUEST_INTERVAL_MS;
-  });
-  secRequestQueue = slot.catch(() => undefined);
-  await slot;
+  const delay=await reserveProviderRequest('SEC',SEC_REQUEST_INTERVAL_MS);
+  if(delay>30_000)throw Error('SEC global request queue is saturated; retry from the durable checkpoint.');
+  if(delay)await wait(delay);
 }
 
 async function providerFetch(url: string, init?: RequestInit) {
@@ -167,12 +165,14 @@ export async function fetchJson(url: string, timeoutMs = 8_000, ttlMs = 30_000, 
   const existing = inflight.get(url);
   if (existing) return existing;
   const request = (async () => {
+    if(secArtifactCik(url)&&ttlMs>0){const durable=await readSecArtifact(url);if(durable)return durable;}
     let lastError: unknown;
     for (let attempt = 0; attempt < attempts; attempt++) {
       try {
         const response = await providerFetch(url, { headers: requestHeaders(url), signal: AbortSignal.timeout(timeoutMs) });
         if (response.ok) {
           const value = await response.json();
+          if(secArtifactCik(url)&&Number((value as any)?.cik)===Number(secArtifactCik(url)))await recordSecArtifact(url,value);
           // Large Company Facts responses must not fill the 128MB isolate.
           const bytes=JSON.stringify(value).length*2;
           for(const [key,row] of responseCache)if(row.expiresAt<=Date.now())responseCache.delete(key);
@@ -192,6 +192,7 @@ export async function fetchJson(url: string, timeoutMs = 8_000, ttlMs = 30_000, 
       }
     }
     const message = lastError instanceof Error ? lastError.message : 'provider request failed';
+    if(secArtifactCik(url))await recordSecArtifact(url,null,message);
     recordProviderIssue(`${new URL(url).hostname}: ${message}`);
     throw lastError instanceof Error ? lastError : Error(message);
   })();
@@ -321,7 +322,10 @@ export async function yahooBulkQuotes(companies: Company[]): Promise<Company[]> 
         const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbols)}&crumb=${encodeURIComponent(auth.crumb)}`;
         const response = await fetch(url, { headers: { 'User-Agent': browserAgent, Cookie: auth.cookie, Accept: 'application/json' }, signal: AbortSignal.timeout(6_000) });
         if (!response.ok) throw Error(`Yahoo quote HTTP ${response.status}`);
-        return response.json() as Promise<{ quoteResponse?: { result?: any[] } }>;
+        const value=await response.json() as {quoteResponse?:{result?:any[]}};
+        const publicUrl=new URL(url);publicUrl.searchParams.delete('crumb');
+        for(const quote of value.quoteResponse?.result??[])quote.__sourceUrl=publicUrl.toString();
+        return value;
       }));
       for (const payload of payloads) {
         if(payload.status==='fulfilled')for(const quote of payload.value.quoteResponse?.result??[])quoteMap.set(yahooSymbol(String(quote.symbol||'')),quote);
@@ -341,14 +345,14 @@ export async function yahooBulkQuotes(companies: Company[]): Promise<Company[]> 
         ...company,
         quoteSource: 'Yahoo bulk quote live',
         quoteAvailableAt: new Date(marketTime*1000).toISOString(),
-        priceSource:'Yahoo bulk quote live',
+        priceSource:'Yahoo bulk quote live',priceUrl:quote.__sourceUrl,
         priceAvailableAt:new Date(marketTime*1000).toISOString(),
         price: quote.regularMarketPrice,
         // This is a live/session-to-date move. It must not populate the
         // Snapshot.dailyChange field, whose contract is the last completed
         // close-to-close session used by radar cards and company profiles.
         intradayChange:Number.isFinite(quote.regularMarketChangePercent)&&quote.regularMarketChangePercent>-100?quote.regularMarketChangePercent/100:undefined,
-        ...(Number.isFinite(quote.marketCap)&&quote.marketCap>0 ? { marketCap: quote.marketCap,marketCapSource:'Yahoo bulk quote live',marketCapAvailableAt:new Date(marketTime*1000).toISOString() } : {}),
+        ...(Number.isFinite(quote.marketCap)&&quote.marketCap>0 ? { marketCap: quote.marketCap,marketCapSource:'Yahoo bulk quote live',marketCapUrl:quote.__sourceUrl,marketCapAvailableAt:new Date(marketTime*1000).toISOString() } : {}),
         volume:Number.isFinite(quote.regularMarketVolume)&&quote.regularMarketVolume>=0?quote.regularMarketVolume:undefined,
         averageVolume10d:Number.isFinite(quote.averageDailyVolume10Day)&&quote.averageDailyVolume10Day>=0?quote.averageDailyVolume10Day:undefined,
         // Yahoo exposes this field in percentage points (for example 25.4 means
@@ -476,7 +480,7 @@ export async function fetchSec8KItemIndex(payload:any,cik:number,asOf:string,ret
  const cutoff=dateOffset(asOf.slice(0,10),-180),index=parseSecFilingIndex(payload,cik,asOf,100,retrievedAt);
  const recent8Ks=index.items.filter(item=>item.form==='8-K'&&item.filed>=cutoff),selected=recent8Ks.slice(0,FORM_8K_DOCUMENT_LIMIT);
  if(!selected.length)return unavailable('empty',0,['No recent domestic 8-K documents were selected from the validated submissions index.']);
- const items:Array<{accession:string;filed:string;form:'8-K';url:string;referencedItemNumbers:string[]}>=[];
+ const items:Form8KItemIndex['items']=[];
  let fetchedDocuments=0,failedDocuments=0,truncatedDocuments=0,totalBytes=0;
  const deadline=Date.now()+FORM_8K_DOCUMENT_BUDGET_MS;
  for(const filing of selected){
@@ -488,7 +492,8 @@ export async function fetchSec8KItemIndex(payload:any,cik:number,asOf:string,ret
    if(body.truncated){truncatedDocuments++;continue;}
    if(!/<(?:html|document|ix:[a-z]+)/i.test(body.text)){failedDocuments++;recordProviderIssue(`SEC 8-K ${filing.accession}: response did not contain a recognizable filing document`);continue;}
    totalBytes+=body.bytes;fetchedDocuments++;
-   items.push({accession:filing.accession,filed:filing.filed,form:'8-K',url:filing.url,referencedItemNumbers:parseSec8KItemReferences(body.text)});
+   const archived=await persistFilingDocument({cik,accession:filing.accession,url:filing.url,filed:filing.filed,retrievedAt,asOf,body:body.text});
+   items.push({accession:filing.accession,filed:filing.filed,form:'8-K',url:filing.url,referencedItemNumbers:parseSec8KItemReferences(body.text),...archived});
   }catch(error){failedDocuments++;recordProviderIssue(`SEC 8-K ${filing.accession}: ${error instanceof Error?error.message:'document retrieval failed'}`);}
  }
  const unattempted=Math.max(0,selected.length-items.length-failedDocuments-truncatedDocuments);
@@ -591,12 +596,14 @@ export async function intradayMarketData(symbol:string,asOf=new Date().toISOStri
  return parsed;
 }
 
-export async function fetchInsiderPurchases(cik: number,asOf:string) {
+export async function fetchInsiderPurchases(cik: number,asOf:string,submissionsInput?:any) {
   const submissionsUrl = submissionsUrlFor(cik);
   try {
-    const payload = await fetchJson(submissionsUrl, 8_000) as { filings?: { recent?: { form?: string[]; accessionNumber?: string[]; primaryDocument?: string[]; filingDate?: string[] } } };
+    const payload = (submissionsInput ?? await fetchJson(submissionsUrl, 8_000)) as { filings?: { recent?: { form?: string[]; accessionNumber?: string[]; primaryDocument?: string[]; filingDate?: string[] } } };
+    if(!payload||Number((payload as any).cik)!==cik)throw Error('SEC submissions issuer identity mismatch');
     const {selected:filings,coverage}=selectRecentForm4Filings(payload,asOf);
-    const completeFilingWindow=coverage.submissionWindowComplete&&coverage.availableForm4Count<=coverage.selectedForm4Count;
+    const amendments=recentSubmissions(payload).filter(row=>row.form==='4/A'&&row.filed>=coverage.windowStart&&row.filed<=coverage.windowEnd);
+    const completeFilingWindow=coverage.submissionWindowComplete&&coverage.availableForm4Count<=coverage.selectedForm4Count&&amendments.length===0;
     const parsed: InsiderPurchase[] = [];
     const read = (tag: string, from: string) => from.match(new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`, 'i'))?.[1]?.replace(/<[^>]+>/g, '').trim() ?? '';
     // Fetch bounded groups; eight consecutive request timeouts used to hold a
@@ -611,25 +618,33 @@ export async function fetchInsiderPurchases(cik: number,asOf:string) {
       const url = `https://www.sec.gov/Archives/edgar/data/${cik}/${accessionPath}/${filing.document}`;
       let responseStatus:number|undefined;
       const remaining=Math.max(1,deadline-Date.now());
-      const xml = await providerFetch(url, { headers: requestHeaders(url), signal: AbortSignal.timeout(Math.min(8_000,remaining)) }).then(async response => {responseStatus=response.status;if(!response.ok)return '';return response.text();}).catch(() => '');
+      const xml = await providerFetch(url, { headers: requestHeaders(url), signal: AbortSignal.timeout(Math.min(8_000,remaining)) }).then(async response => {responseStatus=response.status;if(!response.ok)return '';return (await readLimitedText(response,512_000,512_000)).text;}).catch(() => '');
       if (!xml) {failedForm4Count++;if(responseStatus!=null)httpStatusCounts[String(responseStatus)]=(httpStatusCounts[String(responseStatus)]??0)+1;recordProviderIssue(`SEC Form 4 ${filing.accession}: ${responseStatus==null?'network failure':`HTTP ${responseStatus}`}`);return;}
       fetchedForm4Count++;
       if(!/<ownershipDocument(?:\s|>)/i.test(xml)||!/<\/ownershipDocument\s*>/i.test(xml)||!/<issuer(?:\s|>)/i.test(xml)||!/<reportingOwner(?:\s|>)/i.test(xml)){
         invalidForm4Count++;recordProviderIssue(`SEC Form 4 ${filing.accession}: HTTP ${responseStatus??200} body was not a valid ownershipDocument`);return;
       }
+      const issuerBlock=xml.match(/<issuer>[\s\S]*?<\/issuer>/i)?.[0]??'';
+      if(Number(read('issuerCik',issuerBlock))!==cik){invalidForm4Count++;recordProviderIssue('SEC Form 4 issuer identity mismatch');return;}
+      const archived=await persistFilingDocument({cik,accession:filing.accession,url,filed:filing.filed,retrievedAt:new Date().toISOString(),asOf,body:xml});
       const blocks = xml.match(new RegExp('<nonDerivativeTransaction[\\s\\S]*?<\\/nonDerivativeTransaction>', 'gi')) ?? [];
       const ownerBlock = xml.match(new RegExp('<reportingOwner>[\\s\\S]*?<\\/reportingOwner>', 'i'))?.[0] ?? '';
       const owner = read('rptOwnerName', ownerBlock) || 'مبلّغ داخلي غير مسمّى';
       let filingValid=true;
       for (const block of blocks) {
         if (read('transactionCode', block) !== 'P') continue;
+        if(read('transactionAcquiredDisposedCode',block)!=='A'){filingValid=false;continue;}
+        const titleBlock=block.match(/<securityTitle>[\s\S]*?<\/securityTitle>/i)?.[0]??'';
+        const securityTitle=read('value',titleBlock);
+        if(!securityTitle){filingValid=false;continue;}
+        if(!/\b(common|ordinary)\b/i.test(securityTitle)||/\b(preferred|warrant|option)\b/i.test(securityTitle))continue;
         const dateBlock = block.match(new RegExp('<transactionDate[\\s\\S]*?<\\/transactionDate>', 'i'))?.[0] ?? '';
         const sharesBlock = block.match(new RegExp('<transactionShares[\\s\\S]*?<\\/transactionShares>', 'i'))?.[0] ?? '';
         const priceBlock = block.match(new RegExp('<transactionPricePerShare[\\s\\S]*?<\\/transactionPricePerShare>', 'i'))?.[0] ?? '';
         const date = read('value', dateBlock) || filing.filed;
         const shares = numeric(read('value', sharesBlock));
         const price = numeric(read('value', priceBlock));
-        if (date && shares != null && price != null && shares > 0 && price >= 0) parsed.push({ owner, date, shares, price, value: shares * price, source: url });
+        if (validSecDate(date) && date>=coverage.windowStart && Date.parse(date+'T23:59:59Z')<=Date.parse(asOf) && shares != null && price != null && shares > 0 && price > 0) parsed.push({ owner, date, shares, price, value: shares * price, source: url,filed:filing.filed,contentHash:archived.contentHash });
         else filingValid=false;
       }
       if(filingValid)reviewedForm4Count++;else{invalidForm4Count++;recordProviderIssue(`SEC Form 4 ${filing.accession}: malformed code-P transaction fields`);}
@@ -641,17 +656,18 @@ export async function fetchInsiderPurchases(cik: number,asOf:string) {
     const state:'complete'|'partial'=complete?'complete':'partial';
     const failureSummary=Object.entries(httpStatusCounts).map(([status,count])=>`HTTP ${status}: ${count}`).join(', ');
     const limitations:string[]=[];
+    if(amendments.length)limitations.push('Form 4 amendments exist in this window; transaction revisions are not reconciled and monetary score credit is withheld.');
     if(!coverage.submissionWindowComplete)limitations.push('SEC recent-submission index does not prove coverage of the full 12-month window.');
     if(coverage.availableForm4Count>coverage.selectedForm4Count)limitations.push(`Only ${coverage.selectedForm4Count} of ${coverage.availableForm4Count} Form 4 filings were selected within the profile request limit.`);
     if(failedForm4Count)limitations.push(`${failedForm4Count} of ${filings.length} selected filing documents failed retrieval${failureSummary?` (${failureSummary})`:''}; absence of a visible code-P purchase is inconclusive.`);
     if(invalidForm4Count)limitations.push(`${invalidForm4Count} retrieved filing document(s) were malformed or could not be parsed; coverage is incomplete.`);
     if(unattemptedForm4Count)limitations.push(`The ${INSIDER_FORM4_MAX_DURATION_MS/1000}-second profile research budget ended with ${unattemptedForm4Count} selected filing document(s) not fetched; coverage is partial.`);
     if(!failedForm4Count&&!invalidForm4Count&&!unattemptedForm4Count&&reviewedForm4Count<filings.length)limitations.push(`${reviewedForm4Count} of ${filings.length} selected Form 4 filings passed document validation.`);
-    const message=complete?'All Form 4 filings in the verified 12-month SEC index window were fetched and reviewed for code-P open-market purchases.':limitations.join(' ');
-    return {purchases,coverage:{...coverage,fetchedForm4Count,failedForm4Count,reviewedForm4Count,invalidForm4Count,unattemptedForm4Count,httpStatusCounts,state,message}};
+    const message=complete?'All Form 4 filings in the verified 12-month SEC index window were fetched and reviewed for code-P common-share purchases; code P alone does not distinguish public-market and private purchases.':limitations.join(' ');
+    return {purchases,observedPurchaseValue:amendments.length?0:parsed.reduce((sum,item)=>sum+item.value,0),coverage:{...coverage,fetchedForm4Count,failedForm4Count,reviewedForm4Count,invalidForm4Count,unattemptedForm4Count,httpStatusCounts,state,message}};
   } catch(error) {
     const end=asOf.slice(0,10),windowStart=dateOffset(end,-INSIDER_FORM4_WINDOW_DAYS);
-    return {purchases:[],coverage:{state:'unavailable' as const,windowStart,windowEnd:end,availableForm4Count:0,selectedForm4Count:0,fetchedForm4Count:0,failedForm4Count:0,reviewedForm4Count:0,invalidForm4Count:0,unattemptedForm4Count:0,httpStatusCounts:{},submissionWindowComplete:false,message:`SEC insider filing lookup failed: ${error instanceof Error?error.message:'provider request failed'}`}};
+    return {purchases:[],observedPurchaseValue:0,coverage:{state:'unavailable' as const,windowStart,windowEnd:end,availableForm4Count:0,selectedForm4Count:0,fetchedForm4Count:0,failedForm4Count:0,reviewedForm4Count:0,invalidForm4Count:0,unattemptedForm4Count:0,httpStatusCounts:{},submissionWindowComplete:false,message:`SEC insider filing lookup failed: ${error instanceof Error?error.message:'provider request failed'}`}};
   }
 }
 
@@ -765,6 +781,7 @@ async function attachOpportunityEarnings(snapshot: Snapshot, facts: unknown, pro
     technicalTiming,
     ...(includeFilingIndex ? { secFilings: {...parseSecFilingIndex(submissions, Number(snapshot.cik), snapshot.asOf, 60, retrievedAt),...(form8KItemIndex?{form8KItemIndex}:{})} } : {}),
   };
+  Object.assign(snapshot,alignSnapshotFinancials(snapshot));
 }
 
 /** Attach compact, identity-checked SEC research to an existing scan row. */
@@ -791,10 +808,14 @@ export async function enrichSnapshotsWithSecOpportunity(snapshots: Snapshot[], m
       fetchJson(url, 8_000, 6 * 60 * 60_000, 2),
       fetchJson(submissionsUrlFor(cik), 8_000, 6 * 60 * 60_000, 2).catch(() => null),
     ]);
+    const filingIndex=await fetchSec8KItemIndex(submissions,cik,new Date().toISOString());
+    const insider=await fetchInsiderPurchases(cik,new Date().toISOString(),submissions);
     await Promise.all(snapshots.map(async snapshot => {
       const stock = marketResearch?.bySymbol?.get(snapshot.symbol);
       if (stock) attachScanMarketResearch(snapshot, stock);
-      await attachOpportunityEarnings(snapshot, facts, undefined, marketResearch?.benchmark, stock?.source.includes('Yahoo Finance chart API') && stock.splits !== null, submissions);
+      await attachOpportunityEarnings(snapshot, facts, undefined, marketResearch?.benchmark, stock?.source.includes('Yahoo Finance chart API') && stock.splits !== null, submissions,true,filingIndex);
+      snapshot.insiderPurchases=insider.purchases; snapshot.insiderResearch=insider.coverage;
+      if(insider.coverage.state==='complete'||insider.purchases.length){snapshot.insiderBuyValue=insider.observedPurchaseValue;snapshot.provenance.insiderBuyValue={source:'SEC ownership filings · observed code-P purchases',url:submissionsUrlFor(cik),periodEnd:snapshot.asOf.slice(0,10),availableAt:snapshot.asOf,retrievedAt:snapshot.asOf,currency:'USD',confidence:insider.coverage.state==='complete'?'high':'low',rightsStatus:'redistribution-permitted',tag:'Partial windows report observed buys only; no claim of complete absence.'};}
       compactTechnicalResearch(snapshot);
     }));
     const providerStatus = classifySecCompanyFacts(facts, cik);
@@ -901,8 +922,8 @@ export async function companySnapshot(company: Company, options: { includeOpport
   const insiderPurchases=insiderResult.purchases;
   snapshot.insiderPurchases = insiderPurchases;
   snapshot.insiderResearch=insiderResult.coverage;
-  snapshot.insiderBuyValue = insiderPurchases.reduce((total, purchase) => total + purchase.value, 0) || null;
-  if (snapshot.insiderBuyValue != null) snapshot.provenance.insiderBuyValue = { source: 'SEC Form 4 open-market purchases (code P)', url: submissionsUrlFor(cik), periodEnd: insiderPurchases[0]?.date ?? now.slice(0, 10), availableAt: now, retrievedAt: now, currency: 'USD', confidence: 'high' };
+  snapshot.insiderBuyValue = insiderResult.coverage.state==='complete'||insiderPurchases.length?insiderResult.observedPurchaseValue:null;
+  if (snapshot.insiderBuyValue != null) snapshot.provenance.insiderBuyValue = { source: 'SEC Form 4 common-share purchases (code P; market or private)', url: submissionsUrlFor(cik), periodEnd: insiderPurchases[0]?.date ?? now.slice(0, 10), availableAt: now, retrievedAt: now, currency: 'USD', confidence: 'high' };
   if (history.length >= 20) {
     const values = history.slice(-20).map((row) => row.close * (row.volume ?? Number.NaN)).filter(Number.isFinite).sort((a, b) => a - b);
     if (values.length === 20) { snapshot.medianDollarVolume20d = (values[9] + values[10]) / 2; snapshot.provenance.medianDollarVolume20d = quoteEvidence }

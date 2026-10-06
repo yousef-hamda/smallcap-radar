@@ -1,4 +1,5 @@
 import {DatabaseSync} from 'node:sqlite';
 export const sqlite=new DatabaseSync(':memory:');
 function prepared(sql,params=[]){return {bind:(...values)=>prepared(sql,values),run:async()=>({meta:{changes:Number(sqlite.prepare(sql).run(...params).changes)}}),first:async()=>sqlite.prepare(sql).get(...params)??null,all:async()=>({results:sqlite.prepare(sql).all(...params)})};}
-export const env={RECOVERY_SECRET:'TEST-ONLY-RECOVERY-SECRET',DB:{prepare:prepared,batch:async statements=>{sqlite.exec('BEGIN');try{const out=[];for(const statement of statements)out.push(await statement.run());sqlite.exec('COMMIT');return out;}catch(e){sqlite.exec('ROLLBACK');throw e;}}}};
+let batchQueue=Promise.resolve();
+export const env={RECOVERY_SECRET:'TEST-ONLY-RECOVERY-SECRET',DB:{prepare:prepared,batch:statements=>{const work=batchQueue.then(async()=>{sqlite.exec('BEGIN');try{const out=[];for(const statement of statements)out.push(await statement.run());sqlite.exec('COMMIT');return out;}catch(e){sqlite.exec('ROLLBACK');throw e;}});batchQueue=work.catch(()=>{});return work;}}};

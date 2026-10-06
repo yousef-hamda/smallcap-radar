@@ -1,3 +1,5 @@
+import {restoreArchivedRow,archivedWriteStatements} from './snapshot-archive';
+import {compactRadarSnapshot,compactRadarEvaluation} from './compact-radar';
 import {env} from 'cloudflare:workers';
 import type {Snapshot} from './engine';
 import {opportunitySnapshotHash,isCurrentOpportunityEvaluation, type OpportunityEvaluation} from './opportunity-engine';
@@ -6,6 +8,8 @@ import {evaluateOpportunityDossier,opportunityDossierFromSnapshot} from './oppor
 
 import {OPPORTUNITY_SPEC,opportunitySpecHash} from './opportunity-spec';
 import {secUserAgentCacheVersion} from './sec-user-agent';
+import {peerObservation,peerContext,uniqueIssuerPeers,type PeerObservation} from './opportunity-peers';
+import {alignSnapshotFinancials} from './financial-integrity';
 export const db=()=>{const d=(env as any).DB;if(!d)throw Error('قاعدة البيانات غير متاحة');return d;};
 let schemaPromise:Promise<void>|null=null;
 type StateCacheEntry={expiresAt:number;value:any;bytes:number};
@@ -51,6 +55,7 @@ export async function ensureSchema(){
   d.prepare("CREATE INDEX IF NOT EXISTS opportunity_rank_position_idx ON opportunity_rankings(run_id,rank_position)"),
   d.prepare("CREATE TABLE IF NOT EXISTS opportunity_rating_versions (run_id TEXT PRIMARY KEY,revision INTEGER NOT NULL DEFAULT 0)"),
   d.prepare("CREATE TABLE IF NOT EXISTS opportunity_rank_versions (run_id TEXT PRIMARY KEY,revision INTEGER NOT NULL,rubric_hash TEXT NOT NULL)"),
+  d.prepare("CREATE TABLE IF NOT EXISTS opportunity_evaluation_leases (run_id TEXT PRIMARY KEY,owner TEXT NOT NULL,lease_until INTEGER NOT NULL)"),
   ...['INSERT','UPDATE','DELETE'].map(operation=>d.prepare(`CREATE TRIGGER IF NOT EXISTS opportunity_rating_${operation.toLowerCase()} AFTER ${operation} ON fundamental_snapshots BEGIN INSERT INTO opportunity_rating_versions(run_id,revision) VALUES(${operation==='DELETE'?'OLD':'NEW'}.run_id,1) ON CONFLICT(run_id) DO UPDATE SET revision=revision+1; END`)),
   d.prepare("CREATE INDEX IF NOT EXISTS snapshot_run_idx ON fundamental_snapshots(run_id)"),
   d.prepare("CREATE INDEX IF NOT EXISTS snapshot_run_symbol_idx ON fundamental_snapshots(run_id,symbol)"),
@@ -92,7 +97,16 @@ export async function ensureSchema(){
  return schemaPromise;
 }
 export const currentHash=()=>`${OPPORTUNITY_SPEC.id}:${opportunitySpecHash()}`;
-export async function readState(options:{strategy?:'opportunity'|'favorites';opportunityState?:'ranked'|'needs-research'|'excluded'|'all';limit?:number;offset?:number;owner?:string;query?:string}={}){await ensureSchema();const d=db();const cacheKey=JSON.stringify([currentHash(),opportunitySpecHash(),options.strategy||'opportunity',options.opportunityState||'ranked',options.owner||'',options.query||'',options.limit??150,options.offset??0]);const cached=stateCache.get(cacheKey);if(cached&&cached.expiresAt>Date.now())return cached.value;if(cached)stateCache.delete(cacheKey);const active=await d.prepare("SELECT * FROM strategy_runs WHERE strategy_hash=? ORDER BY created_at DESC LIMIT 1").bind(currentHash()).first();
+export async function readRankReleaseIdentity(runId:string,expectedToken?:string) {
+ const row=await db().prepare('SELECT v.revision,v.rubric_hash,COALESCE(r.revision,0) AS current_revision FROM opportunity_rank_versions v LEFT JOIN opportunity_rating_versions r ON r.run_id=v.run_id WHERE v.run_id=?').bind(runId).first() as any;
+ if(!row)throw Object.assign(Error('النسخة المحفوظة غير جاهزة؛ حدّث القائمة.'),{status:409});
+ const token=`${runId}:${Number(row.revision)}:${row.rubric_hash}`;
+ if(expectedToken&&(expectedToken!==token||Number(row.revision)!==Number(row.current_revision)||row.rubric_hash!==opportunitySpecHash()))throw Object.assign(Error('تغيّرت نسخة التقييم؛ حدّث القائمة قبل تحميل المزيد أو فتح الملف.'),{status:409});
+ return {runId,revision:Number(row.revision),rubricHash:String(row.rubric_hash),token};
+}
+export async function readState(options:{strategy?:'opportunity'|'favorites';opportunityState?:'ranked'|'needs-research'|'excluded'|'all';limit?:number;offset?:number;owner?:string;query?:string;runId?:string;releaseToken?:string;view?:'compact'}={}){await ensureSchema();const d=db();const cacheKey=JSON.stringify([currentHash(),opportunitySpecHash(),options.strategy||'opportunity',options.opportunityState||'ranked',options.owner||'',options.query||'',options.limit??150,options.offset??0,options.runId,options.releaseToken,options.view]);
+ if(options.runId&&options.releaseToken)await readRankReleaseIdentity(options.runId,options.releaseToken);
+ const cached=stateCache.get(cacheKey);if(cached&&cached.expiresAt>Date.now())return cached.value;if(cached)stateCache.delete(cacheKey);const active=await d.prepare("SELECT * FROM strategy_runs WHERE strategy_hash=? ORDER BY created_at DESC LIMIT 1").bind(currentHash()).first();
  // A quick sample may be newer than a full scan. It must not silently replace
  // the user's main result set; prefer the newest full-market snapshot whenever
  // one has produced rows, then fall back to the newest available run.
@@ -103,7 +117,9 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
  const finished=await d.prepare("SELECT * FROM strategy_runs r WHERE status IN ('complete','partial') AND (stage>=13 OR source='import') AND EXISTS(SELECT 1 FROM fundamental_snapshots s WHERE s.run_id=r.id) ORDER BY CASE WHEN source LIKE '%· full' THEN 0 ELSE 1 END, CASE WHEN status='complete' THEN 0 ELSE 1 END, created_at DESC LIMIT 1").first();
  const running=await d.prepare("SELECT * FROM strategy_runs WHERE status='running' AND processed>0 AND strategy_hash=? ORDER BY CASE WHEN source LIKE '%· full' THEN 0 ELSE 1 END, CASE WHEN status='complete' THEN 0 ELSE 1 END, created_at DESC LIMIT 1").bind(currentHash()).first();
  const fallback=finished?null:await d.prepare("SELECT * FROM strategy_runs r WHERE status IN ('complete','partial') AND (stage>=13 OR source='import') AND EXISTS(SELECT 1 FROM fundamental_snapshots s WHERE s.run_id=r.id) ORDER BY CASE WHEN source LIKE '%· full' THEN 0 ELSE 1 END, CASE WHEN status='complete' THEN 0 ELSE 1 END, created_at DESC LIMIT 1").first();
- const latest=finished||fallback||running;
+ const pinned=options.runId?await d.prepare("SELECT * FROM strategy_runs WHERE id=? AND status IN ('complete','partial') AND (stage>=13 OR source='import')").bind(options.runId).first():null;
+ if(options.runId&&!pinned)throw Object.assign(Error('جولة التقييم المطلوبة غير متاحة كنسخة مكتملة.'),{status:409});
+ const latest=pinned||finished||fallback||running;
  const currentData=!!latest&&latest.strategy_hash===currentHash();
  const strategy=options.strategy==='favorites'?'favorites':'opportunity';
  // A completed scan can predate the strategy run hash while every saved row
@@ -111,6 +127,7 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
  // evaluation hashes before choosing the expensive legacy backfill path. The
  // run remains stale as data; only its evaluation can be current.
  if(latest)await ensureRunEvaluations(String(latest.id));
+ const release=latest?await readRankReleaseIdentity(String(latest.id),options.releaseToken):null;
  const currentEvaluation=!!latest;
  const limit=Math.max(1,Math.min(250,Math.floor(options.limit??150)));
  const offset=Math.max(0,Math.floor(options.offset??0));
@@ -136,8 +153,8 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
  summaryRow=await d.prepare(`SELECT COUNT(*) AS total, SUM(CASE WHEN json_extract(evaluation, '$.opportunity.state')='ranked' THEN 1 ELSE 0 END) AS opportunityRanked, SUM(CASE WHEN json_extract(evaluation, '$.opportunity.state')='needs-research' THEN 1 ELSE 0 END) AS opportunityNeedsResearch, SUM(CASE WHEN json_extract(evaluation, '$.opportunity.state')='excluded' THEN 1 ELSE 0 END) AS opportunityExcluded, SUM(CASE WHEN EXISTS(SELECT 1 FROM json_each(evaluation,'$.opportunity.factors') f WHERE json_extract(f.value,'$.evidenced')=1) THEN 1 ELSE 0 END) AS opportunityWithEvidence, SUM(CASE WHEN EXISTS(SELECT 1 FROM json_each(evaluation,'$.opportunity.factors') f WHERE json_type(f.value,'$.score') IS NULL OR json_type(f.value,'$.score') NOT IN ('integer','real')) THEN 1 ELSE 0 END) AS missingFactorScores, SUM(CASE WHEN json_type(evaluation,'$.opportunity.score') IN ('integer','real') THEN 0 ELSE 1 END) AS missingFinalGrades FROM fundamental_snapshots WHERE run_id=?`).bind(latest.id).first() as any;
  const incomplete=(await d.prepare(`SELECT json_extract(f.value,'$.id') AS id,SUM(CASE WHEN json_extract(f.value,'$.complete')=1 THEN 0 ELSE 1 END) AS count FROM fundamental_snapshots s,json_each(s.evaluation,'$.opportunity.factors') f WHERE s.run_id=? GROUP BY json_extract(f.value,'$.id')`).bind(latest.id).all()).results as any[];
   summaryRow.opportunityFactorIncomplete=Object.fromEntries(OPPORTUNITY_SPEC.factors.map(factor=>[factor.id,Number(incomplete.find(row=>row.id===factor.id)?.count??summaryRow.total)]));
-  const blockedChecks=(await d.prepare(`SELECT json_extract(c.value,'$.id') AS id,json_extract(c.value,'$.status') AS status,COUNT(*) AS count FROM fundamental_snapshots s,json_each(s.evaluation,'$.opportunity.checks') c WHERE s.run_id=? AND json_extract(c.value,'$.status') IN ('FAIL','UNKNOWN') GROUP BY json_extract(c.value,'$.id'),json_extract(c.value,'$.status')`).bind(latest.id).all()).results as any[];
-  summaryRow.opportunityEligibilityBlockers=Object.fromEntries(blockedChecks.map(row=>[`${row.id}:${row.status}`,{status:row.status,count:Number(row.count)}]));
+  const blockedChecks=(await d.prepare(`SELECT json_extract(c.value,'$.id') AS id,json_extract(c.value,'$.status') AS status,json_extract(c.value,'$.role') AS role,COUNT(*) AS count FROM fundamental_snapshots s,json_each(s.evaluation,'$.opportunity.checks') c WHERE s.run_id=? AND json_extract(c.value,'$.status') IN ('FAIL','UNKNOWN') GROUP BY json_extract(c.value,'$.id'),json_extract(c.value,'$.status'),json_extract(c.value,'$.role')`).bind(latest.id).all()).results as any[];
+  summaryRow.opportunityEligibilityBlockers=Object.fromEntries(blockedChecks.map(row=>[`${row.id}:${row.status}`,{status:row.status,role:row.role,count:Number(row.count)}]));
   runSummaryCache.set(String(latest.id),summaryRow);
  }
  const search=options.query?.trim().toLowerCase().slice(0,100)||'';
@@ -155,6 +172,12 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
   queryForPage=`WITH ranked AS (SELECT s.payload,s.evaluation,s.symbol,r.rank_position FROM fundamental_snapshots s JOIN opportunity_rankings r ON r.run_id=s.run_id AND r.symbol=s.symbol WHERE s.run_id=?) SELECT payload,evaluation,rank_position FROM ranked WHERE (?='' OR instr(lower(symbol),?)>0 OR instr(lower(json_extract(payload,'$.name')),?)>0)`;
   queryForPage+=` AND (?='all' OR json_extract(evaluation,'$.opportunity.state')=? OR json_extract(evaluation,'$.opportunity.researchState')=?) ORDER BY rank_position LIMIT ? OFFSET ?`;
   queryParams=[...params,requested,requested,requested,limit+1,offset];
+  if (!search && (requested==='all'||requested==='ranked')) {
+   // Rank keys drive the page. LIMIT is applied before any large JSON payload
+   // is joined; the outer order sorts only the requested page, not the universe.
+   queryForPage=`SELECT s.payload,s.evaluation,r.rank_position FROM (SELECT run_id,symbol,rank_position FROM opportunity_rankings INDEXED BY opportunity_rank_position_idx WHERE run_id=? ORDER BY rank_position LIMIT ? OFFSET ?) r JOIN fundamental_snapshots s ON s.run_id=r.run_id AND s.symbol=r.symbol ORDER BY r.rank_position`;
+   queryParams=[latest.id,limit+1,offset];
+  }
   databasePaged=true;
  }
  // Stale runs are re-evaluated by the bounded keyset loop below. Reading the
@@ -203,6 +226,7 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
  }
  if(strategy!=='favorites'&&!databasePaged)rows=rows.slice(offset,offset+limit+1);
  const pageRows=rows.slice(0,limit);
+ for(let index=0;index<pageRows.length;index++)pageRows[index]=await restoreArchivedRow(pageRows[index]);
  // A profile may have been refreshed after the durable scan row was written.
  // Use its canonical completed-session pair for the card response so an old
  // scan's live quote percentage cannot disagree with the profile the user just
@@ -228,13 +252,14 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
    unresolved=deepSymbols.filter(symbol=>!deepSessionBySymbol.has(symbol));
   }
  }
- const compact=(payload:string)=>{const parsed=JSON.parse(payload);const deep=strategy==='favorites'?deepSessionBySymbol.get(parsed.symbol)?.snapshot:null;if(deep&&Number.isFinite(deep.dailyChange)&&deep.provenance?.dailyChange){parsed.dailyChange=deep.dailyChange;if(Number.isFinite(deep.price))parsed.price=deep.price;parsed.provenance={...parsed.provenance,price:deep.provenance.price??parsed.provenance?.price,dailyChange:deep.provenance.dailyChange};}delete parsed.history;return parsed};
- const evaluatedRows=pageRows.map((row:any)=>{const result=JSON.parse(row.evaluation);if(result.opportunity?.hash===opportunitySpecHash())return result;const snapshot=applyFinancingRisk(JSON.parse(row.payload));return {...result,opportunity:evaluateSnapshotOpportunity(snapshot)}});
+ const compact=(payload:string)=>{const parsed=JSON.parse(payload);const deep=strategy==='favorites'?deepSessionBySymbol.get(parsed.symbol)?.snapshot:null;if(deep&&Number.isFinite(deep.dailyChange)&&deep.provenance?.dailyChange){parsed.dailyChange=deep.dailyChange;if(Number.isFinite(deep.price))parsed.price=deep.price;parsed.provenance={...parsed.provenance,price:deep.provenance.price??parsed.provenance?.price,dailyChange:deep.provenance.dailyChange};}delete parsed.history;return options.view==='compact'?compactRadarSnapshot(parsed):parsed};
+ const fullEvaluatedRows=pageRows.map((row:any)=>{const result=JSON.parse(row.evaluation);if(result.opportunity?.hash===opportunitySpecHash())return result;const snapshot=applyFinancingRisk(JSON.parse(row.payload));return {...result,opportunity:evaluateSnapshotOpportunity(snapshot)}});
+ const evaluatedRows=options.view==='compact'?fullEvaluatedRows.map((row:any)=>({...row,opportunity:compactRadarEvaluation(row.opportunity)})):fullEvaluatedRows;
  const stale=!!latest&&!currentData;
- const value={run:active?{...active,universe:undefined,retry_queue:undefined,retryPending:JSON.parse(active.retry_queue||'[]').length,stale}:null,dataRunId:latest?.id,dataRun:latest?{...latest,universe:undefined,retry_queue:undefined,stale}:null,snapshots:pageRows.map((r:any)=>compact(r.payload)),storedEvaluations:evaluatedRows,rankPositions:pageRows.map((row:any)=>row.rank_position??null),favorites:fav.map((r:any)=>r.symbol),portfolioCount,coverage,summary:{total:Number(summaryRow?.total||0),sortedCount:Number(summaryRow?.total||0),missingFactorScores:Number(summaryRow?.missingFactorScores||0),missingFinalGrades:Number(summaryRow?.missingFinalGrades||0),opportunityRanked:Number(summaryRow?.opportunityRanked||0),opportunityNeedsResearch:Number(summaryRow?.opportunityNeedsResearch||0),opportunityExcluded:Number(summaryRow?.opportunityExcluded||0),opportunityWithEvidence:Number(summaryRow?.opportunityWithEvidence||0),opportunityFactorIncomplete:summaryRow?.opportunityFactorIncomplete??Object.fromEntries(OPPORTUNITY_SPEC.factors.map(factor=>[factor.id,Number(summaryRow?.total||0)])),opportunityEligibilityBlockers:summaryRow?.opportunityEligibilityBlockers??{},stale},page:{strategy,limit,offset,hasMore:rows.length>limit}};
+ const value={release,run:active?{...active,universe:undefined,retry_queue:undefined,retryPending:JSON.parse(active.retry_queue||'[]').length,stale}:null,dataRunId:latest?.id,dataRun:latest?{...latest,universe:undefined,retry_queue:undefined,stale}:null,snapshots:pageRows.map((r:any)=>compact(r.payload)),storedEvaluations:evaluatedRows,rankPositions:pageRows.map((row:any)=>row.rank_position??null),favorites:fav.map((r:any)=>r.symbol),portfolioCount,coverage,summary:{total:Number(summaryRow?.total||0),sortedCount:Number(summaryRow?.total||0),missingFactorScores:Number(summaryRow?.missingFactorScores||0),missingFinalGrades:Number(summaryRow?.missingFinalGrades||0),opportunityRanked:Number(summaryRow?.opportunityRanked||0),opportunityNeedsResearch:Number(summaryRow?.opportunityNeedsResearch||0),opportunityExcluded:Number(summaryRow?.opportunityExcluded||0),opportunityWithEvidence:Number(summaryRow?.opportunityWithEvidence||0),opportunityFactorIncomplete:summaryRow?.opportunityFactorIncomplete??Object.fromEntries(OPPORTUNITY_SPEC.factors.map(factor=>[factor.id,Number(summaryRow?.total||0)])),opportunityEligibilityBlockers:summaryRow?.opportunityEligibilityBlockers??{},stale},page:{strategy,limit,offset,hasMore:rows.length>limit}};
  rememberState(cacheKey,value);return value;}
 export async function readAudit(){await ensureSchema();const d=db();const latest=await d.prepare("SELECT * FROM strategy_runs WHERE status IN ('complete','partial') ORDER BY created_at DESC LIMIT 1").first() as any;const logs=latest?(await d.prepare('SELECT stage,created_at,message FROM diag WHERE run_id=? ORDER BY created_at DESC LIMIT 500').bind(latest.id).all()).results:[];const state=await readState({strategy:'opportunity',opportunityState:'all',limit:1});return {strategyHash:currentHash(),opportunitySpecHash:opportunitySpecHash(),run:state.run,dataRun:state.dataRun,summary:state.summary,favorites:state.favorites,logs};}
-export function insertSnapshot(runId:string,s:Snapshot){invalidateStateCache();const reviewed=applyFinancingRisk(s);return db().prepare('INSERT OR REPLACE INTO fundamental_snapshots(id,run_id,symbol,as_of,payload,evaluation) VALUES (?,?,?,?,?,?)').bind(`${runId}:${s.symbol}`,runId,s.symbol,reviewed.asOf,JSON.stringify(reviewed),JSON.stringify({opportunity:evaluateSnapshotOpportunity(reviewed)}));}
+export function insertSnapshot(runId:string,s:Snapshot){invalidateStateCache();const reviewed=applyFinancingRisk(alignSnapshotFinancials(s));return db().prepare('INSERT OR REPLACE INTO fundamental_snapshots(id,run_id,symbol,as_of,payload,evaluation) VALUES (?,?,?,?,?,?)').bind(`${runId}:${s.symbol}`,runId,s.symbol,reviewed.asOf,JSON.stringify(reviewed),JSON.stringify({opportunity:evaluateSnapshotOpportunity(reviewed)}));}
 export async function createRun(source:string,total=0,universe:any[]=[],status='running'){await ensureSchema();invalidateStateCache();const id=crypto.randomUUID(),now=new Date().toISOString();await db().prepare('INSERT INTO strategy_runs (id,created_at,updated_at,status,source,total,universe,strategy_hash) VALUES(?,?,?,?,?,?,?,?)').bind(id,now,now,status,source,total,JSON.stringify(universe),currentHash()).run();return id;}
 export async function log(runId:string,stage:string,message:string){await db().prepare('INSERT INTO diag(id,run_id,stage,created_at,message) VALUES(?,?,?,?,?)').bind(crypto.randomUUID(),runId,stage,new Date().toISOString(),message).run()}
 
@@ -248,41 +273,79 @@ export async function ensureRunEvaluations(runId:string) {
   const d=db();
   const version=await d.prepare("SELECT v.revision,v.rubric_hash,COALESCE(r.revision,0) AS current_revision FROM opportunity_rank_versions v LEFT JOIN opportunity_rating_versions r ON r.run_id=v.run_id WHERE v.run_id=?").bind(runId).first() as any;
   if(version&&version.rubric_hash===opportunitySpecHash()&&Number(version.revision)===Number(version.current_revision))return;
+  const owner=crypto.randomUUID(),deadline=Date.now()+180_000;
+  let acquired=false;
+  while(Date.now()<deadline){
+   const now=Date.now();
+   const lease=await d.prepare('INSERT INTO opportunity_evaluation_leases(run_id,owner,lease_until) VALUES(?,?,?) ON CONFLICT(run_id) DO UPDATE SET owner=excluded.owner,lease_until=excluded.lease_until WHERE opportunity_evaluation_leases.lease_until<? RETURNING owner').bind(runId,owner,now+180_000,now).first() as any;
+   if(lease?.owner===owner){acquired=true;break;}
+   await new Promise(resolve=>setTimeout(resolve,500));
+   const ready=await d.prepare('SELECT v.revision,v.rubric_hash,COALESCE(r.revision,0) AS current_revision FROM opportunity_rank_versions v LEFT JOIN opportunity_rating_versions r ON r.run_id=v.run_id WHERE v.run_id=?').bind(runId).first() as any;
+   if(ready&&ready.rubric_hash===opportunitySpecHash()&&Number(ready.revision)===Number(ready.current_revision))return;
+  }
+  if(!acquired)throw Object.assign(Error('التقييم قيد إعادة الحساب؛ حاول مجددًا.'),{status:409});
+  try{
+  let expectedRevision=Number((await d.prepare('SELECT revision FROM opportunity_rating_versions WHERE run_id=?').bind(runId).first() as any)?.revision??0);
+  const classes=(await d.prepare("SELECT json_extract(payload,'$.cik') AS cik,COUNT(*) AS count FROM fundamental_snapshots WHERE run_id=? AND json_extract(payload,'$.securityType')='common' GROUP BY json_extract(payload,'$.cik')").bind(runId).all()).results as any[];
+  const classCounts=new Map(classes.map(row=>[Number(row.cik),Number(row.count)]));
+  const runScope=await d.prepare('SELECT source FROM strategy_runs WHERE id=?').bind(runId).first() as any;
+  const completeListingScope=String(runScope?.source??'').endsWith('· full');
+  const peerRows:PeerObservation[]=[];let peerAfter='';
+  while(true){
+   const rows=(await d.prepare('SELECT id,symbol,payload,evaluation FROM fundamental_snapshots WHERE run_id=? AND symbol>? ORDER BY symbol COLLATE BINARY ASC LIMIT 100').bind(runId,peerAfter).all()).results as any[];
+   if(!rows.length)break;
+   for(const rawRow of rows){const restored=await restoreArchivedRow(rawRow);const observation=peerObservation(JSON.parse(restored.payload));if(observation)peerRows.push(observation);}
+   peerAfter=rows.at(-1).symbol;
+  }
+  const peers=uniqueIssuerPeers(peerRows);
   let afterSymbol='';
   while(true){
    const rows=(await d.prepare('SELECT id,symbol,payload,evaluation FROM fundamental_snapshots WHERE run_id=? AND symbol>? ORDER BY symbol COLLATE BINARY ASC LIMIT 100').bind(runId,afterSymbol).all()).results as any[];
    if(!rows.length)break;
-   const writes=[];
-   for(const row of rows){
+   const writes=[];let changed=0;
+   for(const rawRow of rows){
+    const archived=!!JSON.parse(rawRow.payload).__archiveId;
+    const row=await restoreArchivedRow(rawRow);
     let saved:unknown;try{saved=JSON.parse(row.evaluation)?.opportunity}catch{/* repair invalid JSON */}
-    const snapshot=applyFinancingRisk(JSON.parse(row.payload));
+    const snapshot=applyFinancingRisk(alignSnapshotFinancials(JSON.parse(row.payload)));
+    if(completeListingScope&&Number.isSafeInteger(snapshot.cik)&&Number(snapshot.cik)>0)snapshot.issuerCommonListingCount=classCounts.get(Number(snapshot.cik))??0;
+    snapshot.peerContext=peerContext(snapshot,peers);
     if(!isCurrentOpportunityEvaluation(saved)||saved.asOf!==snapshot.asOf||saved.snapshotHash!==opportunitySnapshotHash(snapshot)){
-     const evaluation=evaluateSnapshotOpportunity(snapshot);
+     const evaluation=evaluateSnapshotOpportunity(snapshot);changed++;
      if(!isCurrentOpportunityEvaluation(evaluation))throw Error(`Invalid complete evaluation for ${row.symbol}`);
-     writes.push(d.prepare('UPDATE fundamental_snapshots SET evaluation=? WHERE id=?').bind(JSON.stringify({opportunity:evaluation}),row.id));
+     if(archived)writes.push(...await archivedWriteStatements(row.id,JSON.stringify(snapshot),JSON.stringify({opportunity:evaluation})));
+     else writes.push(d.prepare('UPDATE fundamental_snapshots SET payload=?,evaluation=? WHERE id=?').bind(JSON.stringify(snapshot),JSON.stringify({opportunity:evaluation}),row.id));
     }
    }
    if(writes.length)await d.batch(writes);
+   expectedRevision+=changed;
+   await d.prepare('UPDATE opportunity_evaluation_leases SET lease_until=? WHERE run_id=? AND owner=?').bind(Date.now()+180_000,runId,owner).run();
    afterSymbol=rows.at(-1).symbol;
   }
   // Publish all rank positions together after every evaluation batch succeeds.
   await d.batch([
-   d.prepare('DELETE FROM opportunity_rankings WHERE run_id=?').bind(runId),
-   d.prepare("INSERT INTO opportunity_rankings(run_id,symbol,score,evaluation_hash,rank_position,rubric_hash) SELECT run_id,symbol,json_extract(evaluation,'$.opportunity.score'),json_extract(evaluation,'$.opportunity.evaluationHash'),ROW_NUMBER() OVER (ORDER BY json_extract(evaluation,'$.opportunity.score') DESC,symbol COLLATE BINARY ASC),? FROM fundamental_snapshots WHERE run_id=?").bind(opportunitySpecHash(),runId),
-   d.prepare("INSERT OR REPLACE INTO opportunity_rank_versions(run_id,revision,rubric_hash) VALUES(?,COALESCE((SELECT revision FROM opportunity_rating_versions WHERE run_id=?),0),?)").bind(runId,runId,opportunitySpecHash()),
+   d.prepare('DELETE FROM opportunity_rankings WHERE run_id=? AND COALESCE((SELECT revision FROM opportunity_rating_versions WHERE run_id=?),0)=?').bind(runId,runId,expectedRevision),
+   d.prepare("INSERT INTO opportunity_rankings(run_id,symbol,score,evaluation_hash,rank_position,rubric_hash) SELECT run_id,symbol,json_extract(evaluation,'$.opportunity.score'),json_extract(evaluation,'$.opportunity.evaluationHash'),ROW_NUMBER() OVER (ORDER BY json_extract(evaluation,'$.opportunity.score') DESC,symbol COLLATE BINARY ASC),? FROM fundamental_snapshots WHERE run_id=? AND COALESCE((SELECT revision FROM opportunity_rating_versions WHERE run_id=?),0)=?").bind(opportunitySpecHash(),runId,runId,expectedRevision),
+   d.prepare("INSERT OR REPLACE INTO opportunity_rank_versions(run_id,revision,rubric_hash) SELECT ?,?,? WHERE COALESCE((SELECT revision FROM opportunity_rating_versions WHERE run_id=?),0)=?").bind(runId,expectedRevision,opportunitySpecHash(),runId,expectedRevision),
   ]);
+  const published=await d.prepare('SELECT v.revision,v.rubric_hash,COALESCE(r.revision,0) AS current_revision FROM opportunity_rank_versions v LEFT JOIN opportunity_rating_versions r ON r.run_id=v.run_id WHERE v.run_id=?').bind(runId).first() as any;
+  if(!published||Number(published.revision)!==expectedRevision||Number(published.current_revision)!==expectedRevision||published.rubric_hash!==opportunitySpecHash())throw Object.assign(Error('تغيرت البيانات أثناء الحساب؛ حدّث النتائج.'),{status:409});
   invalidateStateCache();
+  }finally{await d.prepare('UPDATE opportunity_evaluation_leases SET lease_until=0 WHERE run_id=? AND owner=?').bind(runId,owner).run();}
  })().finally(()=>evaluationRepairs.delete(runId));
  evaluationRepairs.set(runId,work);return work;
 }
 
 /** The same completed full universe selection used by radar and profiles. */
-export async function readCanonicalCompany(symbol:string) {
+export async function readCanonicalCompany(symbol:string,runId?:string,releaseToken?:string) {
  await ensureSchema();const d=db();
- const run=await d.prepare("SELECT id FROM strategy_runs r WHERE status IN ('complete','partial') AND (stage>=13 OR source='import') AND EXISTS(SELECT 1 FROM fundamental_snapshots s WHERE s.run_id=r.id) ORDER BY CASE WHEN source LIKE '%· full' THEN 0 ELSE 1 END, CASE WHEN status='complete' THEN 0 ELSE 1 END, created_at DESC LIMIT 1").first() as any;
+ const run=runId?await d.prepare("SELECT id FROM strategy_runs WHERE id=? AND status IN ('complete','partial') AND (stage>=13 OR source='import')").bind(runId).first() as any:await d.prepare("SELECT id FROM strategy_runs r WHERE status IN ('complete','partial') AND (stage>=13 OR source='import') AND EXISTS(SELECT 1 FROM fundamental_snapshots s WHERE s.run_id=r.id) ORDER BY CASE WHEN source LIKE '%· full' THEN 0 ELSE 1 END, CASE WHEN status='complete' THEN 0 ELSE 1 END, created_at DESC LIMIT 1").first() as any;
+ if(runId&&!run)throw Object.assign(Error('جولة التقييم المطلوبة غير متاحة.'),{status:409});
  if(!run)return null;
  await ensureRunEvaluations(run.id);
+ const release=await readRankReleaseIdentity(String(run.id),releaseToken);
  const row=await d.prepare("SELECT s.symbol,s.payload,s.evaluation,r.rank_position FROM fundamental_snapshots s JOIN opportunity_rankings r ON r.run_id=s.run_id AND r.symbol=s.symbol WHERE s.run_id=? AND s.symbol=?").bind(run.id,symbol).first() as any;
  if(!row)return null;
- return {snapshot:JSON.parse(row.payload) as Snapshot,evaluation:JSON.parse(row.evaluation).opportunity as OpportunityEvaluation,ranking:{runId:run.id,position:Number(row.rank_position)}};
+ const restored=await restoreArchivedRow(row);
+ return {snapshot:JSON.parse(restored.payload) as Snapshot,evaluation:JSON.parse(restored.evaluation).opportunity as OpportunityEvaluation,release,ranking:{runId:run.id,position:Number(row.rank_position)}};
 }

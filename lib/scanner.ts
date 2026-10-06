@@ -10,7 +10,7 @@ const PROVIDER_CONCURRENCY = 6;
 const SCORE_BATCH_SIZE = 200;
 const COMPANY_FACTS_BATCH_SIZE = 12;
 const OPPORTUNITY_BATCH_SIZE = 8;
-export const SCAN_SOURCE_VERSION = 'Bulk Quotes/SEC Frames + Opportunity SEC v12';
+export const SCAN_SOURCE_VERSION = 'Bulk Quotes/SEC Frames + Opportunity SEC v13';
 const UNIVERSE_PAGE=1000;
 async function saveUniverse(runId:string,companies:any[],kind='candidates'){
  const statements=[];
@@ -36,8 +36,7 @@ export function preliminaryCandidates(companies: any[]) {
     // evaluator will leave its safety status UNKNOWN until verified evidence
     // arrives. Identity, rather than a retired strategy's cap/price bands,
     // defines scan inclusion.
-    return typeof company.ticker === 'string' && company.ticker.trim().length > 0
-      && Number.isInteger(Number(company.cik)) && Number(company.cik) > 0;
+    return typeof company.ticker === 'string' && company.ticker.trim().length > 0;
   });
 }
 
@@ -130,7 +129,7 @@ export async function processScanBatch(runId: string) {
       const all=[];for(let page=0;page<Math.ceil(run.total/UNIVERSE_PAGE);page++)all.push(...await universePage(run.id,'quotes',page));
       const candidates=String(run.source).includes('quick')?all.filter((c:any)=>quickSymbols.includes(c.ticker)):preliminaryCandidates(all);
       await saveUniverse(run.id,candidates);
-      await database.prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(`universe:${run.id}:ciks`,'candidate CIK checkpoint',new Date().toISOString(),JSON.stringify(candidates.map((c:any)=>c.cik))).run();
+      await database.prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(`universe:${run.id}:ciks`,'candidate CIK checkpoint',new Date().toISOString(),JSON.stringify([...new Set(candidates.map((c:any)=>Number(c.cik)).filter(cik=>Number.isSafeInteger(cik)&&cik>0))])).run();
       await database.prepare("UPDATE strategy_runs SET total=?,screened_out=?,quote_coverage=?,stage=?,offset=0,lease_until=0,retry_queue='[]',updated_at=? WHERE id=?").bind(candidates.length,run.universe_total-candidates.length,all.filter((c:any)=>Number.isFinite(c.price)&&Number.isFinite(c.marketCap)).length,String(run.source).includes('quick')?3:4,new Date().toISOString(),run.id).run();
     }else await database.prepare("UPDATE strategy_runs SET offset=?,lease_until=0,retry_queue='[]',updated_at=? WHERE id=?").bind(offset,new Date().toISOString(),run.id).run();
     return {run:publicRun(await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first()),done:false};
@@ -262,7 +261,7 @@ export async function processScanBatch(runId: string) {
         // not incorrectly label these newer facts as future data.
         snapshot.asOf = now;
         const last = history.at(-1);
-        const historyEvidence={source:historical.source,url:historical.url,retrievedAt:historical.retrievedAt,availableAt:historical.availableAt,periodEnd:last?.date??now.slice(0,10),confidence:'medium' as const};
+        const historyEvidence={source:historical.source,url:historical.url,retrievedAt:historical.retrievedAt,availableAt:historical.availableAt,periodEnd:last?.date??now.slice(0,10),...(historical.meta?.currency?{currency:String(historical.meta.currency)}:{}),confidence:'medium' as const,rightsStatus:'unknown' as const};
         const session=completedSessionQuote(history);
         if(session){
           snapshot.price=session.price;

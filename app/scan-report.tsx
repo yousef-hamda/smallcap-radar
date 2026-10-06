@@ -6,13 +6,13 @@ import type {OpportunityEvaluation,OpportunityState} from '@/lib/opportunity-eng
 
 type Report={run:{id:string;status:string;stage:number};strategy:'opportunity';counts:{total:number;passed:number;failed:number;unknown:number;withEvidence?:number;stale?:boolean};blockers:{id:string;label:string;status:'FAIL'|'UNKNOWN';count:number}[];rows:{symbol:string;name:string;asOf:string;rank?:number;evaluation:Pick<OpportunityEvaluation,'state'|'score'|'coveragePct'|'algorithmicCoveragePct'|'factors'|'checks'>}[];page:{hasMore:boolean}};
 const opportunityStateText:Record<OpportunityState,string>={ranked:'تقييم نهائي', 'needs-research':'يحتاج بحثًا',excluded:'مستبعد'};
-export default function ScanReport({runId,onOpen}:{runId:string;onOpen:(symbol:string)=>void}){
+export default function ScanReport({runId,releaseToken,onOpen}:{runId:string;releaseToken?:string;onOpen:(symbol:string)=>void}){
  const [offset,setOffset]=useState(0),[report,setReport]=useState<Report|null>(null),[error,setError]=useState(''),[loading,setLoading]=useState(true);
  useEffect(()=>{
   const controller=new AbortController();
-  void apiJson<Report>(`/api/scan-report?runId=${encodeURIComponent(runId)}&strategy=opportunity&offset=${offset}`,{signal:controller.signal}).then(value=>{setReport(value);setError('');}).catch(e=>{if(!controller.signal.aborted)setError(e.message);}).finally(()=>{if(!controller.signal.aborted)setLoading(false);});
+  void apiJson<Report>(`/api/scan-report?runId=${encodeURIComponent(runId)}&strategy=opportunity&offset=${offset}${releaseToken?`&release=${encodeURIComponent(releaseToken)}`:''}`,{signal:controller.signal}).then(value=>{setReport(value);setError('');}).catch(e=>{if(!controller.signal.aborted)setError(e.message);}).finally(()=>{if(!controller.signal.aborted)setLoading(false);});
   return()=>controller.abort();
- },[runId,offset]);
+ },[runId,offset,releaseToken]);
  function page(next:number){setLoading(true);setOffset(next);}
  return <section aria-label="تقرير نتائج الجولة"><h3>الدرجات النهائية وملاحظات البحث</h3><p>هذا سجل الدرجات النهائية لكل الشركات. ملاحظات المصادر والسلامة مستقلة عن ترتيب الدرجات، وقد تتكرر للسهم الواحد.</p>
   {error&&<p role="alert">{error}</p>}{loading&&<p role="status">جارٍ تحميل التقرير…</p>}

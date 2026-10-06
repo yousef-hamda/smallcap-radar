@@ -20,7 +20,8 @@ import PortfolioView from './portfolio-view';
 
 type View='opportunity'|'favorites'|'portfolio';
 type AccountSession={username:string};
-type RadarData={run:ScanRun|null;dataRun:ScanRun|null;dataRunId?:string;snapshots:Snapshot[];rankPositions?:number[];storedEvaluations?:Array<{opportunity?:OpportunityEvaluation}>;favorites:string[];portfolioCount?:number;coverage?:{runId:string;total:number;fields:Record<string,number>}|null;summary:{total:number;opportunityRanked?:number;opportunityNeedsResearch?:number;opportunityExcluded?:number;opportunityWithEvidence?:number;stale?:boolean};page:{hasMore:boolean;offset?:number}};
+type RankRelease={runId:string;revision:number;rubricHash:string;token:string};
+type RadarData={release?:RankRelease|null;run:ScanRun|null;dataRun:ScanRun|null;dataRunId?:string;snapshots:Snapshot[];rankPositions?:number[];storedEvaluations?:Array<{opportunity?:OpportunityEvaluation}>;favorites:string[];portfolioCount?:number;coverage?:{runId:string;total:number;fields:Record<string,number>}|null;summary:{total:number;opportunityRanked?:number;opportunityNeedsResearch?:number;opportunityExcluded?:number;opportunityWithEvidence?:number;stale?:boolean};page:{hasMore:boolean;offset?:number}};
 const names:Record<View,string>={opportunity:'الفرص الاستثمارية',favorites:'المفضلة',portfolio:'محفظتي'};
 const request=apiJson;
 const post=(data:unknown)=>({method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
@@ -38,6 +39,7 @@ export default function RadarApp(){
  const [settings,setSettings]=useState(false),[notificationBusy,setNotificationBusy]=useState(false),[saving,setSaving]=useState<string|null>(null);
  const [hasMore,setHasMore]=useState(false),[copied,setCopied]=useState('');
  const selection=useRef<AbortController|null>(null),lastView=useRef({view,search}),listRequest=useRef<AbortController|null>(null);
+ const releaseRef=useRef<RankRelease|null>(null);
  const cursor=useRef(0),loadingRequest=useRef(false),favoriteVersion=useRef(0),favoritePending=useRef(false),lastResume=useRef(0);
  const progress=scanProgress(data?.run);
  function mergeCardQuotes(current:Snapshot[],quotes:Record<string,{price?:number;dailyChange?:number;provenance?:Snapshot['provenance']}>) {
@@ -48,17 +50,18 @@ export default function RadarApp(){
   const {view,search}=lastView.current,offset=append?cursor.current:0,version=favoriteVersion.current;
   try{
    const stateParam=view==='opportunity'?`&state=${opportunityState}`:'';
-   const payload=await request<RadarData>(`/api/radar?strategy=${view==='opportunity'?'opportunity':view}&q=${encodeURIComponent(search)}&limit=40&offset=${offset}${stateParam}`,{signal:controller.signal});
+   const pin=append&&releaseRef.current?`&runId=${encodeURIComponent(releaseRef.current.runId)}&release=${encodeURIComponent(releaseRef.current.token)}`:'';
+   const payload=await request<RadarData>(`/api/radar?view=compact&strategy=${view==='opportunity'?'opportunity':view}&q=${encodeURIComponent(search)}&limit=40&offset=${offset}${stateParam}${pin}`,{signal:controller.signal});
    if(controller.signal.aborted)return;
    let snapshots=payload.snapshots;
    if(view==='favorites'&&snapshots.length){
     try{const quotePayload=await request<{quotes:Record<string,{price?:number;dailyChange?:number;provenance?:Snapshot['provenance']}>}>(`/api/favorite-quotes?symbols=${encodeURIComponent(snapshots.map(s=>s.symbol).join(','))}`,{signal:controller.signal});snapshots=mergeCardQuotes(snapshots,quotePayload.quotes)}catch(error){if(controller.signal.aborted)return;setNotice(error instanceof Error?error.message:'تعذّر تحديث أسعار المفضلة؛ عُرضت آخر لقطة محفوظة.');}
    }
-   setData(payload);if(version===favoriteVersion.current&&!favoritePending.current)setFavorites(payload.favorites);setPortfolioCount(payload.portfolioCount??0);setHasMore(payload.page.hasMore);cursor.current=offset+snapshots.length;setError('');
+   releaseRef.current=payload.release??null;setData(payload);if(version===favoriteVersion.current&&!favoritePending.current)setFavorites(payload.favorites);setPortfolioCount(payload.portfolioCount??0);setHasMore(payload.page.hasMore);cursor.current=offset+snapshots.length;setError('');
    if(view==='opportunity'||view==='favorites')setRankBySymbol(old=>{const next=append?{...old}:{};snapshots.forEach((snapshot,index)=>{next[snapshot.symbol]=payload.rankPositions?.[index]??offset+index+1});return next});
    if(view==='opportunity'||view==='favorites')setOpportunityBySymbol(old=>{const next=append?{...old}:{};snapshots.forEach((snapshot,index)=>{next[snapshot.symbol]=currentOpportunityEvaluation(snapshot,payload.storedEvaluations?.[index]?.opportunity)});return next});
    setRows(old=>append?[...old,...snapshots.filter(s=>!old.some(p=>p.symbol===s.symbol))]:snapshots);
-   void saveOffline({savedAt:new Date().toISOString(),run:payload.dataRun,snapshots:payload.snapshots}).catch(()=>{});
+   void saveOffline({savedAt:new Date().toISOString(),run:payload.dataRun,release:payload.release,snapshots:payload.snapshots,evaluations:payload.storedEvaluations,ranks:payload.rankPositions}).catch(()=>{});
   }catch(e){if(!controller.signal.aborted)setError(e instanceof Error?e.message:'تعذّر تحميل البيانات');}
   finally{if(!controller.signal.aborted){setLoading(false);loadingRequest.current=false;}}
  },[opportunityState]);
@@ -136,7 +139,8 @@ export default function RadarApp(){
  async function openCompany(s:Snapshot){
   selection.current?.abort();const controller=new AbortController();selection.current=controller;
   setSelected(s);setSelectedOpportunity(currentOpportunityEvaluation(s,opportunityBySymbol[s.symbol]));setDetailLoading(true);setDetailError('');
-  try{const p=await request<{snapshot:Snapshot;evaluation:OpportunityEvaluation}>(`/api/company?symbol=${encodeURIComponent(s.symbol)}`,{signal:controller.signal});if(!controller.signal.aborted){syncCardQuote(p.snapshot);setSelected(p.snapshot);setSelectedOpportunity(p.evaluation)}}
+  const pin=data?.release?`&runId=${encodeURIComponent(data.release.runId)}&release=${encodeURIComponent(data.release.token)}`:'';
+  try{const p=await request<{snapshot:Snapshot;evaluation:OpportunityEvaluation}>(`/api/company?symbol=${encodeURIComponent(s.symbol)}${pin}`,{signal:controller.signal});if(!controller.signal.aborted){syncCardQuote(p.snapshot);setSelected(p.snapshot);setSelectedOpportunity(p.evaluation)}}
   catch(e){if(!controller.signal.aborted)setDetailError(e instanceof Error?e.message:'تعذّر تحديث الملف')}
   finally{if(!controller.signal.aborted)setDetailLoading(false)}
  }
@@ -168,7 +172,7 @@ export default function RadarApp(){
    }else {await request('/api/push/test',post({endpoint:subscription!.endpoint}));setNotice('قبل مزود الإشعارات رسالة الاختبار؛ تأكد من وصولها على جهازك.');}
   }catch(e){setError(e instanceof Error?e.message:'تعذّر إرسال الإشعار')}finally{setNotificationBusy(false)}
  }
- function exportData(){const blob=new Blob([JSON.stringify({run:data?.dataRun,strategy:OPPORTUNITY_SPEC,state:opportunityState,results:rows.map(s=>({snapshot:s,rank:rankBySymbol[s.symbol],evaluation:currentOpportunityEvaluation(s,opportunityBySymbol[s.symbol])}))},null,2)],{type:'application/json'});const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='radar-opportunity-results.json';a.click();URL.revokeObjectURL(url)}
+ function exportData(){const pin=data?.release?('&runId='+encodeURIComponent(data.release.runId)+'&release='+encodeURIComponent(data.release.token)):'';const link=document.createElement('a');link.href='/api/export?kind=data'+pin;link.download='radar-opportunity-universe.json';link.click()}
  async function importFile(file?:File){if(!file)return;setBusy(true);try{if(file.size>4_000_000)throw Error('الحد الأقصى 4 MB');const value=JSON.parse(await file.text());const records=Array.isArray(value)?value:Array.isArray(value.results)?value.results.map((row:{snapshot:Snapshot})=>row.snapshot):value.snapshots;await request('/api/radar',post({action:'import',records}));await refresh();setNotice('حُفظت اللقطة وأُعيد تقييمها.')}catch(e){setError(String(e))}finally{setBusy(false)}}
  const evaluated=useMemo(()=>rows.map(s=>({s,e:currentOpportunityEvaluation(s,opportunityBySymbol[s.symbol])})),[rows,opportunityBySymbol]);
  // Keep the API state filter invariant at the rendering boundary too.
@@ -212,7 +216,7 @@ export default function RadarApp(){
    <div className="settings-scroll">{(error||notice)&&<div className={`message ${error?'error':''}`} role={error?'alert':'status'}>{error||notice}</div>}<section><h3>إشعار اكتمال الفحص</h3><p>على iPhone: افتح الموقع في Safari ← أضف إلى الشاشة الرئيسية ← افتحه من الأيقونة ← فعّل الإشعارات ← وافق على الإذن ← اختبر الإشعار.</p><div className="action-pair"><button onClick={()=>notifications()} disabled={notificationBusy}>تفعيل الإشعارات</button><button onClick={()=>notifications(true)} disabled={notificationBusy}>اختبار الإشعار</button></div><small>قبول الإرسال من المزود ليس دليل وصول على الهاتف.</small></section>
    <section><h3>منهجية الفرص الاستثمارية الموحدة</h3><dl className="data-grid"><div><dt>نسخة التقييم</dt><dd dir="ltr">{OPPORTUNITY_SPEC.version}</dd></div><div><dt>المدة الافتراضية</dt><dd>{OPPORTUNITY_SPEC.defaultHorizonMonths} أشهر</dd></div><div><dt>الدرجة</dt><dd>نهائية من 100</dd></div><div><dt>تغطية الدرجات الحسابية</dt><dd>100%</dd></div></dl><div className="coverage-chips">{OPPORTUNITY_SPEC.factors.map(f=><span key={f.id}>{f.label}: {f.weight}%</span>)}</div><p className="muted">التحقق التاريخي لنموذج الفرص الموحد لم يكتمل. لا نعرض احتمال عائد، ولا نعتبر نتائج الفئات السابقة اعتمادًا لهذا النموذج.</p></section>
    <section><h3>حالة البحث والاختبار</h3><p>الموفرون المجانية ومصادر SEC يجري ربطها بعوامل التقييم. يلزم اختبار زمني point-in-time يشمل الشركات المشطوبة، الأحداث المستقبلية الناضجة، وتكاليف التداول قبل إعلان أي اعتماد.</p><p className="muted">لا تُفسّر النتيجة على أنها نصيحة استثمارية أو ضمان أداء.</p></section>
-   {reportOpen&&(data?.run||data?.dataRun)&&<ScanReport key={`${data?.dataRun?.id??data?.run?.id}:opportunity`} runId={(data?.dataRun?.id??data?.run?.id)!} onOpen={symbol=>{setSettings(false);void openCompany({symbol,name:symbol,asOf:new Date().toISOString(),provenance:{}})}}/>}
+   {reportOpen&&(data?.run||data?.dataRun)&&<ScanReport key={`${data?.dataRun?.id??data?.run?.id}:opportunity`} runId={(data?.dataRun?.id??data?.run?.id)!} releaseToken={data?.release?.token} onOpen={symbol=>{setSettings(false);void openCompany({symbol,name:symbol,asOf:new Date().toISOString(),provenance:{}})}}/>}
    <section><h3>تغطية آخر فحص</h3><dl className="data-grid"><div><dt>دليل السوق</dt><dd>{data?.run?.universe_total??'—'}</dd></div><div><dt>أسعار متاحة</dt><dd>{data?.run?.quote_coverage??'—'}</dd></div><div><dt>شركات لها أساسيات</dt><dd>{data?.run?.fundamental_coverage??'—'}</dd></div><div><dt>طلبات غير مكتملة</dt><dd>{data?.run?.failed??'—'}</dd></div></dl>{data?.coverage&&<><p>تغطية الحقول من {data.coverage.total.toLocaleString('en-US')} لقطة محفوظة:</p><div className="coverage-chips">{([['revenue','إيرادات'],['netIncome','صافي الدخل'],['fcf','FCF'],['cash','نقد'],['debt','دين'],['medianDollarVolume20d','سيولة 20 يومًا'],['return12m','عائد سنة'],['low52w','قاع 52 أسبوعًا'],['ma30w','MA30W'],['dilution','تخفيف']] as const).map(([key,label])=><span key={key}>{label}: {Math.round(data.coverage!.fields[key]/Math.max(1,data.coverage!.total)*100)}%</span>)}</div></>}<p>{data?.run?.source||'لا يوجد فحص بعد'}</p><p>الحقول غير المتاحة تبقى غير مثبتة. راجع مصدر كل قيمة وتاريخ توفرها داخل ملف الشركة؛ عدم وجود رقم لا يتحول إلى صفر.</p><div className="action-pair"><button onClick={()=>scan('quick')} disabled={busy||progress.active}>فحص عينة 12 سهمًا</button><button onClick={()=>refresh()}>تحديث الحالة</button></div></section>
    <section><h3>التصدير والاستيراد</h3><div className="export-links"><a href="/api/export?kind=audit" download>سجل التدقيق</a><a href="/api/export?kind=spec" download>مواصفة المحرك</a><a href="/api/export?kind=schema" download>قالب البيانات</a></div><label className="file-import">استيراد لقطة JSON موثقة<input type="file" accept="application/json" disabled={busy} onChange={e=>importFile(e.target.files?.[0])}/></label></section>
    <section><h3>خصوصية المفضلة</h3><p>المفضلة منفصلة لكل هوية دخول، أو لكل متصفح للزائر غير المسجل، ومحفوظة على الخادم. لم تُنقل عناصر القائمة المشتركة السابقة إلى قائمتك. حذف ملفات تعريف الارتباط للزائر غير المسجل يفقده مفتاح قائمته.</p></section></div>

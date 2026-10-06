@@ -2,13 +2,13 @@ import type { Company } from './providers';
 import { fetchJson } from './providers';
 import type { Provenance, Snapshot } from './engine';
 import bundledFrames from './sec-frames.generated.json';
-import {REVENUE_TAGS, US_GAAP_REVENUE_TAGS, observations, latestInstant, trailingAnnual, COST_OF_REVENUE_TAGS, BACKLOG_TAGS} from './sec';
+import {REVENUE_TAGS, US_GAAP_REVENUE_TAGS, observations, latestInstant, trailingAnnual, COST_OF_REVENUE_TAGS, BACKLOG_TAGS, CONTRACT_LIABILITY_TAGS, reportedBorrowings} from './sec';
 import {derivedEvidence,usableEvidence} from './evidence';
 import {SEC_FRAME_DATASET_COUNT} from './strategy-spec';
 import {applyFinancingRisk} from './financing-risk';
 
 type FrameFact = { cik: number; entityName?: string; start?: string; end: string; val: number; filed?: string; form?: string; accn?: string; frame?: string };
-type StoredFact = FrameFact & { tag: string; priority: number; url: string; fallback?: boolean; observedAt?:string; kind?: 'frames'|'companyfacts' };
+type StoredFact = FrameFact & { tag: string; priority: number; url: string; fallback?: boolean; observedAt?:string; kind?: 'frames'|'companyfacts'; components?: StoredFact[]; metricScope?:string };
 export type BulkFundamentals = {
   revenue?: StoredFact;
   netIncome?: StoredFact;
@@ -19,8 +19,10 @@ export type BulkFundamentals = {
   cash?: StoredFact;
   debtCurrent?: StoredFact;
   debtNoncurrent?: StoredFact;
+  debtTotal?: StoredFact;
   costOfRevenue?: StoredFact;
   backlog?: StoredFact;
+  contractLiabilities?: StoredFact;
   conflicts?: string[];
 };
 type FundamentalKey = Exclude<keyof BulkFundamentals, 'conflicts'>;
@@ -107,10 +109,15 @@ export function parseCompanyFacts(cik: number, payload: any, asOf = new Date()):
   pickAnnual('costOfRevenue', COMPANY_FACTS_TAGS.costOfRevenue);
   const backlog=latestInstant(observationsFromPayload(facts, COMPANY_FACTS_TAGS.backlog), asOf.toISOString()) ?? trailingAnnual(observationsFromPayload(facts, COMPANY_FACTS_TAGS.backlog), asOf.toISOString());
   if (backlog && usableCompanyFact(backlog, asOf)) result.backlog=toStoredFact(backlog,cik,'backlog',url,0);
+  const liability=latestInstant(observationsFromPayload(facts,CONTRACT_LIABILITY_TAGS),asOf.toISOString());
+  if (liability && usableCompanyFact(liability,asOf)) result.contractLiabilities=toStoredFact(liability,cik,'contractLiabilities',url,0);
   for (const [key, tags] of Object.entries({ cash: COMPANY_FACTS_TAGS.cash, debtCurrent: COMPANY_FACTS_TAGS.debtCurrent, debtNoncurrent: COMPANY_FACTS_TAGS.debtNoncurrent }) as [FundamentalKey, readonly string[]][]) {
     const instant = latestInstant(observationsFromPayload(facts, tags), asOf.toISOString());
     if (instant && usableCompanyFact(instant, asOf)) result[key] = toStoredFact(instant, cik, key, url, 0);
   }
+  const borrowing = reportedBorrowings(facts, asOf.toISOString());
+  if (borrowing) result.debtTotal = { ...toStoredFact({...borrowing, tag: borrowing.method}, cik, 'debtTotal', url, 0)!,
+    metricScope: borrowing.scope, components: borrowing.components.map(item => toStoredFact(item,cik,'debtTotal',url,0)!) };
   const sharePair = latestInstantPair(observationsFromPayload(facts, COMPANY_FACTS_TAGS.shares, 'shares'), asOf);
   if (sharePair.current && usableCompanyFact(sharePair.current, asOf)) result.shares = toStoredFact(sharePair.current, cik, 'shares', url, 0);
   if (sharePair.prior && usableCompanyFact(sharePair.prior, asOf)) result.priorShares = toStoredFact(sharePair.prior, cik, 'priorShares', url, 0);
@@ -124,13 +131,13 @@ function observationsFromPayload(facts: any, tags: readonly string[], unit = 'US
 
 export function needsCompanyFacts(facts: BulkFundamentals | undefined) {
   if (!facts) return true;
-  return (['revenue', 'netIncome', 'ocf', 'capex', 'shares', 'priorShares', 'cash', 'debtCurrent', 'debtNoncurrent'] as const).some((key) => !facts[key]);
+  return (['revenue', 'netIncome', 'ocf', 'capex', 'shares', 'priorShares', 'cash'] as const).some((key) => !facts[key]) || (!facts.debtTotal && (!facts.debtCurrent || !facts.debtNoncurrent));
 }
 
 function mergeCompanyFacts(existing: BulkFundamentals | undefined, fallback: BulkFundamentals) {
   const merged: BulkFundamentals = { ...(existing || {}) };
   const conflicts = [...(merged.conflicts || [])];
-  for (const key of ['revenue', 'netIncome', 'ocf', 'capex', 'shares', 'priorShares', 'cash', 'debtCurrent', 'debtNoncurrent','costOfRevenue','backlog'] as const) {
+  for (const key of ['revenue', 'netIncome', 'ocf', 'capex', 'shares', 'priorShares', 'cash', 'debtCurrent', 'debtNoncurrent','debtTotal','costOfRevenue','backlog','contractLiabilities'] as const) {
     const candidate = fallback[key], current = merged[key];
     if (!candidate) continue;
     if (current && current.end === candidate.end && current.val !== candidate.val) conflicts.push(`${key}: ${current.val} (${current.kind || 'frames'}) مقابل ${candidate.val} (Company Facts) في ${candidate.end}`);
@@ -148,7 +155,7 @@ export async function fetchCompanyFactsFallback(candidateCiks: number[], asOf = 
   const failedCiks: number[] = [];
   const retryableFailedCiks: number[] = [];
   let success = 0, empty = 0, failed = 0;
-  const outcomes = await Promise.all(candidateCiks.map(async (cik) => {
+  const outcomes = await Promise.all([...new Set(candidateCiks.filter(cik=>Number.isSafeInteger(cik)&&cik>0))].map(async (cik) => {
     const url = companyFactsUrl(cik);
     try {
       const payload = await fetchJson(url, 8_000, 6 * 60 * 60_000, 3);
@@ -270,6 +277,11 @@ export async function fetchBulkFundamentals(candidateCiks: number[], asOf = new 
 
 function frameProvenance(fact: StoredFact, retrievedAt: string): Provenance {
   return {
+    ...(fact.components ? { dependencies: fact.components.map(item => frameProvenance(item,retrievedAt)) } : {}),
+    metricScope: fact.metricScope,
+    accession: fact.accn,
+    parserVersion: 'sec-normalization-v2',
+    rightsStatus: 'redistribution-permitted',
     source: fact.fallback
       ? fact.kind === 'companyfacts' ? 'SEC EDGAR Company Facts — official dated fallback snapshot' : 'SEC EDGAR XBRL Frames — official dated fallback snapshot'
       : fact.kind === 'companyfacts' ? 'SEC EDGAR Company Facts (official)' : 'SEC EDGAR XBRL Frames (official)',
@@ -289,10 +301,10 @@ function frameProvenance(fact: StoredFact, retrievedAt: string): Provenance {
 export function preliminarySnapshot(company: Company, facts: BulkFundamentals | undefined, retrievedAt = new Date().toISOString()): Snapshot {
   const quoteAvailableAt = company.priceAvailableAt || company.quoteAvailableAt || retrievedAt;
   const quoteSource=company.priceSource||company.quoteSource||'Yahoo/Nasdaq bulk quote';
-  const quote: Provenance = { source: quoteSource, periodEnd: quoteAvailableAt.slice(0, 10), availableAt: quoteAvailableAt, retrievedAt, currency: 'USD', confidence: quoteSource.includes('bundled') ? 'low' : 'medium' };
+  const quote: Provenance = { source: quoteSource,...(company.priceUrl?{url:company.priceUrl}:{}),rightsStatus:'unknown', periodEnd: quoteAvailableAt.slice(0, 10), availableAt: quoteAvailableAt, retrievedAt, currency: 'USD', confidence: quoteSource.includes('bundled') ? 'low' : 'medium' };
   const marketCapAvailableAt=company.marketCapAvailableAt||company.quoteAvailableAt||retrievedAt;
   const marketCapSource=company.marketCapSource||company.quoteSource||'Yahoo/Nasdaq bulk quote';
-  const marketCapQuote:Provenance={source:marketCapSource,periodEnd:marketCapAvailableAt.slice(0,10),availableAt:marketCapAvailableAt,retrievedAt,currency:'USD',confidence:marketCapSource.includes('bundled')?'low':'medium'};
+  const marketCapQuote:Provenance={source:marketCapSource,...(company.marketCapUrl?{url:company.marketCapUrl}:{}),rightsStatus:'unknown',periodEnd:marketCapAvailableAt.slice(0,10),availableAt:marketCapAvailableAt,retrievedAt,currency:'USD',confidence:marketCapSource.includes('bundled')?'low':'medium'};
   const snapshot: Snapshot = {
     symbol: company.ticker,
     name: company.name,
@@ -331,7 +343,7 @@ export function preliminarySnapshot(company: Company, facts: BulkFundamentals | 
   snapshot.dataIssues?.push('وسيط السيولة لـ20 يومًا لا يُستنتج من متوسط 10 أيام؛ يحتاج تاريخًا فعليًا قبل PASS.');
 
   const cleanFacts: BulkFundamentals = { conflicts: facts.conflicts };
-  for (const key of ['revenue', 'netIncome', 'ocf', 'capex', 'shares', 'priorShares', 'cash', 'debtCurrent', 'debtNoncurrent','costOfRevenue','backlog'] as FundamentalKey[]) {
+  for (const key of ['revenue', 'netIncome', 'ocf', 'capex', 'shares', 'priorShares', 'cash', 'debtCurrent', 'debtNoncurrent','debtTotal','costOfRevenue','backlog','contractLiabilities'] as FundamentalKey[]) {
     const fact = facts[key];
     if (fact && Number.isFinite(fact.val) && usableEvidence(frameProvenance(fact, retrievedAt), retrievedAt)) cleanFacts[key] = fact;
   }
@@ -340,18 +352,19 @@ export function preliminarySnapshot(company: Company, facts: BulkFundamentals | 
     snapshot[key] = facts[key]!.val;
     snapshot.provenance[key] = frameProvenance(facts[key]!, retrievedAt);
   }
-  if(facts.costOfRevenue&&facts.revenue&&facts.costOfRevenue.end===facts.revenue.end&&facts.revenue.val>0){
+  if(facts.costOfRevenue&&facts.revenue&&facts.costOfRevenue.end===facts.revenue.end&&facts.costOfRevenue.start===facts.revenue.start&&facts.revenue.val>0){
     snapshot.grossMargin=1-facts.costOfRevenue.val/facts.revenue.val;
     snapshot.provenance.grossMargin=derivedEvidence('Derived SEC revenue and cost of revenue',[frameProvenance(facts.revenue,retrievedAt),frameProvenance(facts.costOfRevenue,retrievedAt)],retrievedAt,'1 − cost of revenue / revenue')!;
   }
-  if(facts.backlog){snapshot.backlog={amount:facts.backlog.val,currency:'USD',asOf:facts.backlog.end,source:facts.backlog.url};snapshot.provenance.backlog=frameProvenance(facts.backlog,retrievedAt);}
+  if(facts.backlog){snapshot.backlog={kind:'remaining-performance-obligation',amount:facts.backlog.val,currency:'USD',asOf:facts.backlog.end,source:facts.backlog.url};snapshot.provenance.backlog=frameProvenance(facts.backlog,retrievedAt);}
+  if(facts.contractLiabilities){snapshot.contractLiabilities={amount:facts.contractLiabilities.val,currency:'USD',asOf:facts.contractLiabilities.end,source:facts.contractLiabilities.url};snapshot.provenance.contractLiabilities=frameProvenance(facts.contractLiabilities,retrievedAt);}
   if (facts.ocf && facts.capex && facts.ocf.end === facts.capex.end && facts.ocf.start===facts.capex.start) {
     snapshot.fcf = facts.ocf.val - Math.abs(facts.capex.val);
     snapshot.provenance.fcf = derivedEvidence('Derived SEC cash flows',[frameProvenance(facts.ocf,retrievedAt),frameProvenance(facts.capex,retrievedAt)],retrievedAt,`${facts.ocf.tag} − ${facts.capex.tag}`)!;
   }
-  const debt = facts.debtCurrent && facts.debtNoncurrent && facts.debtCurrent.end===facts.debtNoncurrent.end ? facts.debtCurrent.val + facts.debtNoncurrent.val : null;
-  if(debt!=null){snapshot.debt=debt;snapshot.provenance.debt=derivedEvidence('Derived SEC debt',[frameProvenance(facts.debtCurrent!,retrievedAt),frameProvenance(facts.debtNoncurrent!,retrievedAt)],retrievedAt,'current + noncurrent debt')!;}
-  if (snapshot.marketCap && snapshot.revenue && snapshot.revenue > 0 && facts.cash && debt != null && facts.cash.end===facts.debtCurrent?.end && usableEvidence(marketCapQuote,retrievedAt)) {
+  const debt = facts.debtTotal?.val ?? (facts.debtCurrent && facts.debtNoncurrent && facts.debtCurrent.end===facts.debtNoncurrent.end ? facts.debtCurrent.val + facts.debtNoncurrent.val : null);
+  if(debt!=null){snapshot.debt=debt;snapshot.provenance.debt=facts.debtTotal ? frameProvenance(facts.debtTotal,retrievedAt) : derivedEvidence('Derived SEC debt',[frameProvenance(facts.debtCurrent!,retrievedAt),frameProvenance(facts.debtNoncurrent!,retrievedAt)],retrievedAt,'current + noncurrent debt')!;}
+  if (snapshot.marketCap && snapshot.revenue && snapshot.revenue > 0 && facts.cash && debt != null && facts.cash.end===snapshot.provenance.debt?.periodEnd && usableEvidence(marketCapQuote,retrievedAt)) {
     snapshot.evSales = (snapshot.marketCap + debt - facts.cash.val) / snapshot.revenue;
     snapshot.provenance.evSales = derivedEvidence('Derived from bulk market cap + SEC debt − SEC cash / SEC revenue',[snapshot.provenance.revenue,marketCapQuote,snapshot.provenance.cash,snapshot.provenance.debt],retrievedAt,'(marketCap + debt − cash) / revenue')!;
   }

@@ -1,5 +1,6 @@
 import type { Snapshot } from './engine';
 import { usableEvidence } from './evidence';
+import {compatibleFinancialSources,compatibleSnapshotMetrics,operatingIssuerMetricsApplicable} from './financial-integrity';
 
 export type FinancingRiskLevel = 'clean' | 'mild' | 'elevated' | 'severe' | 'unknown';
 
@@ -17,10 +18,20 @@ const finite = (value: unknown): value is number => typeof value === 'number' &&
  */
 export function assessFinancingRisk(snapshot: Snapshot): { level: FinancingRiskLevel; evidence?: string } {
   const required = ['cash', 'debt', 'revenue'] as const;
+  if(!operatingIssuerMetricsApplicable(snapshot))return {level:'unknown',evidence:'يتطلب هذا النوع من الأوراق المالية نموذج مخاطر خاصاً.'};
   const missing: string[] = required.filter((key) => !finite(snapshot[key]) || !usableEvidence(snapshot.provenance[key], snapshot.asOf));
   const hasProfitEvidence = (finite(snapshot.netIncome) && snapshot.netIncome > 0 && usableEvidence(snapshot.provenance.netIncome, snapshot.asOf)) ||
     (finite(snapshot.fcf) && snapshot.fcf > 0 && usableEvidence(snapshot.provenance.fcf, snapshot.asOf));
   if (!hasProfitEvidence) missing.push('profitability');
+  if(!compatibleSnapshotMetrics(snapshot,['cash','debt'],'balance'))missing.push('compatible-cash-debt');
+  const usableFlow=(key:'fcf'|'netIncome')=>{
+    const source=snapshot.provenance[key];
+    if(!source?.periodStart||!compatibleFinancialSources([source,snapshot.provenance.revenue],'flow'))return false;
+    const days=(Date.parse(source.periodEnd)-Date.parse(source.periodStart))/864e5;
+    return days>=330&&days<=380&&usableEvidence(source,snapshot.asOf);
+  };
+  if(!(['fcf','netIncome'] as const).some(key=>finite(snapshot[key])&&snapshot[key]!>0&&usableFlow(key)))missing.push('annual-compatible-profitability');
+  if([snapshot.provenance.cash,snapshot.provenance.debt,snapshot.provenance.revenue].some(source=>!source||(Date.parse(snapshot.asOf)-Date.parse(source.periodEnd))/864e5>400))missing.push('financial-freshness');
   if (missing.length) return { level: 'unknown', evidence: `مراجعة مخاطر التمويل غير مكتملة؛ الحقول الحرجة غير المثبتة: ${missing.join('، ')}` };
 
   const cash = snapshot.cash!;
@@ -38,7 +49,7 @@ export function assessFinancingRisk(snapshot: Snapshot): { level: FinancingRiskL
   else if (cash > 0 && debt / cash >= 2) flags.push({ id: 'debt-cash', level: 'mild', text: `الدين إلى النقد ${(debt / cash).toFixed(1)}×` });
 
   if (finite(snapshot.fcf) && snapshot.fcf < 0) {
-    if (!usableEvidence(snapshot.provenance.fcf, snapshot.asOf)) {
+    if (!usableFlow('fcf') || snapshot.provenance.cash?.currency!==snapshot.provenance.fcf?.currency) {
       return { level: 'unknown', evidence: 'مراجعة مخاطر التمويل غير مكتملة؛ حرق النقد غير مؤرخ.' };
     }
     const runway = snapshot.fcf === 0 ? Number.POSITIVE_INFINITY : cash / Math.abs(snapshot.fcf);
@@ -68,9 +79,5 @@ export function assessFinancingRisk(snapshot: Snapshot): { level: FinancingRiskL
 
 export function applyFinancingRisk(snapshot: Snapshot): Snapshot {
   const result = assessFinancingRisk(snapshot);
-  // Preserve an explicit, evidenced review supplied by an import or an older
-  // durable run when the current snapshot lacks the fields needed to recompute
-  // it. Missing replacement data must not erase a previously documented result.
-  if (result.level === 'unknown' && snapshot.deathSpiral && snapshot.deathSpiral !== 'unknown' && snapshot.riskEvidence) return snapshot;
   return { ...snapshot, deathSpiral: result.level, riskEvidence: result.evidence };
 }

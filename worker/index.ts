@@ -3,6 +3,7 @@
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
 import webpush from "web-push";
+import { scheduledScanTick } from "../lib/scheduled-scan";
 import { processScanBatch, startScan } from "../lib/scanner";
 import { db, ensureSchema, log } from "../lib/storage";
 import { body, sameOrigin, sameSecret, secureResponse, statusOf } from "../lib/http";
@@ -144,6 +145,12 @@ async function runBackgroundBatch(request: Request, runId: string, env: Env, dir
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+
+    if (url.pathname === "/__radar-scheduled" && request.method === "POST") {
+      if(!env.BACKGROUND_SCAN_SECRET||!sameSecret(request.headers.get("X-Radar-Background"),env.BACKGROUND_SCAN_SECRET))return json({error:"غير مصرح"},401);
+      try { return json(await scheduledScanTick()); }
+      catch(error) { return json({error:error instanceof Error?error.message:"تعذّر تحديث البيانات"},statusOf(error,503)); }
+    }
 
     if (url.pathname === "/api/push/key" && request.method === "GET") return env.VAPID_PUBLIC_KEY?json({ publicKey: env.VAPID_PUBLIC_KEY }):json({error:"لم تتم تهيئة مفتاح الإشعارات"},503);
 

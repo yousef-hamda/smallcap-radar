@@ -55,6 +55,7 @@ function validSecMetric(metric: Metric | undefined, asOf: string): metric is Met
  * facts. It is intentionally not the fixed eight-factor investment score.
  */
 export function operatingCandidateSignals(snapshot: Snapshot): OperatingCandidateSignals {
+  if(snapshot.operatingSignals)return snapshot.operatingSignals;
   if ((snapshot.opportunityResearch?.earnings.conflicts?.length ?? 0) > 0
     || (snapshot.sourceConflicts?.length ?? 0) > 0) {
     return {
