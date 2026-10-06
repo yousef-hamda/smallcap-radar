@@ -1,3 +1,4 @@
+import {completeDirectoryFiles,readCompleteDirectory,saveCompleteDirectory,previouslyTrackedCompanies} from './directory-cache';
 import {readSecArtifact,recordSecArtifact,secArtifactCik} from './sec-artifact-cache';
 import {persistFilingDocument} from './filing-observations';
 import { reserveProviderRequest } from './provider-quota';
@@ -20,7 +21,7 @@ import { secUserAgent } from './sec-user-agent';
 import {alignSnapshotFinancials} from './financial-integrity';
 import { convertEarningsPeriodsToUsd, convertFinancialMetricsToUsd, fetchEcbDailySeries, type EcbDailySeries } from './ecb-fx';
 
-export type Company = { cik: number; name: string; ticker: string; exchange: string; securityType?:import('./directory').ListedSecurityType; securityName?:string; directoryUrl?:string; directoryAvailableAt?:string; price?: number; dailyChange?: number; intradayChange?: number; marketCap?: number; volume?: number; averageVolume10d?: number; return52w?: number; low52w?: number; high52w?: number; ma50d?: number; ma200d?: number; sector?: string; industry?: string; quoteSource?: string; quoteAvailableAt?: string; priceSource?:string; priceAvailableAt?:string; priceUrl?:string; marketCapSource?:string; marketCapAvailableAt?:string; marketCapUrl?:string };
+export type Company = { cik: number; name: string; ticker: string; exchange: string; securityType?:import('./directory').ListedSecurityType; securityName?:string; listingStatus?:'current'|'not-confirmed-current'; directoryUrl?:string; directoryAvailableAt?:string; price?: number; dailyChange?: number; intradayChange?: number; marketCap?: number; volume?: number; averageVolume10d?: number; return52w?: number; low52w?: number; high52w?: number; ma50d?: number; ma200d?: number; sector?: string; industry?: string; quoteSource?: string; quoteAvailableAt?: string; priceSource?:string; priceAvailableAt?:string; priceUrl?:string; marketCapSource?:string; marketCapAvailableAt?:string; marketCapUrl?:string };
 type NasdaqRow = { symbol: string; name?: string; lastsale?: string; marketCap?: string; volume?: string; sector?: string; industry?: string };
 type CachedQuick = { history: NonNullable<Snapshot['history']>; financials: Record<string, number>; provenance: Record<string, Provenance>; issues: string[] };
 type MarketBar = NonNullable<Snapshot['history']>[number];
@@ -30,8 +31,8 @@ export const NASDAQ_SCREENER = 'https://api.nasdaq.com/api/screener/stocks?table
 const NASDAQ_LISTED='https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt';
 const OTHER_LISTED='https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt';
 const SEC_TICKERS='https://www.sec.gov/files/company_tickers.json';
-let listingDirectoryCache:{expiresAt:number;retrievedAt:string;rows:DirectoryCompany[]}|null=null;
-let listingDirectoryFlight:Promise<{retrievedAt:string;rows:DirectoryCompany[]}>|null=null;
+let listingDirectoryCache:{expiresAt:number;retrievedAt:string;rows:DirectoryCompany[];complete:boolean}|null=null;
+let listingDirectoryFlight:Promise<{retrievedAt:string;rows:DirectoryCompany[];complete:boolean}>|null=null;
 const CBOE_BASE='https://cdn.cboe.com/api/global/delayed_quotes';
 const YAHOO_HOSTS=['query1.finance.yahoo.com','query2.finance.yahoo.com'] as const;
 export const quickSymbols = Object.keys(quickCache.symbols);
@@ -74,7 +75,7 @@ async function fetchText(url:string,timeoutMs=4000){
  return response.text();
 }
 
-async function currentListingDirectory(){
+async function fetchListingDirectory(){
  if(listingDirectoryCache&&listingDirectoryCache.expiresAt>Date.now())return listingDirectoryCache;
  if(listingDirectoryFlight)return listingDirectoryFlight;
  listingDirectoryFlight=Promise.allSettled([fetchText(NASDAQ_LISTED),fetchText(OTHER_LISTED),fetchJson(SEC_TICKERS,5000,6*60*60_000)])
@@ -88,11 +89,26 @@ async function currentListingDirectory(){
    const sec=secResult.status==='fulfilled'?secResult.value:{};
    const rows=parseOfficialDirectory(nasdaq,other,sec as Record<string,any>);
    if(!rows.length)throw Error('Official exchange listing directories contained no usable rows.');
-   return {retrievedAt:new Date().toISOString(),rows};
+   return {retrievedAt:new Date().toISOString(),rows,complete:completeDirectoryFiles(nasdaq,other)};
   })
   .then(value=>{listingDirectoryCache={...value,expiresAt:Date.now()+60*60_000};return value;})
   .finally(()=>{listingDirectoryFlight=null;});
  return listingDirectoryFlight;
+}
+
+async function currentListingDirectory(requireComplete=false){
+ try{
+  const value=await fetchListingDirectory();
+  if(!requireComplete)return value;
+  if(!value.complete)throw Error('One or both official listing files are incomplete; partial inventory cannot replace the full universe.');
+  await saveCompleteDirectory(value);return value;
+ }catch(error){
+  if(!requireComplete)throw error;
+  const cached=await readCompleteDirectory();
+  if(!cached)throw error;
+  recordProviderIssue('Full inventory uses the last checksum-verified complete directory with unchanged retrieval date.');
+  return {...cached,complete:true};
+ }
 }
 
 export function companyBySymbol(symbol: string): Company | null {
@@ -210,26 +226,28 @@ export async function universe(options?:{skipYahoo?:boolean}): Promise<Company[]
   const base = (bundledUniverse.companies as Company[]).map((company) => ({ ...company, quoteSource: 'bundled official dated snapshot', quoteAvailableAt: bundledUniverse.generatedAt,priceSource:'bundled official dated snapshot',priceAvailableAt:bundledUniverse.generatedAt,marketCapSource:'bundled official dated snapshot',marketCapAvailableAt:bundledUniverse.generatedAt }));
   const [latestResult,directoryResult]=await Promise.allSettled([
     fetchJson(NASDAQ_SCREENER,3_000) as Promise<{data?:{rows?:NasdaqRow[]}}>,
-    currentListingDirectory().then(({rows})=>rows),
+    currentListingDirectory(true),
   ]);
-  let directory:Company[]=base;
-  if(directoryResult.status==='fulfilled'&&directoryResult.value.length){
-    const directoryAvailableAt=listingDirectoryCache?.retrievedAt||new Date().toISOString();
+  let directory:Company[]=[];
+  if(directoryResult.status==='fulfilled'&&directoryResult.value.rows.length){
+    const directoryAvailableAt=directoryResult.value.retrievedAt;
     const old=new Map(base.map(company=>[company.ticker,company]));
-    directory=directoryResult.value.map(company=>{
+    directory=directoryResult.value.rows.map(company=>{
       const previous=old.get(company.ticker);
-      return {...previous,...company,cik:company.cik||previous?.cik||0,directoryAvailableAt,quoteSource:previous?.quoteSource||'official live listing directory',quoteAvailableAt:previous?.quoteAvailableAt||directoryAvailableAt};
+      return {...previous,...company,listingStatus:'current',cik:company.cik||previous?.cik||0,directoryAvailableAt,quoteSource:previous?.quoteSource||'official live listing directory',quoteAvailableAt:previous?.quoteAvailableAt||directoryAvailableAt};
     });
-  }else recordProviderIssue(`Official listing directory: ${directoryResult.status==='rejected'&&directoryResult.reason instanceof Error?directoryResult.reason.message:'empty response'}`);
+  }else throw Error(`Complete official listing inventory unavailable: ${directoryResult.status==='rejected'&&directoryResult.reason instanceof Error?directoryResult.reason.message:'empty response'}`);
+  const currentSymbols=new Set(directory.map(company=>company.ticker));
+  for(const company of await previouslyTrackedCompanies())if(!currentSymbols.has(company.ticker))directory.push({...company,listingStatus:'not-confirmed-current'});
   let nasdaq = directory;
   if(latestResult.status==='fulfilled'){
     const latest=latestResult.value;
     const quotes = new Map((latest.data?.rows ?? []).map((row) => [row.symbol, row]));
     nasdaq = directory.map(company=>{
       const patch=quotePatch(quotes.get(company.ticker));
-      if(!Number.isFinite(patch.price)||!Number.isFinite(patch.marketCap))return company;
+      if(!Number.isFinite(patch.price)&&!Number.isFinite(patch.marketCap))return company;
       const availableAt=new Date().toISOString();
-      return {...company,...patch,quoteSource:'Nasdaq screener live',quoteAvailableAt:availableAt,priceSource:'Nasdaq screener live',priceAvailableAt:availableAt,priceUrl:NASDAQ_SCREENER,marketCapSource:'Nasdaq screener live',marketCapAvailableAt:availableAt,marketCapUrl:NASDAQ_SCREENER};
+      return {...company,...patch,quoteSource:'Nasdaq screener live',quoteAvailableAt:availableAt,...(Number.isFinite(patch.price)?{priceSource:'Nasdaq screener live',priceAvailableAt:availableAt,priceUrl:NASDAQ_SCREENER}:{}),...(Number.isFinite(patch.marketCap)?{marketCapSource:'Nasdaq screener live',marketCapAvailableAt:availableAt,marketCapUrl:NASDAQ_SCREENER}:{})};
     });
   } else recordProviderIssue(`Nasdaq screener: ${latestResult.reason instanceof Error?latestResult.reason.message:'provider request failed'}`);
   return options?.skipYahoo?nasdaq:yahooBulkQuotes(nasdaq);
@@ -880,7 +898,7 @@ export async function companySnapshot(company: Company, options: { includeOpport
   const last = history.at(-1), quoteDate = last?.date ?? bundledUniverse.generatedAt.slice(0, 10), quoteAvailableAt = last ? `${last.date}T21:00:00.000Z` : bundledUniverse.generatedAt;
   const quoteEvidence: Provenance = { source: historySource, url: historyUrl, periodEnd: quoteDate, availableAt: quoteAvailableAt > now ? now : quoteAvailableAt, retrievedAt: historyRetrievedAt, currency: 'USD', confidence: historySource.includes('fallback')?'low':'medium', rightsStatus:'unknown' };
   const price = last?.close ?? company.price ?? null;
-  const snapshot: Snapshot = { symbol, name: company.name, cik: company.cik, description: 'الوصف غير متاح من مصدر موثق لهذه اللقطة.', asOf: now, exchange: company.exchange, sector: company.sector, industry: company.industry, securityType: company.securityType??'unknown', price, marketCap: company.marketCap ?? null, confidence: 'C', deathSpiral: 'unknown', provenance: {}, history, dataIssues: issues, research: { financials: false, valuation: false, analysts: false, sector: !!company.sector } };
+  const snapshot: Snapshot = { symbol, name: company.name, cik: company.cik, description: 'الوصف غير متاح من مصدر موثق لهذه اللقطة.', asOf: now, exchange: company.exchange, sector: company.sector, industry: company.industry, securityType: company.securityType??'unknown', listingStatus:company.listingStatus, price, marketCap: company.marketCap ?? null, confidence: 'C', deathSpiral: 'unknown', provenance: {}, history, dataIssues: issues, research: { financials: false, valuation: false, analysts: false, sector: !!company.sector } };
   if(company.directoryUrl&&company.directoryAvailableAt){
     const identity:Provenance={source:'Nasdaq Trader official symbol directory',url:company.directoryUrl,periodEnd:company.directoryAvailableAt.slice(0,10),availableAt:company.directoryAvailableAt,retrievedAt:now,tag:company.securityName||company.securityType||'listed issue description',confidence:'high',rightsStatus:'unknown'};
     snapshot.provenance.exchange=identity;

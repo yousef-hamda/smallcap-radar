@@ -1,8 +1,10 @@
 /** Single shared contract for the unified opportunity category. */
 export const OPPORTUNITY_SPEC = {
   id: 'UNIFIED_OPPORTUNITY',
-  version: '1.2.3-dated-evidence-opportunity-system',
+  version: '1.2.4-complete-inventory-opportunity-system',
   defaultHorizonMonths: 6,
+  inventoryPolicy:'complete-official-files-plus-unconfirmed-tracked-listings',
+  supportedExchanges:['Nasdaq','NYSE','NYSE American','NYSE Arca','Cboe BZX','IEX','Texas Stock Exchange'],
   defaultRiskTolerance: 'medium' as const,
   // Include small and micro caps; liquidity is screened independently.
   marketCapMin: 0,

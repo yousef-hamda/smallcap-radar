@@ -313,6 +313,7 @@ export function preliminarySnapshot(company: Company, facts: BulkFundamentals | 
     asOf: retrievedAt,
     exchange: company.exchange,
     securityType: company.securityType??'unknown',
+    listingStatus:company.listingStatus,
     price: company.price ?? null,
     dailyChange:company.dailyChange??null,
     marketCap: company.marketCap ?? null,
@@ -324,7 +325,7 @@ export function preliminarySnapshot(company: Company, facts: BulkFundamentals | 
     confidence: 'C',
     deathSpiral: 'unknown',
     provenance: {},
-    dataIssues: [],
+    dataIssues: company.listingStatus==='not-confirmed-current'?['الإدراج الحالي غير مؤكد؛ يبقى السهم في الترتيب بدرجة كاملة دون نقاط استثمارية غير موثقة.']:[],
     research: { financials: false, valuation: false, analysts: false, sector: !!company.sector },
   };
   if(company.directoryUrl&&company.directoryAvailableAt){

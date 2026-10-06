@@ -7,11 +7,11 @@ import type {Snapshot} from './engine';
  * Carry forward issuer-matching observations with their original source dates;
  * a missing observation remains missing, rather than a favorable default. */
 export async function publishDirectoryRatings(run:any,pageSize=1000,limit=80){
- const d=db(),id=`${run.id}:ratings-v3`,key=`directory-rating:v3:${run.id}`;
+ const d=db(),id=`${run.id}:ratings-v4`,key=`directory-rating:v4:${run.id}`;
  let checkpoint=await d.prepare('SELECT payload FROM raw_cache WHERE key=?').bind(key).first() as any;
  if(!checkpoint){
   const prior=await d.prepare("SELECT id FROM strategy_runs r WHERE id<>? AND status IN ('complete','partial') AND stage>=13 AND source LIKE '%· full' AND EXISTS(SELECT 1 FROM fundamental_snapshots s WHERE s.run_id=r.id) ORDER BY updated_at DESC,created_at DESC LIMIT 1").bind(id).first() as any;
-  const state={id,offset:0,total:Number(run.universe_total||run.total),asOf:new Date().toISOString(),priorRunId:prior?.id??null,done:false};
+  const state={id,offset:0,total:Number(run.universe_total||run.total),asOf:new Date().toISOString(),priorRunId:prior?.id??null, fallbackRunId:(await d.prepare("SELECT id FROM strategy_runs r WHERE status IN ('complete','partial') AND stage>=13 AND source LIKE 'Bulk Quotes/%· full' AND EXISTS(SELECT 1 FROM fundamental_snapshots s WHERE s.run_id=r.id) ORDER BY updated_at DESC,created_at DESC LIMIT 1").first() as any)?.id??null,done:false};
   await d.batch([
    d.prepare("INSERT OR IGNORE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,'directory rating checkpoint',?,?)").bind(key,state.asOf,JSON.stringify(state)),
    d.prepare("INSERT OR IGNORE INTO strategy_runs(id,created_at,updated_at,status,source,total,universe_total,strategy_hash) VALUES(?,?,?,'running','Directory ratings · full',?,?,?)").bind(id,state.asOf,state.asOf,state.total,state.total,run.strategy_hash),
@@ -28,6 +28,8 @@ export async function publishDirectoryRatings(run:any,pageSize=1000,limit=80){
  }
  if(!entries.length&&state.offset<state.total)throw Error('Complete directory rating cursor has no listing');
  const symbols=entries.map(row=>row.ticker),priorRows=state.priorRunId?(await d.prepare(`SELECT id,symbol,payload,evaluation FROM fundamental_snapshots WHERE run_id=? AND symbol IN (${symbols.map(()=>'?').join(',')})`).bind(state.priorRunId,...symbols).all()).results as any[]:[];
+ const missing=symbols.filter(symbol=>!priorRows.some(row=>row.symbol===symbol));
+ if(state.fallbackRunId&&state.fallbackRunId!==state.priorRunId&&missing.length)priorRows.push(...(await d.prepare(`SELECT id,symbol,payload,evaluation FROM fundamental_snapshots WHERE run_id=? AND symbol IN (${missing.map(()=>'?').join(',')})`).bind(state.fallbackRunId,...missing).all()).results as any[]);
  const previous=new Map<string,Snapshot>();
  for(const row of priorRows)previous.set(row.symbol,JSON.parse((await restoreArchivedRow(row)).payload));
  const writes=[];
@@ -35,7 +37,7 @@ export async function publishDirectoryRatings(run:any,pageSize=1000,limit=80){
   const current=preliminarySnapshot(company,undefined,state.asOf),prior=previous.get(company.ticker);
   let snapshot=current;
   if(prior&&Number.isSafeInteger(current.cik)&&Number(current.cik)>0&&prior.cik===current.cik&&prior.securityType===current.securityType){
-   snapshot={...prior,name:current.name,exchange:current.exchange,asOf:state.asOf,provenance:{...prior.provenance}};
+   snapshot={...prior,name:current.name,exchange:current.exchange,listingStatus:current.listingStatus,asOf:state.asOf,provenance:{...prior.provenance}};
    for(const field of ['price','marketCap','volume','averageVolume10d','return12m','low52w','high52w'] as const){
     const evidence=current.provenance[field],old=prior.provenance[field];
     const observedAt=Date.parse(evidence?.availableAt??evidence?.periodEnd??''),previousAt=Date.parse(old?.availableAt??old?.periodEnd??'');
@@ -46,6 +48,7 @@ export async function publishDirectoryRatings(run:any,pageSize=1000,limit=80){
      if(field==='price'){snapshot.dailyChange=null;delete snapshot.provenance.dailyChange;}
     }
    }
+   if(current.listingStatus==='not-confirmed-current')snapshot.dataIssues=[...(snapshot.dataIssues??[]),...(current.dataIssues??[])];
    for(const field of ['exchange','securityType'])if(current.provenance[field])snapshot.provenance[field]=current.provenance[field];
   }
   writes.push(insertSnapshot(id,snapshot));

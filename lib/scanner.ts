@@ -1,3 +1,4 @@
+import {reconcileAcquisitionDirectory} from './directory-reconcile';
 import {publishDirectoryRatings} from './directory-rating';
 import { currentHash, db, ensureSchema, insertSnapshot, log } from './storage';
 import { companySnapshot, consumeProviderIssues, enrichSnapshotsWithSecOpportunity, historicalMarketData, quickSymbols, universe,yahooBulkQuotes } from './providers';
@@ -11,7 +12,7 @@ const PROVIDER_CONCURRENCY = 6;
 const SCORE_BATCH_SIZE = 200;
 const COMPANY_FACTS_BATCH_SIZE = 12;
 const OPPORTUNITY_BATCH_SIZE = 8;
-export const SCAN_SOURCE_VERSION = 'Bulk Quotes/SEC Frames + Opportunity SEC v13';
+export const SCAN_SOURCE_VERSION = 'Bulk Quotes/SEC Frames + Opportunity SEC v14';
 const UNIVERSE_PAGE=100;
 const universePageSize=(run:any)=>run.universe==='paged-v2'?UNIVERSE_PAGE:1000;
 async function saveUniverse(runId:string,companies:any[],kind='candidates',pageSize=UNIVERSE_PAGE){
@@ -87,7 +88,7 @@ async function initializeRun(run:any) {
     const quoteCoverage = companies.filter((company: any) => Number.isFinite(company.price) && Number.isFinite(company.marketCap)).length;
     const directory=mode==='quick'?companies.filter((c:any)=>quickSymbols.includes(c.ticker)):companies;
     await saveUniverse(id,directory,'quotes');
-    await database.prepare("UPDATE strategy_runs SET universe='paged-v2',total=?,universe_total=?,quote_coverage=?,stage=1,offset=0,lease_until=0,retry_queue='[]',error=NULL,updated_at=? WHERE id=?").bind(directory.length, universeTotal, quoteCoverage, new Date().toISOString(), id).run();
+    await database.prepare("UPDATE strategy_runs SET directory_version=1,universe='paged-v2',total=?,universe_total=?,quote_coverage=?,stage=1,offset=0,lease_until=0,retry_queue='[]',error=NULL,updated_at=? WHERE id=?").bind(directory.length, universeTotal, quoteCoverage, new Date().toISOString(), id).run();
     await log(id, 'universe', `Loaded ${universeTotal} directory rows (${mode}); quotes will be checkpointed in groups of ${UNIVERSE_PAGE}.`);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'تعذّر تجهيز دليل الشركات';
@@ -112,6 +113,9 @@ export async function processScanBatch(runId: string) {
   if (!lock.meta.changes) return { run: publicRun(run), done: false, busy: true };
 
   if(run.stage===0)return initializeRun(run);
+
+  try{if(await reconcileAcquisitionDirectory(run))return {run:publicRun(await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first()),done:false};}
+  catch(error){return failDirectoryCheckpoint(run,initialQueue,error);}
 
   if(run.stage===1&&run.universe==='paged-v1'){
     const records=[];

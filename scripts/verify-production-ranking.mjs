@@ -14,6 +14,22 @@ const rows=database.prepare('SELECT s.symbol,s.evaluation,r.score,r.rank_positio
 const factorGrades=new Map();
 const total=database.prepare('SELECT COUNT(*) AS n FROM fundamental_snapshots WHERE run_id=?').get(run.id).n;
 assert.equal(rows.length,total);
+// Independently count raw official non-ETF/non-test rows, including alternate
+// Nasdaq symbols and every exchange code. A selected run count alone is not
+// evidence that the universe is complete.
+const officialUrls=['https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt','https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt'];
+const officialFiles=await Promise.all(officialUrls.map(async url=>{const response=await fetch(url,{signal:AbortSignal.timeout(30000)});assert.equal(response.status,200,url);const text=await response.text();assert.match(text,/(?:^|\n)File Creation Time:/);return text;}));
+const officialSymbols=new Set();
+for(const [fileIndex,text]of officialFiles.entries())for(const line of text.split(/\r?\n/).slice(1)){
+ const c=line.split('|');if(c.length<8||c[fileIndex===0?3:6]==='Y'||c[fileIndex===0?6:4]==='Y'||line.startsWith('File Creation Time:'))continue;
+ const valid=value=>/^[A-Z][A-Z0-9.^-]{0,15}$/.test(value??'');const symbol=valid(c[0])?c[0]:fileIndex===1&&valid(c[7])?c[7]:null;assert.ok(symbol,`Unrepresentable official issue: ${c[0]}`);officialSymbols.add(symbol);
+}
+const savedSymbols=new Set(rows.map(row=>row.symbol));for(const symbol of officialSymbols)assert.ok(savedSymbols.has(symbol),`Official listed stock missing from ranking: ${symbol}`);
+const previousRun=database.prepare("SELECT id FROM strategy_runs r WHERE id<>? AND status IN ('complete','partial') AND stage>=13 AND source LIKE 'Bulk Quotes/%· full' AND EXISTS(SELECT 1 FROM fundamental_snapshots s WHERE s.run_id=r.id) ORDER BY updated_at DESC,created_at DESC LIMIT 1").get(run.id);
+const previousSymbols=previousRun?database.prepare('SELECT symbol FROM fundamental_snapshots WHERE run_id=?').all(previousRun.id).map(row=>row.symbol):[];
+for(const symbol of previousSymbols)assert.ok(savedSymbols.has(symbol),`Previously tracked stock disappeared: ${symbol}`);
+const extras=rows.filter(row=>!officialSymbols.has(row.symbol));for(const row of extras){const payload=JSON.parse(database.prepare('SELECT payload FROM fundamental_snapshots WHERE run_id=? AND symbol=?').get(run.id,row.symbol).payload);assert.equal(payload.listingStatus,'not-confirmed-current',row.symbol);assert.equal(row.score,0,row.symbol);}
+console.log(JSON.stringify({stage:'inventory',officialListed:officialSymbols.size,previousTracked:previousSymbols.length,retainedUnconfirmed:extras.length,total,missingOfficial:0,missingPreviouslyTracked:0}));
 const bySymbol=new Map();const weights=[25,20,15,12,10,10,5,3],factorIds=['valuation','catalysts','financialStrength','earningsQuality','competitivePosition','downsideRisk','management','technicalTiming'];
 for(const [index,row] of rows.entries()){
  const evaluation=JSON.parse(row.evaluation).opportunity;

@@ -361,7 +361,7 @@ test('intraday parser removes null, duplicate and future points and uses previou
 });
 test('official directory excludes ETF and test issues and joins SEC CIKs',()=>{
  const nasdaq='Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF|NextShares\nAAA|AAA old|Q|N|N|100|N|N\nETFZ|Fund|Q|N|N|100|Y|N\nTEST|Test|Q|Y|N|100|N|N';
- const other='ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|Round Lot Size|Test Issue|NASDAQ Symbol\nBBB|BBB Inc|N|BBB|N|100|N|BBB\nOTC|OTC Inc|U|OTC|N|100|N|OTC';
+ const other='ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|Round Lot Size|Test Issue|NASDAQ Symbol\nBBB|BBB Inc|N|BBB|N|100|N|BBB';
  assert.deepEqual(parseOfficialDirectory(nasdaq,other,{'0':{ticker:'AAA',title:'AAA SEC',cik_str:123},'1':{ticker:'BBB',title:'BBB SEC',cik_str:456}}),[{ticker:'AAA',name:'AAA SEC',exchange:'Nasdaq',cik:123,securityType:'unknown',securityName:'AAA old',directoryUrl:'https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt'},{ticker:'BBB',name:'BBB SEC',exchange:'NYSE',cik:456,securityType:'unknown',securityName:'BBB Inc',directoryUrl:'https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt'}]);
 });
 test('official directory joins SEC dash symbols to Nasdaq dot share classes',()=>{
@@ -1243,4 +1243,34 @@ test('Form 4 verifies issuer, security, transaction window, full totals and amen
   const amended=structuredClone(payload);amended.filings.recent.form.push('4/A');amended.filings.recent.accessionNumber.push('0000999995-26-000003');amended.filings.recent.primaryDocument.push('amend.xml');amended.filings.recent.filingDate.push('2026-09-25');
   result=await fetchInsiderPurchases(cik,asOf,amended);assert.equal(result.coverage.state,'partial');assert.equal(result.observedPurchaseValue,0);assert.match(result.coverage.message,/amendments/);
  }finally{globalThis.fetch=original;}
+});
+
+
+test('complete official inventory retains alternate preferred symbols and all exchange codes',()=>{
+ const header='ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|Round Lot Size|Test Issue|NASDAQ Symbol';
+ const other=header+'\nBAC$B|Bank Series B Preferred Stock|N|BACpB|N|100|N|BAC-B\nDDS|Dillards Common Stock|F|DDS|N|100|N|DDS\nARCA|Arca Common Stock|P|ARCA|N|100|N|ARCA\nBZX|BZX Common Stock|Z|BZX|N|100|N|BZX\nNEXT|Unknown exchange Common Stock|U|NEXT|N|100|N|NEXT\n';
+ const rows=parseOfficialDirectory('',other,{});assert.equal(rows.length,5);
+ assert.equal(rows.find(row=>row.ticker==='BAC-B').securityType,'preferred');
+ assert.equal(rows.find(row=>row.ticker==='DDS').exchange,'Texas Stock Exchange');
+ assert.equal(rows.find(row=>row.ticker==='ARCA').exchange,'NYSE Arca');
+ assert.equal(rows.find(row=>row.ticker==='BZX').exchange,'Cboe BZX');
+ assert.equal(rows.find(row=>row.ticker==='NEXT').exchange,'Exchange code U');
+ assert.equal(classifyListedSecurity('Acquisition Units, each consisting of common shares and one redeemable warrant'),'unit');
+ assert.equal(classifyListedSecurity('Preferred Units representing limited partnership interests'),'preferred');
+});
+
+test('unconfirmed current membership preserves all eight numeric grades and withholds unsupported points',()=>{
+ const snapshot={...base,listingStatus:'not-confirmed-current'};
+ const evaluated=currentOpportunityEvaluation(snapshot);
+ assert.equal(evaluated.state,'ranked');assert.equal(evaluated.rankingEligible,true);assert.equal(evaluated.score,0);
+ assert.equal(evaluated.factors.length,8);assert(evaluated.factors.every(factor=>factor.score===0));
+ assert.equal(evaluated.checks.find(check=>check.id==='listing-membership').status,'UNKNOWN');
+ assert.equal(evaluated.thesis.valuation.status,'unavailable');assert.equal(evaluated.thesis.action,'research-required');
+});
+
+test('full inventory rejects a partial exchange download instead of shrinking the universe',async()=>{
+ const original=globalThis.fetch,{universe:fetchUniverse}=await import('../../.test-build/providers.mjs?incomplete-full-directory');
+ const {env}=await import('../runtime/env.mjs');await env.DB.prepare('CREATE TABLE IF NOT EXISTS listing_directory_cache(id INTEGER PRIMARY KEY CHECK(id=1),content_hash TEXT NOT NULL,body_gzip BLOB NOT NULL)').run();await env.DB.prepare('DELETE FROM listing_directory_cache').run();
+ globalThis.fetch=async url=>{const text=String(url);if(text.endsWith('/nasdaqlisted.txt'))return new Response('Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF|NextShares\nONLY|Only Common Stock|Q|N|N|100|N|N\nFile Creation Time: 1006202623:00|');throw Error('Injected unavailable other-listed directory');};
+ try{await assert.rejects(fetchUniverse({skipYahoo:true}),/Complete official listing inventory unavailable/);}finally{globalThis.fetch=original;}
 });

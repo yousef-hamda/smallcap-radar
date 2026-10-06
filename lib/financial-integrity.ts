@@ -23,14 +23,14 @@ export function compatibleSnapshotMetrics(snapshot: Snapshot, keys: string[], ki
 /** Missing security terms cannot turn issuer fundamentals into a different
  * instrument's per-share economics. Other securities keep numeric grades. */
 export function operatingIssuerMetricsApplicable(snapshot: Snapshot) {
-  return snapshot.securityType === 'common' || snapshot.securityType === 'adr';
+  return snapshot.listingStatus!=='not-confirmed-current' && (snapshot.securityType === 'common' || snapshot.securityType === 'adr');
 }
 
 export function commonPerShareMetricsApplicable(snapshot: Snapshot) {
-  return snapshot.securityType === 'common'
+  return snapshot.listingStatus!=='not-confirmed-current' && (snapshot.securityType === 'common'
     || (snapshot.securityType === 'adr' && !!snapshot.adrRatio && snapshot.adrRatio.value > 0
       && usableEvidence(snapshot.adrRatio.source,snapshot.asOf)
-      && Date.parse(snapshot.adrRatio.source.retrievedAt) <= Date.parse(snapshot.asOf));
+      && Date.parse(snapshot.adrRatio.source.retrievedAt) <= Date.parse(snapshot.asOf)));
 }
 
 export function commercialObservationKind(snapshot: Snapshot) {

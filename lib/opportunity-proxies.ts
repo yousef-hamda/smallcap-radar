@@ -13,6 +13,7 @@ type Component = { name: string; weight: number; grade: number | null; keys: str
 /** Fixed component denominators: missing observations earn zero, never a positive prior.
  * These are model estimates, not assertions of fair value, a moat, or reviewed governance. */
 export function proxyOpportunityEvidence(snapshot: Snapshot): OpportunityEvidenceSet {
+  if(snapshot.listingStatus==='not-confirmed-current')snapshot={...snapshot,provenance:{},peerContext:undefined,opportunityResearch:undefined};
   const output: OpportunityEvidenceSet = {};
   const ownPeer=peerObservation(snapshot);
   const validatedPeerContext=snapshot.peerContext?peerContext(snapshot,uniqueIssuerPeers(snapshot.peerContext.peers)):undefined;

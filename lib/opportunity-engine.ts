@@ -2,7 +2,6 @@ import type { Snapshot, Provenance, Status } from './engine';
 import { proxyOpportunityEvidence } from './opportunity-proxies';
 import { usableEvidence } from './evidence';
 import { OPPORTUNITY_SPEC, opportunitySpecHash, type OpportunityFactorId, type OpportunityRiskTolerance } from './opportunity-spec';
-import { INVESTABLE_EXCHANGES } from './strategy-spec';
 import { financialIntegrityFindings, operatingIssuerMetricsApplicable, commonPerShareMetricsApplicable } from './financial-integrity';
 import {buildOpportunityThesis,type OpportunityThesis} from './opportunity-thesis';
 
@@ -152,13 +151,14 @@ export function evaluateOpportunity(
 
   const securityEvidence = snapshot.provenance.securityType;
   const exchangeEvidence = snapshot.provenance.exchange;
-  const securityKnown = !!snapshot.securityType && snapshot.securityType!=='unknown' && !!snapshot.exchange
+  const securityKnown = snapshot.listingStatus!=='not-confirmed-current' && !!snapshot.securityType && snapshot.securityType!=='unknown' && !!snapshot.exchange
     && !!securityEvidence && isOpportunityIdentityEvidenceValid(securityEvidence, snapshot.asOf)
     && !!exchangeEvidence && isOpportunityIdentityEvidenceValid(exchangeEvidence, snapshot.asOf);
   const securityValid = securityKnown
     && snapshot.securityType === 'common'
-    && (INVESTABLE_EXCHANGES as readonly string[]).includes(snapshot.exchange!);
-  const adrNeedsConversion=securityKnown&&snapshot.securityType==='adr'&&(INVESTABLE_EXCHANGES as readonly string[]).includes(snapshot.exchange!);
+    && (OPPORTUNITY_SPEC.supportedExchanges as readonly string[]).includes(snapshot.exchange!);
+  const adrNeedsConversion=securityKnown&&snapshot.securityType==='adr'&&(OPPORTUNITY_SPEC.supportedExchanges as readonly string[]).includes(snapshot.exchange!);
+  if(snapshot.listingStatus==='not-confirmed-current')add('listing-membership','UNKNOWN','Current official listing is unconfirmed; retained with complete numeric grades and no unsupported investment credit.');
   add('security',!securityKnown?'UNKNOWN':securityValid?'PASS':adrNeedsConversion?'UNKNOWN':'FAIL',adrNeedsConversion?'ADR identified; per-ADR conversion ratio must be reconciled before per-share valuation.':`${snapshot.securityType ?? 'unknown security type'} / ${snapshot.exchange ?? 'unknown exchange'}`);
 
   const capEvidence = snapshot.provenance.marketCap;
@@ -211,8 +211,8 @@ export function evaluateOpportunity(
     // A reviewed partial assessment is normalized to the full factor once.
     // Model grades already use their complete fixed component denominator.
     const model = models[spec.id]!;
-    const applicable = spec.id === 'technicalTiming' || (operatingIssuerMetricsApplicable(snapshot)
-      && (spec.id !== 'valuation' || commonPerShareMetricsApplicable(snapshot)));
+    const applicable = snapshot.listingStatus!=='not-confirmed-current' && (spec.id === 'technicalTiming' || (operatingIssuerMetricsApplicable(snapshot)
+      && (spec.id !== 'valuation' || commonPerShareMetricsApplicable(snapshot))));
     const useReviewed = applicable && evidenced && !proxy;
     const score = !applicable ? 0 : useReviewed
       ? Math.round(Math.round(candidate!.score! * 100) * Math.round(rawCoverage * 100) / 10000) / 100
