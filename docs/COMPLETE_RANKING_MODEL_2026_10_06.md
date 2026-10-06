@@ -1,6 +1,6 @@
 # Complete-universe rating model
 
-Active rubric: `1.0.3-deterministic-universe-ranking`. This is the final mathematical research rating used for sorting and display. Source review completeness, confidence and tradability findings are separate diagnostics.
+Active rubric: `1.2.1-reproducible-opportunity-system`. This is the final mathematical research rating used for sorting and display. Source review completeness, confidence and tradability findings are separate diagnostics.
 
 ## Fixed factor weights and arithmetic
 
@@ -23,11 +23,11 @@ Valid reviewed dossier calculators take priority. Reviewed partial grades count 
 
 | Factor | Fixed component shares of its 0–10 grade |
 |---|---|
-| Valuation | Sales multiple 70%; FCF yield 20%; observed growth with a positive pricing anchor 10% |
-| Catalysts | Observed growth 50%; disclosed backlog/revenue 30%; dated earnings window 20% (only 2/10 component credit for timing, no assumed favorable result) |
+| Valuation | Normalized intrinsic scenarios 60%; sales multiple 25%; FCF yield 15% |
+| Catalysts | Observed growth 50%; explicitly classified backlog/RPO with disclosed recognition in the research horizon 30%; dated earnings window 20% (only 2/10 component credit for timing, no assumed favorable result) |
 | Financial strength | Cash/debt 40%; FCF margin 40%; cash runway 20% |
 | Earnings quality | Profit margin 30%; FCF margin 40%; FCF/profit cash conversion 30% |
-| Competitive position | Gross margin 50%; operating-margin direction 30%; observed growth 20% |
+| Competitive position | Gross margin 30%; comparable SEC-SIC gross-margin percentile 20%; operating-margin direction 30%; observed growth 20% |
 | Downside risk | Cash/debt 40%; dilution 30%; sourced financing finding 30% |
 | Management | Dilution discipline 40%; sourced insider purchases 30%; sourced earnings outcome 30% |
 | Technical timing | Price/30-week MA 40%; 52-week range position 30%; trailing return 30% |
@@ -45,3 +45,13 @@ Canonical grades are stored in `fundamental_snapshots.evaluation.opportunity` wi
 Radar, company profiles, favorites, reports and exports reuse canonical saved evaluations and ranks. Company profiles for universe members refresh through the scan acquisition pipeline, keeping their grade consistent with the ranking snapshot. Outside-universe research uses the same evaluator. Scored cards keep prices paired with their snapshot. Arabic UI shows two decimal final grades and numeric zero, defaults to complete rankings and exposes source/safety findings independently. A detailed source-review section cannot override the final factor grid.
 
 The rating measures available observations at their stated snapshot dates. It does not establish a positive investment conclusion where evidence is missing, and it does not claim complete qualitative diligence. Existing dated source limitations remain visible.
+
+## Opportunity thesis, publication and operations
+
+Three compatible consecutive annual USD periods, a sourced industrial model, reviewed splits and one common listing in a complete selected universe support conditional intrinsic sensitivities. Owner cash flow subtracts capex and SBC. Fixed five-year bear/base/bull assumptions are cross-checked against normalized earnings; use the lower equity estimate. Senior claims, unlisted classes and fully diluted capitalization remain diligence gaps, so this does not claim an observed fair value or six-month price target. Integer-year discount factors use repeated multiplication, and currency outputs are rounded to cents before hashing.
+
+Peer context uses at least five distinct issuer CIKs with the same SEC SIC, fiscal ends within 45 days, USD revenue/gross profit and revenue within 0.25–4 times. At most twenty peers are chosen by revenue distance. Sources and exact percentile traces are saved. These are industry comparisons, not verified direct competitors or moat findings.
+
+Run/revision/rubric release tokens pin radar pages, profiles, reports and complete streamed exports. Database leases coordinate builders; conditional rank publication rejects concurrent raw mutation. Compact radar cards retain canonical scores and hashes. Historical source snapshots/evaluations are restored losslessly from compressed archives. The independent production scheduler resumes durable jobs, maintains history storage, shares a persistent SEC quota and uses issuer-verified compressed artifact caches. It may begin a refresh during compression when at least 512 MiB of reusable SQLite pages are available.
+
+Probability remains null until a genuine point-in-time study, delisted outcomes, dividend/action coverage, executable entries, costs, purged chronological splits and issuer holdouts pass. Investment evidence and source rights are never certified by numerical completeness alone.

@@ -1,6 +1,6 @@
 # Opportunity system release candidate — 2026-10-06
 
-Implementation rubric: `1.2.0-evidence-opportunity-system`. Deployment and current production proof are pending; this section does not supersede the last verified production release until the final verification is recorded.
+Implementation rubric: `1.2.1-reproducible-opportunity-system`. Final deployment and current production proof are pending; this section does not supersede the last verified production release until the final verification is recorded.
 
 - The complete mathematical ranking remains mandatory: eight numeric grades, fixed 25/20/15/12/10/10/5/3 weights, exact 100-point arithmetic, score descending / symbol ascending. Safety/evidence/action status never removes listings.
 - Financial normalization promotes only compatible annual/TTM/balance observations. Aggregate borrowing concepts replace component addition when available; contract liabilities are distinct from RPO/backlog. Incompatible or unsupported evidence earns no component credit. Legacy clean financing findings cannot survive an incomplete current recomputation.

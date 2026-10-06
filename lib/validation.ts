@@ -8,7 +8,7 @@ const sourceFields={
  periodStart:z.string().optional(),periodEnd:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),availableAt:timestamp,retrievedAt:timestamp,
  currency:z.string().max(8).optional(),tag:z.string().max(1000).optional(),confidence:z.enum(['high','medium','low']),
  rightsStatus:z.enum(['public-domain','redistribution-permitted','licensed','personal-use-only','restricted','unknown']).optional(),
- scope:z.string().max(200).optional(),metricScope:z.string().max(300).optional(),accession:z.string().max(80).optional(),parserVersion:z.string().max(80).optional(),
+ scope:z.string().max(200).optional(),metricScope:z.string().max(300).optional(),accession:z.string().max(80).optional(),parserVersion:z.string().max(80).optional(),contentHash:z.string().regex(/^[a-f0-9]{64}$/).optional(),
  conversion:z.object({rate:z.number().finite().positive(),sourceCurrency:z.string().max(8),targetCurrency:z.literal('USD'),method:z.enum(['period-average-daily-reference-cross-rate','period-end-prior-daily-reference-cross-rate']),ratePeriodStart:z.string(),ratePeriodEnd:z.string(),observationCount:positiveCount,sourceUrl:z.string().url(),rateProvider:z.string().max(300),inputAvailableAt:timestamp,inputRetrievedAt:timestamp}).optional(),
 };
 function evidenceSchema(depth:number):z.ZodTypeAny{return z.object({...sourceFields,dependencies:depth?z.array(evidenceSchema(depth-1)).max(100).optional():z.array(z.never()).max(0).optional()});}

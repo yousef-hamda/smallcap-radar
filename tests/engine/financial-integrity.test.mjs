@@ -135,3 +135,10 @@ test('SEC artifacts survive module reload, validate hashes and identities, and e
  await recordSecArtifact(url,null,'HTTP 403',now);
  const status=await runtimeEnv.DB.prepare('SELECT last_error,last_success_at FROM provider_acquisition_status WHERE url=?').bind(url).first();assert.equal(status.last_error,'HTTP 403');assert.equal(status.last_success_at,now);
 });
+
+test('intrinsic discounted currency estimates publish cents without fractional hash noise',()=>{
+ const fixture=valuationFixture();fixture.opportunityResearch.earnings.annual.forEach((period,index)=>{period.metrics.operatingCashFlow.value=12345678901.23+index*111111;period.metrics.netIncome.value=9876543210.34;});
+ const thesis=buildOpportunityThesis(fixture);assert.equal(thesis.valuation.status,'available');
+ for(const scenario of thesis.valuation.scenarios)assert.equal(scenario.cashflowValue,Number(scenario.cashflowValue.toFixed(2)));
+ assert.deepEqual(buildOpportunityThesis(structuredClone(fixture)),thesis);
+});

@@ -2,7 +2,7 @@ import type {Snapshot,Provenance} from './engine';
 import {commonPerShareMetricsApplicable,compatibleFinancialSources} from './financial-integrity';
 import {usableEvidence} from './evidence';
 
-export const INTRINSIC_POLICY = Object.freeze({version:'normalized-owner-cashflow-v1',years:5,bearReturn:.18,baseReturn:.14,bullReturn:.10,terminalGrowth:.02,maxGrowth:.15,minGrowth:-.10,earningsMultiples:[8,12,16]});
+export const INTRINSIC_POLICY = Object.freeze({version:'normalized-owner-cashflow-v2',years:5,bearReturn:.18,baseReturn:.14,bullReturn:.10,terminalGrowth:.02,maxGrowth:.15,minGrowth:-.10,earningsMultiples:[8,12,16]});
 export type IntrinsicScenario={name:'bear'|'base'|'bull';requiredReturn:number;initialGrowth:number;terminalGrowth:number;cashflowValue:number;earningsValue:number;equityValue:number;valuePerSecurity:number;upside:number;discount:number};
 export type OpportunityThesis={modelVersion:string;horizonMonths:number;probability:null;calibrationStatus:'unvalidated';valuation:{status:'available'|'unavailable';method:string;normalizedCashflow:number|null;normalizedEarnings:number|null;scenarios:IntrinsicScenario[];sources:Provenance[];gaps:string[];assumptions:typeof INTRINSIC_POLICY};sixMonthTarget:null;catalysts:Array<{id:string;date:string;title:string;status:'unreviewed';source:string}>;funding:{cash:number|null;debt:number|null;cashCurrency:string|null;debtCurrency:string|null;cashRunwayMonths:number|null;dilution:number|null};invalidation:string[];action:'research-required'|'risk-review'|'candidate-review'};
 const median=(values:number[])=>{const sorted=[...values].sort((a,b)=>a-b),i=Math.floor(sorted.length/2);return sorted.length%2?sorted[i]:(sorted[i-1]+sorted[i])/2;};
@@ -47,12 +47,16 @@ export function buildOpportunityThesis(snapshot:Snapshot,horizonMonths=6):Opport
     const requiredReturn=[INTRINSIC_POLICY.bearReturn,INTRINSIC_POLICY.baseReturn,INTRINSIC_POLICY.bullReturn][index];
     const initialGrowth=index===0?Math.min(0,growth):index===1?growth:clamp(growth+.05,INTRINSIC_POLICY.minGrowth,INTRINSIC_POLICY.maxGrowth);
     const terminalGrowth=Math.min(INTRINSIC_POLICY.terminalGrowth,initialGrowth);
-    let cashflow=normalizedCashflow!,cashflowValue=0;
+    let cashflow=normalizedCashflow!,cashflowValue=0,discountFactor=1;
     for(let year=1;year<=INTRINSIC_POLICY.years;year++){
      const fadedGrowth=initialGrowth+(terminalGrowth-initialGrowth)*(year-1)/(INTRINSIC_POLICY.years-1);
-     cashflow*=1+fadedGrowth;cashflowValue+=cashflow/(1+requiredReturn)**year;
+     cashflow*=1+fadedGrowth;discountFactor*=1+requiredReturn;cashflowValue+=cashflow/discountFactor;
     }
-    cashflowValue+=cashflow*(1+terminalGrowth)/(requiredReturn-terminalGrowth)/(1+requiredReturn)**INTRINSIC_POLICY.years;
+    cashflowValue+=cashflow*(1+terminalGrowth)/(requiredReturn-terminalGrowth)/discountFactor;
+    // Integer-year discounting uses repeated IEEE arithmetic instead of the
+    // platform-dependent pow implementation; publish currency sensitivities
+    // to cents so source hashes do not encode insignificant runtime precision.
+    cashflowValue=Number(cashflowValue.toFixed(2));
     const earningsValue=normalizedEarnings!*INTRINSIC_POLICY.earningsMultiples[index];
     // Cash flows already include debt interest. Do not add cash/subtract debt
     // again, or assume unknown senior claims are zero. Use the lower cross-check.

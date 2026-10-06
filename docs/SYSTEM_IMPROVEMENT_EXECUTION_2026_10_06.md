@@ -71,3 +71,13 @@ Final test results, deployment identity and live complete-universe proof will fo
 - Backup download/checksum, actual restoration/integrity and private-state counts: PASS.
 
 Intermediate failures were corrected and rerun: legacy valuation assertions after the fixed 60/25/15 model, missing Company source-URL typing, incomplete financing-period fixtures, and report blocker role/label mismatches. Initial streamed backup transfer failed; the bounded resumable transfer and restoration passed. No predictive-validation claim follows from these tests.
+
+### Production findings and corrected release
+
+First improvement deployment `42d9a3d3-4b68-4d87-a1d1-abbd6a6eb52f` (archive from commit `57571e4`) successfully persisted 6,954 complete grades, zero missing factors/final grades and all sorted ranks under `1.2.0` / `3690a5dc`. Initial migration took 171.8 seconds. All radar and report rows matched persistence. Full independent replay found platform-dependent power arithmetic at ADI: a roughly 0.000002-dollar DCF difference changed the evaluation hash despite identical displayed grades. This is a real acceptance failure, not a passing replay.
+
+Corrected rubric `1.2.1-reproducible-opportunity-system` uses repeated multiplication for integer-year discounting and cents for cash-flow currency outputs. Independently computed thesis JSON for all 6,954 original production payloads now has identical SHA-256 on macOS Node 22.21 and production Linux Node 22.23.2: `65b6d6635a658f33f4659bdc7e3a9fc2149ef64ac7bd425ea90809a65a3ed7dc`. All 404 intrinsic models remain available. Final deployed evaluation replay remains required after deployment.
+
+Scheduler correction: compression must not block a fresh scan when at least 512 MiB of reusable SQLite pages exist. Refresh metadata is rubric-specific; failed fresh runs use a 30-minute retry interval. Historical inline records omit bulky history/news/purchase/peer lists while their exact original bytes remain archived. The first deployed maintenance tick freed about 476 MiB of derived terminal checkpoints; source/history compression continues. Offline saved rows now show their exact saved grades, factor values and rank rather than only prices.
+
+Ownership currency rule follows the [SEC Form 4 instructions](https://www.sec.gov/files/form4.pdf): per-share security prices are reported in USD. Every positive purchase aggregate now preserves hashes/accessions/parser identity and dependency records for all contributing filing documents, including purchases omitted from the capped twenty-row UI list. Code P still does not establish public-market execution, alignment quality or absence of amendments.

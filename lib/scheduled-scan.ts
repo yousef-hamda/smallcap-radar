@@ -9,9 +9,11 @@ export async function scheduledScanTick(now=Date.now()) {
  const active=await db().prepare("SELECT id FROM strategy_runs WHERE strategy_hash=? AND source LIKE 'Bulk Quotes/%' AND status IN ('running','partial') AND stage<13 ORDER BY created_at DESC LIMIT 1").bind(currentHash()).first() as any;
  let id=active?.id;
  if(!id) {
-  if(maintenance.more)return {maintenance};
-  const latest=await db().prepare("SELECT id,created_at FROM strategy_runs WHERE status IN ('complete','partial','failed') AND source LIKE 'Bulk Quotes/%' AND source LIKE '%· full' ORDER BY created_at DESC LIMIT 1").first() as any;
-  if(latest&&now-Date.parse(latest.created_at)<24*60*60_000)return {idle:true,nextDueAt:new Date(Date.parse(latest.created_at)+24*60*60_000).toISOString()};
+  const reusable=await db().prepare('PRAGMA freelist_count').first() as any;
+  if(maintenance.more&&Number(reusable?.freelist_count??0)<131072)return {maintenance};
+  const latest=await db().prepare("SELECT id,created_at,status FROM strategy_runs WHERE strategy_hash=? AND status IN ('complete','partial','failed') AND source LIKE 'Bulk Quotes/%' AND source LIKE '%· full' ORDER BY created_at DESC LIMIT 1").bind(currentHash()).first() as any;
+  const refreshDelay=latest?.status==='failed'?30*60_000:24*60*60_000;
+  if(latest&&now-Date.parse(latest.created_at)<refreshDelay)return {idle:true,nextDueAt:new Date(Date.parse(latest.created_at)+refreshDelay).toISOString()};
   id=(await startScan('full')).id;
  }
  const result=await processScanBatch(String(id));

@@ -1235,7 +1235,7 @@ test('Form 4 verifies issuer, security, transaction window, full totals and amen
  let xml='<ownershipDocument><issuer><issuerCik>'+cik+'</issuerCik></issuer><reportingOwner><rptOwnerName>Officer</rptOwnerName></reportingOwner>'+transaction('Common Stock').repeat(25)+transaction('Preferred Stock')+'</ownershipDocument>';
  globalThis.fetch=async()=>new Response(xml);
  try{
-  let result=await fetchInsiderPurchases(cik,asOf,payload);assert.equal(result.coverage.state,'complete');assert.equal(result.purchases.length,20);assert.equal(result.observedPurchaseValue,500);assert.match(result.purchases[0].contentHash,/^[a-f0-9]{64}$/);
+  let result=await fetchInsiderPurchases(cik,asOf,payload);assert.equal(result.coverage.state,'complete');assert.equal(result.purchases.length,20);assert.equal(result.observedPurchaseValue,500);assert.equal(result.observedPurchaseSources.length,1);assert.equal(result.observedPurchaseSources[0].contentHash,result.purchases[0].contentHash);assert.match(result.purchases[0].contentHash,/^[a-f0-9]{64}$/);
   xml=xml.replace('<issuerCik>'+cik+'</issuerCik>','<issuerCik>1</issuerCik>');result=await fetchInsiderPurchases(cik,asOf,payload);assert.equal(result.coverage.state,'partial');assert.equal(result.observedPurchaseValue,0);
   xml='<ownershipDocument><issuer><issuerCik>'+cik+'</issuerCik></issuer><reportingOwner></reportingOwner>'+transaction('Common Stock','2026-10-01')+'</ownershipDocument>';
   result=await fetchInsiderPurchases(cik,asOf,payload);assert.equal(result.coverage.state,'partial');assert.equal(result.observedPurchaseValue,0);

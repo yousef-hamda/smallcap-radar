@@ -492,7 +492,7 @@ export async function fetchSec8KItemIndex(payload:any,cik:number,asOf:string,ret
    if(body.truncated){truncatedDocuments++;continue;}
    if(!/<(?:html|document|ix:[a-z]+)/i.test(body.text)){failedDocuments++;recordProviderIssue(`SEC 8-K ${filing.accession}: response did not contain a recognizable filing document`);continue;}
    totalBytes+=body.bytes;fetchedDocuments++;
-   const archived=await persistFilingDocument({cik,accession:filing.accession,url:filing.url,filed:filing.filed,retrievedAt,asOf,body:body.text});
+   const archived=await persistFilingDocument({cik,accession:filing.accession,url:filing.url,filed:filing.filed,retrievedAt:new Date().toISOString(),asOf,body:body.text});
    items.push({accession:filing.accession,filed:filing.filed,form:'8-K',url:filing.url,referencedItemNumbers:parseSec8KItemReferences(body.text),...archived});
   }catch(error){failedDocuments++;recordProviderIssue(`SEC 8-K ${filing.accession}: ${error instanceof Error?error.message:'document retrieval failed'}`);}
  }
@@ -664,10 +664,11 @@ export async function fetchInsiderPurchases(cik: number,asOf:string,submissionsI
     if(unattemptedForm4Count)limitations.push(`The ${INSIDER_FORM4_MAX_DURATION_MS/1000}-second profile research budget ended with ${unattemptedForm4Count} selected filing document(s) not fetched; coverage is partial.`);
     if(!failedForm4Count&&!invalidForm4Count&&!unattemptedForm4Count&&reviewedForm4Count<filings.length)limitations.push(`${reviewedForm4Count} of ${filings.length} selected Form 4 filings passed document validation.`);
     const message=complete?'All Form 4 filings in the verified 12-month SEC index window were fetched and reviewed for code-P common-share purchases; code P alone does not distinguish public-market and private purchases.':limitations.join(' ');
-    return {purchases,observedPurchaseValue:amendments.length?0:parsed.reduce((sum,item)=>sum+item.value,0),coverage:{...coverage,fetchedForm4Count,failedForm4Count,reviewedForm4Count,invalidForm4Count,unattemptedForm4Count,httpStatusCounts,state,message}};
+    const observedPurchaseSources=[...new Map(parsed.map(item=>[item.source,{source:'SEC Form 4 code-P common-share transaction',url:item.source,contentHash:item.contentHash,accession:filings.find(filing=>item.source?.includes(filing.accession.replaceAll('-','')))?.accession,periodEnd:item.date,availableAt:item.filed&&item.filed<asOf.slice(0,10)?item.filed+'T23:59:59.000Z':asOf,retrievedAt:new Date().toISOString(),currency:'USD',confidence:'high' as const,rightsStatus:'redistribution-permitted' as const,parserVersion:'form4-common-purchases-v2'}])).values()];
+    return {purchases,observedPurchaseSources,observedPurchaseValue:amendments.length?0:parsed.reduce((sum,item)=>sum+item.value,0),coverage:{...coverage,fetchedForm4Count,failedForm4Count,reviewedForm4Count,invalidForm4Count,unattemptedForm4Count,httpStatusCounts,state,message}};
   } catch(error) {
     const end=asOf.slice(0,10),windowStart=dateOffset(end,-INSIDER_FORM4_WINDOW_DAYS);
-    return {purchases:[],observedPurchaseValue:0,coverage:{state:'unavailable' as const,windowStart,windowEnd:end,availableForm4Count:0,selectedForm4Count:0,fetchedForm4Count:0,failedForm4Count:0,reviewedForm4Count:0,invalidForm4Count:0,unattemptedForm4Count:0,httpStatusCounts:{},submissionWindowComplete:false,message:`SEC insider filing lookup failed: ${error instanceof Error?error.message:'provider request failed'}`}};
+    return {purchases:[],observedPurchaseSources:[] as Provenance[],observedPurchaseValue:0,coverage:{state:'unavailable' as const,windowStart,windowEnd:end,availableForm4Count:0,selectedForm4Count:0,fetchedForm4Count:0,failedForm4Count:0,reviewedForm4Count:0,invalidForm4Count:0,unattemptedForm4Count:0,httpStatusCounts:{},submissionWindowComplete:false,message:`SEC insider filing lookup failed: ${error instanceof Error?error.message:'provider request failed'}`}};
   }
 }
 
@@ -815,7 +816,7 @@ export async function enrichSnapshotsWithSecOpportunity(snapshots: Snapshot[], m
       if (stock) attachScanMarketResearch(snapshot, stock);
       await attachOpportunityEarnings(snapshot, facts, undefined, marketResearch?.benchmark, stock?.source.includes('Yahoo Finance chart API') && stock.splits !== null, submissions,true,filingIndex);
       snapshot.insiderPurchases=insider.purchases; snapshot.insiderResearch=insider.coverage;
-      if(insider.coverage.state==='complete'||insider.purchases.length){snapshot.insiderBuyValue=insider.observedPurchaseValue;snapshot.provenance.insiderBuyValue={source:'SEC ownership filings · observed code-P purchases',url:submissionsUrlFor(cik),periodEnd:snapshot.asOf.slice(0,10),availableAt:snapshot.asOf,retrievedAt:snapshot.asOf,currency:'USD',confidence:insider.coverage.state==='complete'?'high':'low',rightsStatus:'redistribution-permitted',tag:'Partial windows report observed buys only; no claim of complete absence.'};}
+      if(insider.coverage.state==='complete'||insider.purchases.length){snapshot.insiderBuyValue=insider.observedPurchaseValue;snapshot.provenance.insiderBuyValue={source:'SEC ownership filings · observed code-P purchases',dependencies:insider.observedPurchaseSources,url:submissionsUrlFor(cik),periodEnd:snapshot.asOf.slice(0,10),availableAt:snapshot.asOf,retrievedAt:snapshot.asOf,currency:'USD',confidence:insider.coverage.state==='complete'?'high':'low',rightsStatus:'redistribution-permitted',tag:'Partial windows report observed buys only; no claim of complete absence.'};}
       compactTechnicalResearch(snapshot);
     }));
     const providerStatus = classifySecCompanyFacts(facts, cik);
@@ -923,7 +924,7 @@ export async function companySnapshot(company: Company, options: { includeOpport
   snapshot.insiderPurchases = insiderPurchases;
   snapshot.insiderResearch=insiderResult.coverage;
   snapshot.insiderBuyValue = insiderResult.coverage.state==='complete'||insiderPurchases.length?insiderResult.observedPurchaseValue:null;
-  if (snapshot.insiderBuyValue != null) snapshot.provenance.insiderBuyValue = { source: 'SEC Form 4 common-share purchases (code P; market or private)', url: submissionsUrlFor(cik), periodEnd: insiderPurchases[0]?.date ?? now.slice(0, 10), availableAt: now, retrievedAt: now, currency: 'USD', confidence: 'high' };
+  if (snapshot.insiderBuyValue != null) snapshot.provenance.insiderBuyValue = { source: 'SEC Form 4 common-share purchases (code P; market or private)',dependencies:insiderResult.observedPurchaseSources, url: submissionsUrlFor(cik), periodEnd: insiderPurchases[0]?.date ?? now.slice(0, 10), availableAt: now, retrievedAt: now, currency: 'USD', confidence: 'high' };
   if (history.length >= 20) {
     const values = history.slice(-20).map((row) => row.close * (row.volume ?? Number.NaN)).filter(Number.isFinite).sort((a, b) => a - b);
     if (values.length === 20) { snapshot.medianDollarVolume20d = (values[9] + values[10]) / 2; snapshot.provenance.medianDollarVolume20d = quoteEvidence }

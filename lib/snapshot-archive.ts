@@ -21,6 +21,7 @@ export async function archivedWriteStatements(id:string,payload:string,evaluatio
  const [payloadGzip,evaluationGzip]=await Promise.all([encode(payload),encode(evaluation)]);
  const snapshot=JSON.parse(payload) as Snapshot;
  const inline={...snapshot,__archiveId:id,opportunityResearch:snapshot.opportunityResearch?{...snapshot.opportunityResearch,earnings:{...snapshot.opportunityResearch.earnings,annual:[],quarterly:[]},secFilings:undefined}:undefined,provenance:Object.fromEntries(Object.entries(snapshot.provenance??{}).map(([key,value])=>[key,{...value,dependencies:undefined}]))};
+ delete inline.history;delete inline.news;delete inline.insiderPurchases;delete inline.peerContext;
  const original=JSON.parse(evaluation),opportunity=original.opportunity;
  const compact=opportunity?.thesis?compactRadarEvaluation(opportunity):original.opportunity?{...opportunity,factors:(opportunity.factors??[]).map((factor:any)=>({...factor,sources:[],calculation:factor.calculation?{...factor.calculation,inputs:[{name:'archived canonical trace',value:opportunity.evaluationHash??'legacy'}]}:undefined}))}:undefined;
  return [
