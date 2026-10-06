@@ -26,7 +26,7 @@ type CachedQuick = { history: NonNullable<Snapshot['history']>; financials: Reco
 type MarketBar = NonNullable<Snapshot['history']>[number];
 export type HistoricalResult = { url:string; history:MarketBar[]; splits:{date:string;factor:number}[]|null; source:string; retrievedAt:string; availableAt:string; meta?:any };
 
-const NASDAQ_SCREENER = 'https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=10000&download=true';
+export const NASDAQ_SCREENER = 'https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=10000&download=true';
 const NASDAQ_LISTED='https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt';
 const OTHER_LISTED='https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt';
 const SEC_TICKERS='https://www.sec.gov/files/company_tickers.json';
@@ -229,7 +229,7 @@ export async function universe(options?:{skipYahoo?:boolean}): Promise<Company[]
       const patch=quotePatch(quotes.get(company.ticker));
       if(!Number.isFinite(patch.price)||!Number.isFinite(patch.marketCap))return company;
       const availableAt=new Date().toISOString();
-      return {...company,...patch,quoteSource:'Nasdaq screener live',quoteAvailableAt:availableAt,priceSource:'Nasdaq screener live',priceAvailableAt:availableAt,marketCapSource:'Nasdaq screener live',marketCapAvailableAt:availableAt};
+      return {...company,...patch,quoteSource:'Nasdaq screener live',quoteAvailableAt:availableAt,priceSource:'Nasdaq screener live',priceAvailableAt:availableAt,priceUrl:NASDAQ_SCREENER,marketCapSource:'Nasdaq screener live',marketCapAvailableAt:availableAt,marketCapUrl:NASDAQ_SCREENER};
     });
   } else recordProviderIssue(`Nasdaq screener: ${latestResult.reason instanceof Error?latestResult.reason.message:'provider request failed'}`);
   return options?.skipYahoo?nasdaq:yahooBulkQuotes(nasdaq);

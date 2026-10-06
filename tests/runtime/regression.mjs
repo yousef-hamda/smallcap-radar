@@ -10,7 +10,7 @@ import {setHistoryResult,setOpportunityResearchResult,setUniverse,setBulkQuoteTr
 import {evaluateStrategy} from '../../.test-build/engine.mjs';
 import {proxyOpportunityEvidence} from '../../.test-build/opportunity-proxies.mjs';
 import {fixtures} from '../../.test-build/fixtures.mjs';
-import {ensureSchema,db,currentHash,readState,insertSnapshot,invalidateStateCache,readResearchConflictCount} from '../../.test-build/storage.mjs';
+import {ensureSchema,db,currentHash,readState,insertSnapshot,invalidateStateCache,readResearchConflictCount,migrateCompatibleAcquisitionRuns} from '../../.test-build/storage.mjs';
 import {processScanBatch,startScan,historyCandidate,preliminaryCandidates} from '../../.test-build/scanner.mjs';
 import {GET,POST} from '../../.test-build/radar-api.mjs';
 import {GET as recoverGET} from '../../.test-build/recover-api.mjs';
@@ -577,7 +577,7 @@ test('15000 directory rows use bounded durable pages and resume quote progress',
   const initialized=await processScanBatch('large-directory');assert.equal(initialized.run.total,15000);assert.equal(initialized.run.stage,1);
   const max=sqlite.prepare("SELECT MAX(length(payload)) AS bytes,COUNT(*) AS pages FROM raw_cache WHERE key LIKE 'universe:large-directory:quotes:%'").get();assert.equal(max.pages,150);assert(max.bytes<1_000_000);
   for(let chunk=0;chunk<188;chunk++)await publishDirectoryRatings(initialized.run,100);
-  const ratings=await readState({runId:'large-directory:ratings',limit:1});assert.equal(ratings.summary.total,15000);assert.equal(ratings.summary.opportunityRanked,15000);assert.equal(ratings.summary.missingFactorScores,0);assert.equal(ratings.summary.missingFinalGrades,0);assert.equal(ratings.storedEvaluations[0].opportunity.factors.length,8);assert.equal(ratings.rankPositions[0],1);assert.notEqual(ratings.run.id,ratings.dataRunId,'complete directory publication does not hide ongoing acquisition');
+  const ratings=await readState({runId:'large-directory:ratings-v2',limit:1});assert.equal(ratings.summary.total,15000);assert.equal(ratings.summary.opportunityRanked,15000);assert.equal(ratings.summary.missingFactorScores,0);assert.equal(ratings.summary.missingFinalGrades,0);assert.equal(ratings.storedEvaluations[0].opportunity.factors.length,8);assert.equal(ratings.rankPositions[0],1);assert.notEqual(ratings.run.id,ratings.dataRunId,'complete directory publication does not hide ongoing acquisition');
   for(let page=0;page<150;page++){const result=await processScanBatch('large-directory');assert.equal(result.run.stage,page===149?4:1);if(page<149)assert.equal(result.run.offset,(page+1)*100);}
   assert.equal(sqlite.prepare("SELECT universe FROM strategy_runs WHERE id='large-directory'").get().universe,'paged-v2');
   await db().prepare("UPDATE strategy_runs SET stage=9,offset=1200 WHERE id='large-directory'").run();
@@ -621,7 +621,7 @@ test('latest scan report uses the same recomputed factor coverage as opportunity
  const now=new Date().toISOString();
  await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES('report-current',? ,?,'complete','Bulk Quotes/SEC Frames v10 · full',1,1,13,?)").bind('9999-12-31T00:00:00.000Z',now,currentHash()).run();
  const factSource={source:'SEC fixture',url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0000000001.json',periodStart:'2025-07-01',periodEnd:'2026-06-30',availableAt:now,retrievedAt:now,currency:'USD',confidence:'high',rightsStatus:'redistribution-permitted'};
- await insertSnapshot('report-current',{...base,asOf:now,securityType:'common',symbol:'REPORT-CURRENT',name:'Synthetic report fixture',ps:2,price:10,revenue:100,fcf:10,provenance:{ps:factSource,revenue:factSource,fcf:factSource,price:{...factSource,periodStart:undefined,periodEnd:now.slice(0,10)}}}).run();
+ await insertSnapshot('report-current',{...base,asOf:now,securityType:'common',symbol:'REPORT-CURRENT',name:'Synthetic report fixture',ps:2,price:10,marketCap:200,revenue:100,fcf:10,provenance:{marketCap:{...factSource,periodStart:undefined,periodEnd:now.slice(0,10)},ps:factSource,revenue:factSource,fcf:factSource,price:{...factSource,periodStart:undefined,periodEnd:now.slice(0,10)}}}).run();
  const stored=await db().prepare("SELECT evaluation FROM fundamental_snapshots WHERE run_id='report-current' AND symbol='REPORT-CURRENT'").first();
  const evaluation=JSON.parse(stored.evaluation),partial=evaluation.opportunity.factors[0];
  partial.evidenced=true;partial.complete=false;partial.score=7;partial.coveragePct=70;partial.points=partial.weight*.7;partial.sources=[{source:'SEC Company Facts · regression fixture',url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0000000001.json',availableAt:now,periodEnd:now.slice(0,10),retrievedAt:now,rightsStatus:'redistribution-permitted'}];
@@ -779,13 +779,15 @@ test('directory publication preserves dated issuer facts, retains missing CIKs a
  const priorId='directory-prior',runId='directory-next',date=new Date(Date.now()-3600000).toISOString();
  await db().prepare("UPDATE strategy_runs SET created_at='2000-01-01',updated_at='2000-01-01'").run();invalidateStateCache();
  const old={...base,symbol:'KEEP-DATED',cik:777,securityType:'common'};
- await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,strategy_hash) VALUES(?,?,?,'complete','Directory fixture · full',3,13,?)").bind(priorId,date,date,currentHash()).run();await insertSnapshot(priorId,old).run();await insertSnapshot(priorId,{...old,symbol:'CHANGED-ISSUER',cik:888,revenue:123}).run();await insertSnapshot(priorId,{...old,symbol:'NEW-NO-CIK',cik:undefined,securityType:'unknown',revenue:123}).run();
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,strategy_hash) VALUES(?,?,?,'complete','Directory fixture · full',3,13,?)").bind(priorId,new Date(Date.now()-10800000).toISOString(),date,currentHash()).run();await insertSnapshot(priorId,old).run();await insertSnapshot(priorId,{...old,symbol:'CHANGED-ISSUER',cik:888,revenue:123}).run();await insertSnapshot(priorId,{...old,symbol:'NEW-NO-CIK',cik:undefined,securityType:'unknown',revenue:123}).run();
  await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe_total,stage,strategy_hash) VALUES(?,?,?,'running','Bulk Quotes/SEC Frames · full',3,3,1,?)").bind(runId,date,date,currentHash()).run();
- const directory=[{ticker:old.symbol,name:'same issuer',cik:777,securityType:'common',exchange:'NYSE'},{ticker:'NEW-NO-CIK',name:'missing CIK',securityType:'unknown'},{ticker:'CHANGED-ISSUER',name:'another issuer',cik:999,securityType:'common'}];
+ const olderFinished='directory-older-finished';await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,strategy_hash) VALUES(?,?,?,'partial','Directory ratings · full',1,13,?)").bind(olderFinished,new Date(Date.now()-7200000).toISOString(),new Date(Date.now()-5400000).toISOString(),currentHash()).run();await insertSnapshot(olderFinished,{...old,revenue:123}).run();
+ const directory=[{ticker:old.symbol,name:'same issuer',cik:777,securityType:'common',exchange:'NYSE',price:10,marketCap:100e6,priceSource:'Nasdaq screener live',priceAvailableAt:new Date().toISOString(),marketCapSource:'Nasdaq screener live',marketCapAvailableAt:new Date().toISOString()},{ticker:'NEW-NO-CIK',name:'missing CIK',securityType:'unknown'},{ticker:'CHANGED-ISSUER',name:'another issuer',cik:999,securityType:'common'}];
  await db().prepare("INSERT INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)").bind(`universe:${runId}:quotes:0`,'fixture',date,JSON.stringify(directory)).run();
  const first=await publishDirectoryRatings({id:runId,strategy_hash:currentHash(),universe_total:3},1000,1);assert.equal(first.offset,1);assert.equal(first.done,false);
  assert.equal((await readState({limit:1})).dataRunId,priorId,'unfinished publication cannot replace the published release');
  const saved=JSON.parse((await db().prepare('SELECT payload FROM fundamental_snapshots WHERE run_id=? AND symbol=?').bind(first.id,old.symbol).first()).payload);
+ assert.equal(saved.provenance.price.url,'https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=10000&download=true');assert.equal(saved.provenance.marketCap.url,saved.provenance.price.url);
  assert.equal(saved.revenue,old.revenue);assert.deepEqual(saved.provenance.revenue,old.provenance.revenue);assert.notEqual(saved.asOf,old.asOf,'rating cut advances while factual dates remain unchanged');
  const finished=await publishDirectoryRatings({id:runId,strategy_hash:currentHash(),universe_total:3},1000,2);assert.equal(finished.done,true);
  const state=await readState({runId:first.id,limit:10});assert.equal(state.summary.total,3);assert.equal(state.summary.opportunityRanked,3);assert.deepEqual(new Set(state.snapshots.map(row=>row.symbol)),new Set(directory.map(row=>row.ticker)));
@@ -825,4 +827,13 @@ test('finished enrichment supersedes its directory publication despite an earlie
  await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,strategy_hash) VALUES(?,'2001-01-01',?,'partial','Directory ratings · full',1,13,?)").bind(baseline,'9999-12-30',currentHash()).run();await insertSnapshot(baseline,{...base,symbol:'NEW-DIRECTORY'}).run();
  await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,strategy_hash) VALUES(?,'2000-01-01',?,'complete','Bulk Quotes/SEC Frames · full',1,13,?)").bind(root,cut,currentHash()).run();await insertSnapshot(root,{...base,symbol:'ENRICHED-LATER'}).run();
  const current=await readState({limit:10});assert.equal(current.dataRunId,root);assert.equal(current.snapshots[0].symbol,'ENRICHED-LATER');const profile=await(await companyGET(new Request('https://radar.test/api/company?symbol=ENRICHED-LATER'))).json();assert.equal(profile.ranking.runId,root);assert.deepEqual(profile.evaluation,current.storedEvaluations[0].opportunity);
+});
+
+
+test('compatible pricing migration preserves active acquisition progress without accepting unknown strategies',async()=>{
+ const id='compatible-acquisition',now=new Date().toISOString();
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,offset,strategy_hash,retry_queue) VALUES(?,?,?,'running','Bulk Quotes/SEC Frames + Opportunity SEC v13 · full',7093,5,2256,'UNIFIED_OPPORTUNITY:e723dd3c',?)").bind(id,now,now,JSON.stringify([{attempt:1}])).run();
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,strategy_hash) VALUES('incompatible-acquisition',?,?,'running','Bulk Quotes/SEC Frames + Opportunity SEC v13 · full','unknown-rubric')").bind(now,now).run();
+ await migrateCompatibleAcquisitionRuns();const run=await db().prepare('SELECT * FROM strategy_runs WHERE id=?').bind(id).first();assert.equal(run.strategy_hash,currentHash());assert.equal(run.status,'running');assert.equal(run.stage,5);assert.equal(run.offset,2256);assert.equal(run.updated_at,now);assert.equal(run.retry_queue,'[{"attempt":1}]');
+ assert.equal((await db().prepare("SELECT strategy_hash FROM strategy_runs WHERE id='incompatible-acquisition'").first()).strategy_hash,'unknown-rubric');
 });

@@ -1,5 +1,5 @@
 import type { Company } from './providers';
-import { fetchJson } from './providers';
+import { NASDAQ_SCREENER, fetchJson } from './providers';
 import type { Provenance, Snapshot } from './engine';
 import bundledFrames from './sec-frames.generated.json';
 import {REVENUE_TAGS, US_GAAP_REVENUE_TAGS, observations, latestInstant, trailingAnnual, COST_OF_REVENUE_TAGS, BACKLOG_TAGS, CONTRACT_LIABILITY_TAGS, reportedBorrowings} from './sec';
@@ -301,10 +301,10 @@ function frameProvenance(fact: StoredFact, retrievedAt: string): Provenance {
 export function preliminarySnapshot(company: Company, facts: BulkFundamentals | undefined, retrievedAt = new Date().toISOString()): Snapshot {
   const quoteAvailableAt = company.priceAvailableAt || company.quoteAvailableAt || retrievedAt;
   const quoteSource=company.priceSource||company.quoteSource||'Yahoo/Nasdaq bulk quote';
-  const quote: Provenance = { source: quoteSource,...(company.priceUrl?{url:company.priceUrl}:{}),rightsStatus:'unknown', periodEnd: quoteAvailableAt.slice(0, 10), availableAt: quoteAvailableAt, retrievedAt, currency: 'USD', confidence: quoteSource.includes('bundled') ? 'low' : 'medium' };
+  const quote: Provenance = { source: quoteSource,...((company.priceUrl||quoteSource==='Nasdaq screener live')?{url:company.priceUrl||NASDAQ_SCREENER}:{}),rightsStatus:'unknown', periodEnd: quoteAvailableAt.slice(0, 10), availableAt: quoteAvailableAt, retrievedAt, currency: 'USD', confidence: quoteSource.includes('bundled') ? 'low' : 'medium' };
   const marketCapAvailableAt=company.marketCapAvailableAt||company.quoteAvailableAt||retrievedAt;
   const marketCapSource=company.marketCapSource||company.quoteSource||'Yahoo/Nasdaq bulk quote';
-  const marketCapQuote:Provenance={source:marketCapSource,...(company.marketCapUrl?{url:company.marketCapUrl}:{}),rightsStatus:'unknown',periodEnd:marketCapAvailableAt.slice(0,10),availableAt:marketCapAvailableAt,retrievedAt,currency:'USD',confidence:marketCapSource.includes('bundled')?'low':'medium'};
+  const marketCapQuote:Provenance={source:marketCapSource,...((company.marketCapUrl||marketCapSource==='Nasdaq screener live')?{url:company.marketCapUrl||NASDAQ_SCREENER}:{}),rightsStatus:'unknown',periodEnd:marketCapAvailableAt.slice(0,10),availableAt:marketCapAvailableAt,retrievedAt,currency:'USD',confidence:marketCapSource.includes('bundled')?'low':'medium'};
   const snapshot: Snapshot = {
     symbol: company.ticker,
     name: company.name,

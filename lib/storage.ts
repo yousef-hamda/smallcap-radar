@@ -92,9 +92,15 @@ export async function ensureSchema(){
   await d.prepare("UPDATE fundamental_snapshots SET payload=json_remove(payload,'$.history') WHERE instr(payload,'\"history\"')>0").run();
   await d.prepare("INSERT INTO diag(id,stage,created_at,message) VALUES(?,?,?,?)").bind(crypto.randomUUID(),'compact-history-v1',new Date().toISOString(),'Removed historical bars from durable radar rows; detailed history remains on-demand.').run();
  }
+ await migrateCompatibleAcquisitionRuns();
  await d.prepare("UPDATE strategy_runs SET status='failed',error='تغيّرت نسخة الاستراتيجية؛ ابدأ فحصًا جديدًا.',lease_until=0,updated_at=? WHERE status IN ('running','partial') AND stage<13 AND strategy_hash<>?").bind(new Date().toISOString(),currentHash()).run();
  })().catch(e=>{schemaPromise=null;throw e});
  return schemaPromise;
+}
+/** 1.2.1 -> 1.2.2 changes saved pricing normalization, not acquisition stages,
+ * source formats or weights. Preserve only the audited v13 acquisition cursor. */
+export async function migrateCompatibleAcquisitionRuns() {
+ await db().prepare("UPDATE strategy_runs SET strategy_hash=? WHERE strategy_hash='UNIFIED_OPPORTUNITY:e723dd3c' AND source LIKE 'Bulk Quotes/SEC Frames + Opportunity SEC v13%' AND status IN ('running','partial') AND stage<13").bind(currentHash()).run();
 }
 export const currentHash=()=>`${OPPORTUNITY_SPEC.id}:${opportunitySpecHash()}`;
 export async function readRankReleaseIdentity(runId:string,expectedToken?:string) {

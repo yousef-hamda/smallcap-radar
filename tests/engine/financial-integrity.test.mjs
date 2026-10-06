@@ -151,3 +151,21 @@ test('browser uses canonical grades from newer rubric releases without recalcula
  for(const invalid of [{...newer,score:newer.score+1},{...newer,asOf:'2020-01-01'},{...newer,factors:newer.factors.slice(0,7)}])assert.throws(()=>canonicalRating(compact,invalid));
  assert.throws(()=>canonicalRating(compact,undefined));
 });
+
+
+test('quote changes rebuild all pricing ratios without requiring a financial dossier',()=>{
+ const s=base();for(const key of ['cash','debt'])delete s.provenance[key].periodStart;for(const key of ['revenue','fcf'])s.provenance[key].periodStart='2025-07-01';
+ s.provenance.marketCap={...source(undefined,'2026-10-02'),periodStart:undefined,availableAt:'2026-10-02T21:00:00Z'};
+ s.ps=1;s.evSales=1;s.fcfYield=.9;
+ const first=alignSnapshotFinancials(s);assert.equal(first.ps,10);assert.equal(first.evSales,9.3);assert.equal(first.fcfYield,.02);
+ const next=alignSnapshotFinancials({...first,marketCap:2000});assert.equal(next.ps,20);assert.equal(next.evSales,19.3);assert.equal(next.fcfYield,.01);
+ assert.deepEqual(alignSnapshotFinancials(next),next);assert.equal(next.provenance.fcfYield.dependencies[1].periodEnd,'2026-10-02');assert.equal(s.ps,1);
+});
+
+test('pricing ratios withhold incompatible currencies and invalid dependencies',()=>{
+ const s=base();s.provenance.marketCap={...source(undefined,'2026-10-02'),periodStart:undefined,currency:'EUR'};
+ s.ps=1;s.evSales=1;s.fcfYield=.9;
+ const result=alignSnapshotFinancials(s);for(const key of ['ps','evSales','fcfYield']){assert.equal(result[key],null);assert.equal(result.provenance[key],undefined);}
+ s.provenance.marketCap.currency='USD';for(const key of ['ps','evSales','fcfYield'])assert.equal(alignSnapshotFinancials(s)[key],null,'a partial-year flow cannot be treated as annual pricing');
+ for(const key of ['revenue','fcf'])s.provenance[key].periodStart='2025-07-01';s.provenance.marketCap.retrievedAt='2026-10-04T12:00:00Z';assert.equal(alignSnapshotFinancials(s).ps,null);
+});

@@ -81,7 +81,7 @@ export function alignSnapshotFinancials(original: Snapshot): Snapshot {
     } else snapshot.backlog={...original.backlog,kind};
   }
   const research = original.opportunityResearch?.earnings;
-  if (!research || research.conflicts?.length) return snapshot;
+  if (!research || research.conflicts?.length) return alignPricingRatios(snapshot);
   const valid = (metric: {value:number;unit:string;source:Provenance} | undefined) => !!metric
     && Number.isFinite(metric.value) && metric.unit === 'USD' && metric.source.currency === 'USD'
     && usableEvidence(metric.source,snapshot.asOf)
@@ -124,16 +124,32 @@ export function alignSnapshotFinancials(original: Snapshot): Snapshot {
     const metric=financial?.metrics?.[input];
     if (valid(metric) && metric!.value >= 0) promote(output,metric!.value,metric!.source);
   }
-  // Recompute dependent pricing ratios after promoting newer observations.
-  if (typeof snapshot.marketCap === 'number' && snapshot.marketCap > 0 && typeof snapshot.revenue === 'number' && snapshot.revenue > 0
-    && usableEvidence(snapshot.provenance.marketCap,snapshot.asOf) && usableEvidence(snapshot.provenance.revenue,snapshot.asOf)) {
-    snapshot.ps=snapshot.marketCap/snapshot.revenue;
-    snapshot.provenance.ps=derivedEvidence('Market capitalization / aligned SEC revenue',[snapshot.provenance.revenue,snapshot.provenance.marketCap],snapshot.asOf,'marketCap / revenue')!;
-    if (typeof snapshot.cash === 'number' && typeof snapshot.debt === 'number' && compatibleSnapshotMetrics(snapshot,['cash','debt'],'balance')) {
-      snapshot.evSales=(snapshot.marketCap+snapshot.debt-snapshot.cash)/snapshot.revenue;
-      snapshot.provenance.evSales=derivedEvidence('Aligned enterprise value / SEC revenue',[snapshot.provenance.revenue,snapshot.provenance.marketCap,snapshot.provenance.cash,snapshot.provenance.debt],snapshot.asOf,'(marketCap + debt − cash) / revenue')!;
-    } else { snapshot.evSales=null;delete snapshot.provenance.evSales; }
-  }
+  alignPricingRatios(snapshot);
   snapshot.dataIssues=[...new Set([...(original.dataIssues ?? []).filter(item=>!item.startsWith('[integrity] ')),...financialIntegrityFindings(snapshot).map(item=>`[integrity] ${item}`)])];
+  return snapshot;
+}
+
+/** Pricing dependencies change independently of SEC dossier retrieval. Rebuild
+ * every ratio from current same-currency inputs rather than retain stale ratios. */
+function alignPricingRatios(snapshot: Snapshot) {
+  const observed = (key: 'marketCap'|'revenue'|'fcf'|'cash'|'debt') => {
+    const source=snapshot.provenance[key],value=snapshot[key];
+    return typeof value==='number' && Number.isFinite(value) && !!source?.currency
+      && usableEvidence(source,snapshot.asOf) && Date.parse(source.retrievedAt)<=Date.parse(snapshot.asOf);
+  };
+  const sameCurrency = (keys: Array<'marketCap'|'revenue'|'fcf'|'cash'|'debt'>) => keys.every(observed)
+    && new Set(keys.map(key=>snapshot.provenance[key].currency)).size===1;
+  const set = (key:'ps'|'evSales'|'fcfYield', value:number|null, inputs:Provenance[], name:string, formula:string) => {
+    const source=value!==null&&Number.isFinite(value)?derivedEvidence(name,inputs,snapshot.asOf,formula):undefined;
+    snapshot[key]=source?value:null;
+    if(source)snapshot.provenance[key]=source;else delete snapshot.provenance[key];
+  };
+  const annual = (key:'revenue'|'fcf') => {const source=snapshot.provenance[key];const days=source?.periodStart?(Date.parse(source.periodEnd)-Date.parse(source.periodStart))/864e5:0;return days>=330&&days<=380&&(source.scope??'consolidated')==='consolidated';};
+  const sales=annual('revenue')&&sameCurrency(['marketCap','revenue']) && snapshot.marketCap!>0 && snapshot.revenue!>0;
+  set('ps',sales?snapshot.marketCap!/snapshot.revenue!:null,sales?[snapshot.provenance.revenue,snapshot.provenance.marketCap]:[],'Market capitalization / aligned SEC revenue','marketCap / revenue');
+  const ev=sales&&sameCurrency(['marketCap','revenue','cash','debt'])&&snapshot.cash!>=0&&snapshot.debt!>=0&&compatibleSnapshotMetrics(snapshot,['cash','debt'],'balance');
+  set('evSales',ev?(snapshot.marketCap!+snapshot.debt!-snapshot.cash!)/snapshot.revenue!:null,ev?[snapshot.provenance.revenue,snapshot.provenance.marketCap,snapshot.provenance.cash,snapshot.provenance.debt]:[],'Aligned enterprise value / SEC revenue','(marketCap + debt − cash) / revenue');
+  const yieldEligible=annual('fcf')&&sameCurrency(['marketCap','fcf'])&&snapshot.marketCap!>0;
+  set('fcfYield',yieldEligible?snapshot.fcf!/snapshot.marketCap!:null,yieldEligible?[snapshot.provenance.fcf,snapshot.provenance.marketCap]:[],'Aligned free cash flow / market capitalization','fcf / marketCap');
   return snapshot;
 }

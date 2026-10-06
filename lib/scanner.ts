@@ -123,7 +123,7 @@ export async function processScanBatch(runId: string) {
     return {run:publicRun(await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first()),done:false};
   }
 
-  if(!String(run.source).includes('quick')&&run.stage===1){
+  if(!String(run.source).includes('quick')&&(run.stage===1||run.universe==='paged-v2')&&run.stage<13){
     try{
       const ratingPublication=await publishDirectoryRatings(run,universePageSize(run));
       if(!ratingPublication.done){await database.prepare('UPDATE strategy_runs SET lease_until=0 WHERE id=?').bind(run.id).run();return {run:publicRun(run),done:false,ratingPublication};}
@@ -473,6 +473,6 @@ async function failDirectoryCheckpoint(run:any,initialQueue:any[],error:unknown)
  const database=db();
  const attempt=Number(initialQueue[0]?.attempt||0)+1,message=error instanceof Error?error.message:'Directory checkpoint failed';
  await database.prepare('UPDATE strategy_runs SET status=?,error=?,retry_queue=?,lease_until=0,updated_at=? WHERE id=?').bind(attempt>=3?'failed':'running',message,attempt>=3?'[]':JSON.stringify([{stage:1,phase:'directory-ratings',attempt}]),new Date().toISOString(),run.id).run();
- if(attempt>=3)await database.prepare("UPDATE strategy_runs SET status='failed',error=?,lease_until=0 WHERE id=? AND status='running'").bind(message,`${run.id}:ratings`).run();
+ if(attempt>=3)await database.prepare("UPDATE strategy_runs SET status='failed',error=?,lease_until=0 WHERE id=? AND status='running'").bind(message,`${run.id}:ratings-v2`).run();
  return {run:publicRun(await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first()),done:attempt>=3};
 }
