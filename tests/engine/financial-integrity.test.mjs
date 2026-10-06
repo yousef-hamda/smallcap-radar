@@ -1,3 +1,4 @@
+import {canonicalRating} from '../../.test-build/canonical-rating.mjs';
 import {peerObservation,peerContext,uniqueIssuerPeers} from '../../.test-build/opportunity-peers.mjs';
 import {readSecArtifact,recordSecArtifact} from '../../.test-build/sec-artifact-cache.mjs';
 import test from 'node:test';
@@ -141,4 +142,12 @@ test('intrinsic discounted currency estimates publish cents without fractional h
  const thesis=buildOpportunityThesis(fixture);assert.equal(thesis.valuation.status,'available');
  for(const scenario of thesis.valuation.scenarios)assert.equal(scenario.cashflowValue,Number(scenario.cashflowValue.toFixed(2)));
  assert.deepEqual(buildOpportunityThesis(structuredClone(fixture)),thesis);
+});
+
+test('browser uses canonical grades from newer rubric releases without recalculating compact cards',()=>{
+ const snapshot=valuationFixture(),evaluation=evaluateOpportunity(snapshot),compact={symbol:snapshot.symbol,name:snapshot.name,asOf:snapshot.asOf,provenance:{}};
+ const newer={...evaluation,hash:'future-release',evaluationHash:'future-release:stable'};
+ assert.equal(canonicalRating(compact,newer),newer);
+ for(const invalid of [{...newer,score:newer.score+1},{...newer,asOf:'2020-01-01'},{...newer,factors:newer.factors.slice(0,7)}])assert.throws(()=>canonicalRating(compact,invalid));
+ assert.throws(()=>canonicalRating(compact,undefined));
 });

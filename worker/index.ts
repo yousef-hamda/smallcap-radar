@@ -148,7 +148,10 @@ const worker = {
 
     if (url.pathname === "/__radar-scheduled" && request.method === "POST") {
       if(!env.BACKGROUND_SCAN_SECRET||!sameSecret(request.headers.get("X-Radar-Background"),env.BACKGROUND_SCAN_SECRET))return json({error:"غير مصرح"},401);
-      try { return json(await scheduledScanTick()); }
+      const reusable=Number(request.headers.get('X-Radar-Reusable-Bytes')),free=Number(request.headers.get('X-Radar-Filesystem-Free-Bytes'));
+      const capacity=request.headers.has('X-Radar-Reusable-Bytes')&&request.headers.has('X-Radar-Filesystem-Free-Bytes')&&Number.isSafeInteger(reusable)&&reusable>=0&&Number.isSafeInteger(free)&&free>=0?{reusableBytes:reusable,filesystemFreeBytes:free}:undefined;
+      if((env as any).RAILWAY_VOLUME_MOUNT_PATH&&!capacity)return json({error:'Storage capacity inspection is unavailable; scheduler retry required.'},503);
+      try { return json(await scheduledScanTick(Date.now(),capacity)); }
       catch(error) { return json({error:error instanceof Error?error.message:"تعذّر تحديث البيانات"},statusOf(error,503)); }
     }
 

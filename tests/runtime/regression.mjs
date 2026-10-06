@@ -753,3 +753,9 @@ test('a source mutation during publication cannot publish a mixed revision or er
  invalidateStateCache();const repaired=await readState({runId:id});assert.notEqual(repaired.storedEvaluations[0].opportunity.snapshotHash,before.storedEvaluations[0].opportunity.snapshotHash);assert.equal(repaired.rankPositions[0],1);
  await db().prepare('DELETE FROM fundamental_snapshots WHERE run_id=?').bind(id).run();await db().prepare('DELETE FROM strategy_runs WHERE id=?').bind(id).run();invalidateStateCache();
 });
+
+test('production scheduler requires native capacity and never queries prohibited D1 PRAGMAs',async()=>{
+ assert.throws(()=>db().prepare('PRAGMA freelist_count'),/not authorized/);
+ const missing=await worker.fetch(new Request('https://radar.test/__radar-scheduled',{method:'POST',headers:{'X-Radar-Background':'capacity-secret'}}),{BACKGROUND_SCAN_SECRET:'capacity-secret',RAILWAY_VOLUME_MOUNT_PATH:'/app/data'},{waitUntil:()=>{}});assert.equal(missing.status,503);
+ const malformed=await worker.fetch(new Request('https://radar.test/__radar-scheduled',{method:'POST',headers:{'X-Radar-Background':'capacity-secret','X-Radar-Reusable-Bytes':'-1','X-Radar-Filesystem-Free-Bytes':'Infinity'}}),{BACKGROUND_SCAN_SECRET:'capacity-secret',RAILWAY_VOLUME_MOUNT_PATH:'/app/data'},{waitUntil:()=>{}});assert.equal(malformed.status,503);
+});
