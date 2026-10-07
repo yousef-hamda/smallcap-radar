@@ -1,6 +1,6 @@
 import {env} from 'cloudflare:workers';
 import type {Snapshot} from './engine';
-import {compactRadarEvaluation} from './compact-radar';
+
 const db=()=>{const value=(env as any).DB;if(!value)throw Error('Archive database unavailable');return value;};
 let ready:Promise<unknown>|undefined;
 async function schema(){ready??=db().prepare('CREATE TABLE IF NOT EXISTS snapshot_archives (id TEXT PRIMARY KEY,payload_gzip BLOB NOT NULL,evaluation_gzip BLOB NOT NULL,archived_at TEXT NOT NULL)').run().catch((error:unknown)=>{ready=undefined;throw error;});await ready;}
@@ -19,15 +19,28 @@ export async function restoreArchivedRow<T extends {id?:string;payload:string;ev
 export async function archivedWriteStatements(id:string,payload:string,evaluation:string){
  await schema();
  const [payloadGzip,evaluationGzip]=await Promise.all([encode(payload),encode(evaluation)]);
- const snapshot=JSON.parse(payload) as Snapshot;
- const inline={...snapshot,__archiveId:id,opportunityResearch:snapshot.opportunityResearch?{...snapshot.opportunityResearch,earnings:{...snapshot.opportunityResearch.earnings,annual:[],quarterly:[]},secFilings:undefined}:undefined,provenance:Object.fromEntries(Object.entries(snapshot.provenance??{}).map(([key,value])=>[key,{...value,dependencies:undefined}]))};
- delete inline.history;delete inline.news;delete inline.insiderPurchases;delete inline.peerContext;
- const original=JSON.parse(evaluation),opportunity=original.opportunity;
- const compact=opportunity?.thesis?compactRadarEvaluation(opportunity):original.opportunity?{...opportunity,factors:(opportunity.factors??[]).map((factor:any)=>({...factor,sources:[],calculation:factor.calculation?{...factor.calculation,inputs:[{name:'archived canonical trace',value:opportunity.evaluationHash??'legacy'}]}:undefined}))}:undefined;
+ const summary=archiveInlineSummary(id,payload,evaluation);
  return [
   db().prepare('INSERT OR REPLACE INTO snapshot_archives(id,payload_gzip,evaluation_gzip,archived_at) VALUES(?,?,?,?)').bind(id,payloadGzip,evaluationGzip,new Date().toISOString()),
-  db().prepare('UPDATE fundamental_snapshots SET payload=?,evaluation=? WHERE id=?').bind(JSON.stringify(inline),JSON.stringify(compact?{...original,opportunity:compact}:original),id),
+  db().prepare('UPDATE fundamental_snapshots SET payload=?,evaluation=? WHERE id=?').bind(summary.payload,summary.evaluation,id),
  ];
+}
+/** Queryable identity, grades and summary flags only. Every detailed API restores
+ * the original compressed source/evaluation; inline summaries are never evidence. */
+export function archiveInlineSummary(id:string,payload:string,evaluation:string) {
+ const snapshot=JSON.parse(payload) as Snapshot,original=JSON.parse(evaluation),grade=original.opportunity;
+ const strings=new Set(['symbol','name','nameAr','asOf','cik','securityType','listingStatus','exchange','website','sector','industry','confidence','deathSpiral']);
+ const inline={...Object.fromEntries(Object.entries(snapshot).filter(([key,value])=>strings.has(key)||typeof value==='number'||typeof value==='boolean'||value===null)),__archiveId:id,__archiveSummaryVersion:2,sourceConflicts:snapshot.sourceConflicts,provenance:Object.fromEntries(Object.entries(snapshot.provenance??{}).filter(([key])=>key==='securityType'||key==='exchange'))};
+ const fields=['strategy','version','hash','asOf','score','snapshotHash','evaluationHash','state','status','researchState','sourceEligible','rankingEligible','algorithmicCoveragePct','coveragePct','evidencedWeight','confidence','horizonMonths','riskTolerance'];
+ const compact=grade?{...Object.fromEntries(fields.filter(key=>key in grade).map(key=>[key,grade[key]])),factors:(grade.factors??[]).map((factor:any)=>({...Object.fromEntries(['id','label','weight','score','points','complete','evidenced','proxy','confidence','coveragePct','algorithmicCoveragePct'].filter(key=>key in factor).map(key=>[key,factor[key]])),sources:[],calculation:{rubricId:factor.calculation?.rubricId??'archived-canonical',inputs:[{name:'archived canonical trace',value:grade.evaluationHash??'legacy'}]}})),checks:(grade.checks??[]).map((check:any)=>({id:check.id,status:check.status,role:check.role}))}:undefined;
+ return {payload:JSON.stringify(inline),evaluation:JSON.stringify(compact?{opportunity:compact}:original)};
+}
+async function compactHistoricalSummaries(limit:number) {
+ const key='maintenance:archive-summary-v2',cursor=await db().prepare('SELECT payload FROM raw_cache WHERE key=?').bind(key).first() as any;
+ const rows=(await db().prepare('SELECT s.id,s.payload,s.evaluation FROM snapshot_archives a JOIN fundamental_snapshots s ON s.id=a.id WHERE a.id>? ORDER BY a.id LIMIT ?').bind(cursor?.payload??'',limit).all()).results as any[];
+ const updates=[];for(const row of rows){if(JSON.parse(row.payload).__archiveSummaryVersion===2)continue;const value=archiveInlineSummary(row.id,row.payload,row.evaluation);updates.push(db().prepare('UPDATE fundamental_snapshots SET payload=?,evaluation=? WHERE id=?').bind(value.payload,value.evaluation,row.id));}
+ if(rows.length)updates.push(db().prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(key,'lossless archive summary migration',new Date().toISOString(),rows.at(-1).id));
+ if(updates.length)await db().batch(updates);return {compacted:updates.length-(rows.length?1:0),more:rows.length===limit};
 }
 export async function maintainHistoricalStorage(limit=50){
  await schema();
@@ -42,5 +55,6 @@ export async function maintainHistoricalStorage(limit=50){
   db().prepare("DELETE FROM bulk_fundamentals WHERE run_id<>? AND run_id IN (SELECT id FROM strategy_runs WHERE status='failed' OR (status IN ('complete','partial') AND stage>=13))").bind(recoverable?.id??''),
   db().prepare("DELETE FROM raw_cache WHERE key LIKE 'universe:%' AND EXISTS(SELECT 1 FROM strategy_runs r WHERE r.id<>? AND r.id=substr(raw_cache.key,10,36) AND (r.status='failed' OR (r.status IN ('complete','partial') AND r.stage>=13)))").bind(recoverable?.id??''),
  ]);
- return {archived:candidates.length,more:candidates.length===limit};
+ const summaries=await compactHistoricalSummaries(limit);
+ return {archived:candidates.length,compacted:summaries.compacted,more:candidates.length===limit||summaries.more};
 }

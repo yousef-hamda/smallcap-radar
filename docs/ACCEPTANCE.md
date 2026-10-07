@@ -1,6 +1,6 @@
 # Current release acceptance — October 7, 2026
 
-Candidate `1.2.6` / `d21f9710`: engine 196, runtime 90, build/root 57, research 9, database 4, typecheck/lint PASS. Strict full-universe import and canonical identity replay preserve every grade across 7,506 listings. The production full-volume outage invalidated earlier 1.2.5 acceptance. Recovery, final deployment and exhaustive direct API/UI/storage checks are required before acceptance; older proofs below are historical. See `SYSTEM_IMPROVEMENT_EXECUTION_2026_10_06.md`.
+Candidate `1.2.6` / `d21f9710`: engine 196, runtime 91, build/root 57, research 9, database 4, typecheck/lint PASS. Strict full-universe import and canonical identity replay preserve every grade across 7,506 listings. The production full-volume outage invalidated earlier 1.2.5 acceptance. Recovery, final deployment and exhaustive direct API/UI/storage checks are required before acceptance; older proofs below are historical. See `SYSTEM_IMPROVEMENT_EXECUTION_2026_10_06.md`.
 
 ---
 

@@ -924,3 +924,13 @@ test('low or stale filesystem capacity pauses active scans and batons without ch
   await recordScanCapacity({reusableBytes:2*1024**3,filesystemFreeBytes:1024**3},now);const {scanCapacityPaused}=await import('../../.test-build/scan-capacity.mjs');assert.equal(await scanCapacityPaused(now),false);
  }finally{delete runtimeEnv.RAILWAY_VOLUME_MOUNT_PATH;await db().prepare('DELETE FROM strategy_runs WHERE id=?').bind(id).run();}
 });
+
+
+test('archive summaries bound duplicate trace storage while restoring exact evidence and grades',async()=>{
+ const id='archive-rich-summary',snapshot={...base,symbol:'ARCHIVE-RICH',description:'source description '.repeat(1000)},value={opportunity:{...(await import('../../.test-build/opportunity-dossier.mjs')).evaluateOpportunityDossier(snapshot,{asOf:snapshot.asOf})}};
+ for(const f of value.opportunity.factors)f.rationale='Synthetic detailed audit rationale '.repeat(1000);
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,strategy_hash) VALUES(?,'2000-01-01','2000-01-01','complete','Archive fixture · full',1,13,?)").bind(id,currentHash()).run();await insertSnapshot(id,snapshot).run();
+ const rowId=id+':'+snapshot.symbol,payload=JSON.stringify(snapshot),evaluation=JSON.stringify(value);await db().batch(await archivedWriteStatements(rowId,payload,evaluation));
+ const row=await db().prepare('SELECT id,payload,evaluation FROM fundamental_snapshots WHERE id=?').bind(rowId).first();assert(Buffer.byteLength(row.payload)+Buffer.byteLength(row.evaluation)<7000);assert.equal(JSON.parse(row.payload).__archiveSummaryVersion,2);
+ const restored=await restoreArchivedRow(row);assert.equal(restored.payload,payload);assert.equal(restored.evaluation,evaluation);assert.deepEqual(JSON.parse(row.evaluation).opportunity.factors.map(f=>f.score),value.opportunity.factors.map(f=>f.score));assert.equal(JSON.parse(row.evaluation).opportunity.evaluationHash,value.opportunity.evaluationHash);
+});
