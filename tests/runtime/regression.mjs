@@ -889,3 +889,38 @@ test('verified inventory recovery resumes failed initialization without a new sc
  setUniverse([company]);
  try{const result=await scheduledScanTick(Date.now(),{reusableBytes:1024**3,filesystemFreeBytes:1024**3});assert.equal(result.run.id,id);assert.equal(result.run.status,'running');assert.equal(result.run.stage,1);assert.equal(result.run.total,1);assert.equal(result.run.retryPending,0);}finally{setUniverse([]);}
 });
+
+
+test('snapshot import preserves legitimate ten-digit SEC peer identifiers and rejects invalid identifiers',()=>{
+ const value={...base,peerContext:{version:'sec-sic-size-period-v1',asOf:base.asOf,method:'Synthetic comparable SEC issuer only',grade:null,peers:[{symbol:'SYN-PEER',cik:1700000,sic:2834,end:'2025-12-31',revenue:100,grossMargin:.3,sources:[]}],gaps:[]}};
+ const parsed=importSchema.parse([value]);assert.equal(parsed[0].peerContext.peers[0].cik,1700000);
+ for(const cik of [0,1.5,10_000_000_000])assert.equal(importSchema.safeParse([{...value,peerContext:{...value.peerContext,peers:[{...value.peerContext.peers[0],cik}]}}]).success,false);
+});
+
+
+test('snapshot import preserves full official preferred-share names without truncation',()=>{
+ const name='Kimco Realty Corporation Class L Depositary Shares, each of which represents a one-one thousandth fractional interest in a share of 5.125% Class L Cumulative Redeemable Preferred Stock, liquidation preference $25,000.00 per share';
+ const value={...base,symbol:'KIM-L',name,securityType:'preferred'};
+ assert.equal(importSchema.parse([value])[0].name,name);
+ assert.equal(importSchema.safeParse([{...value,name:'x'.repeat(1001)}]).success,false);
+});
+
+
+test('stable-identity migration retains active v14 acquisition progress and dated checkpoints',async()=>{
+ const id='v14-stable-identity',now=new Date().toISOString();
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,offset,strategy_hash,retry_queue) VALUES(?,?,?,'running','Bulk Quotes/SEC Frames + Opportunity SEC v14 · full',7506,5,1104,'UNIFIED_OPPORTUNITY:f7c5745f','[]')").bind(id,now,now).run();
+ await migrateCompatibleAcquisitionRuns();const run=await db().prepare('SELECT * FROM strategy_runs WHERE id=?').bind(id).first();assert.equal(run.strategy_hash,currentHash());assert.equal(run.status,'running');assert.equal(run.stage,5);assert.equal(run.offset,1104);assert.equal(run.updated_at,now);
+});
+
+
+test('low or stale filesystem capacity pauses active scans and batons without changing source checkpoints',async()=>{
+ const {recordScanCapacity}=await import('../../.test-build/scan-capacity.mjs');const id='capacity-paused-active',now=Date.now();
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,offset,strategy_hash,retry_queue) VALUES(?,?,?,'running','Bulk Quotes/SEC Frames + Opportunity SEC v14 · full',7506,5,1104,?,'[]')").bind(id,new Date(now).toISOString(),new Date(now).toISOString(),currentHash()).run();
+ const before=await db().prepare('SELECT * FROM strategy_runs WHERE id=?').bind(id).first();runtimeEnv.RAILWAY_VOLUME_MOUNT_PATH='/synthetic';
+ try{
+  await recordScanCapacity({reusableBytes:2*1024**3,filesystemFreeBytes:128*1024**2},now);
+  const result=await processScanBatch(id);assert.equal(result.pausedForCapacity,true);assert.equal(result.done,false);assert.deepEqual(await db().prepare('SELECT * FROM strategy_runs WHERE id=?').bind(id).first(),before);
+  await recordScanCapacity({reusableBytes:2*1024**3,filesystemFreeBytes:1024**3},now-6*60_000);assert.equal((await processScanBatch(id)).pausedForCapacity,true);
+  await recordScanCapacity({reusableBytes:2*1024**3,filesystemFreeBytes:1024**3},now);const {scanCapacityPaused}=await import('../../.test-build/scan-capacity.mjs');assert.equal(await scanCapacityPaused(now),false);
+ }finally{delete runtimeEnv.RAILWAY_VOLUME_MOUNT_PATH;await db().prepare('DELETE FROM strategy_runs WHERE id=?').bind(id).run();}
+});

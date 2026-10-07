@@ -1281,3 +1281,12 @@ test('unsupported instrument components agree with withheld final factor grades'
  const evaluated=currentOpportunityEvaluation(snapshot);
  for(const factor of evaluated.factors){const inputs=factor.calculation.inputs,parts=inputs.filter(item=>item.name.endsWith(':grade'));if(!parts.length)continue;const expected=Math.round(parts.reduce((sum,part)=>sum+(typeof part.value==='number'?part.value:0)*inputs.find(input=>input.name===part.name.slice(0,-6)+':weight').value/100,0)*100)/100;assert.equal(factor.score,expected,factor.id);if(factor.id!=='technicalTiming')assert.equal(factor.score,0);}
 });
+
+
+test('evaluation hashes survive nested JSON field reordering while tracking changed source values',()=>{
+ function reverseKeys(value){return Array.isArray(value)?value.map(reverseKeys):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).reverse().map(key=>[key,reverseKeys(value[key])])):value;}
+ const original=evaluateOpportunityDossier(opportunitySnapshot,opportunityDossierFromSnapshot(opportunitySnapshot));
+ const reordered=reverseKeys(opportunitySnapshot);
+ assert.deepEqual(evaluateOpportunityDossier(reordered,opportunityDossierFromSnapshot(reordered)),original);
+ assert.notEqual(evaluateOpportunity({...opportunitySnapshot,price:11}).snapshotHash,original.snapshotHash);
+});

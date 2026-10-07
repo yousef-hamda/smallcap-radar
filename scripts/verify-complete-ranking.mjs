@@ -4,17 +4,23 @@ import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import {evaluateOpportunityDossier,opportunityDossierFromSnapshot} from '../.test-build/opportunity-dossier.mjs';
 import {isCurrentOpportunityEvaluation} from '../.test-build/opportunity-engine.mjs';
+import {completeSnapshotSchema} from '../.test-build/validation.mjs';
 import {applyFinancingRisk} from '../.test-build/financing-risk.mjs';
 const file=process.argv[2];if(!file)throw Error('Usage: node scripts/verify-complete-ranking.mjs universe.json [--stored]');
 const factorDetails={};
 const input=JSON.parse(fs.readFileSync(file,'utf8')),rows=[];
 for(const row of input.rows){
- const snapshot=applyFinancingRisk(JSON.parse(row.payload));
+ const rawSnapshot=JSON.parse(row.payload);
+ const parsedSnapshot=completeSnapshotSchema.parse(rawSnapshot);
+ assert.deepEqual(parsedSnapshot,rawSnapshot,`${row.symbol}: strict import must preserve saved source fields`);
+ const snapshot=applyFinancingRisk(parsedSnapshot);
  const evaluation=evaluateOpportunityDossier(snapshot,opportunityDossierFromSnapshot(snapshot));
  assert.ok(isCurrentOpportunityEvaluation(evaluation),row.symbol);
  assert.equal(evaluation.score,Math.round(evaluation.factors.reduce((sum,factor)=>sum+Math.round(factor.score*100)*factor.weight,0)/10)/100,`${row.symbol}: exact arithmetic`);
  assert.deepEqual(evaluation,evaluateOpportunityDossier(structuredClone(snapshot),opportunityDossierFromSnapshot(structuredClone(snapshot))),row.symbol);
+ if(process.argv.includes('--preserve-grades')){const prior=JSON.parse(row.evaluation).opportunity;assert.equal(evaluation.score,prior.score,`${row.symbol}: preserved final grade`);assert.deepEqual(evaluation.factors.map(f=>f.score),prior.factors.map(f=>f.score),`${row.symbol}: preserved factor grades`);}
  if(process.argv.includes('--stored'))assert.deepEqual(evaluation,JSON.parse(row.evaluation).opportunity,`${row.symbol}: persisted evaluator parity`);
+ assert.deepEqual(evaluation,evaluateOpportunityDossier(applyFinancingRisk(rawSnapshot),opportunityDossierFromSnapshot(applyFinancingRisk(rawSnapshot))),`${row.symbol}: import identity and evaluator parity`);
   for(const factor of evaluation.factors){
     const actualConflicts=(factor.conflicts??[]).filter(conflict=>conflict!==`${factor.id} as-of timestamp does not match the dossier.`);
     if(factor.proxy&&!actualConflicts.length&&factor.calculation?.rubricId?.endsWith('-model-v5-opportunity')){
@@ -29,4 +35,4 @@ for(const row of input.rows){
 }
 rows.sort((a,b)=>b.score-a.score||(a.symbol<b.symbol?-1:a.symbol>b.symbol?1:0));
 assert.equal(new Set(rows.map(row=>row.symbol)).size,rows.length);
-console.log(JSON.stringify({runId:input.runId,total:rows.length,factorDetails,missingFactors:0,missingFinalGrades:0,sorted:rows.length,positive:rows.filter(row=>row.score>0).length,zero:rows.filter(row=>row.score===0).length,types:[...new Set(rows.map(row=>row.type))],top:rows.slice(0,10),bottom:rows.slice(-3)},null,2));
+console.log(JSON.stringify({runId:input.runId,total:rows.length,factorDetails,missingFactors:0,missingFinalGrades:0,invalidImports:0,imported:rows.length,sorted:rows.length,positive:rows.filter(row=>row.score>0).length,zero:rows.filter(row=>row.score===0).length,types:[...new Set(rows.map(row=>row.type))],top:rows.slice(0,10),bottom:rows.slice(-3)},null,2));

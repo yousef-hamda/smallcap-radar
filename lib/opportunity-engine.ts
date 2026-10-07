@@ -299,10 +299,12 @@ export function evaluateOpportunity(
   };
 }
 
-/** Stable evaluation identity for the same saved snapshot and rubric. */
+/** Stable evaluation identity for the same source values and rubric, independent
+ * of JSON object field order. Array order remains part of the input identity. */
 function evaluationFingerprint(value: unknown) {
   let hash = 2166136261;
-  for (const character of JSON.stringify(value)) { hash ^= character.charCodeAt(0); hash = Math.imul(hash, 16777619); }
+  const serialized=JSON.stringify(value,(_key,item)=>item && typeof item==='object' && !Array.isArray(item) ? Object.fromEntries(Object.keys(item).sort().map(key=>[key,item[key]])) : item);
+  for (const character of serialized) { hash ^= character.charCodeAt(0); hash = Math.imul(hash, 16777619); }
   return `${opportunitySpecHash()}:${(hash >>> 0).toString(16).padStart(8, '0')}`;
 }
 

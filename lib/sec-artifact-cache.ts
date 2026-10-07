@@ -29,5 +29,5 @@ export async function recordSecArtifact(url:string,value:unknown,error?:string,n
  if(compressed.length<=2_000_000)writes.push(db().prepare('INSERT OR REPLACE INTO sec_artifact_cache(url,cik,content_hash,fetched_at,expires_at,body_gzip) VALUES(?,?,?,?,?,?)').bind(url,cik,hash,now,now+6*60*60_000,compressed));
  await db().batch(writes);
  // Bounded acquisition cache; saved snapshots/filings retain the scoring evidence.
- await db().prepare('DELETE FROM sec_artifact_cache WHERE url IN (SELECT url FROM (SELECT url,SUM(length(body_gzip)) OVER(ORDER BY fetched_at DESC,url) AS used FROM sec_artifact_cache) WHERE used>268435456)').run();
+ await db().prepare('DELETE FROM sec_artifact_cache WHERE url IN (SELECT url FROM (SELECT url,SUM(length(body_gzip)) OVER(ORDER BY fetched_at DESC,url) AS used FROM sec_artifact_cache) WHERE used>67108864)').run();
 }

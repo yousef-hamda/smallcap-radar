@@ -1,3 +1,4 @@
+import {scanCapacityPaused} from './scan-capacity';
 import {reconcileAcquisitionDirectory} from './directory-reconcile';
 import {publishDirectoryRatings} from './directory-rating';
 import { currentHash, db, ensureSchema, insertSnapshot, log } from './storage';
@@ -66,6 +67,7 @@ export async function startScan(modeInput: unknown) {
   const activeSql = "SELECT * FROM strategy_runs WHERE strategy_hash=? AND source LIKE 'Bulk Quotes/%' AND status IN ('running','partial') AND stage<13 ORDER BY created_at DESC LIMIT 1";
   const previous = await database.prepare(activeSql).bind(currentHash()).first();
   if (previous && previous.strategy_hash === currentHash() && (previous.stage < 13 || previous.offset < previous.total || JSON.parse(previous.retry_queue || '[]').length)) return publicRun(previous);
+  if(await scanCapacityPaused())throw Object.assign(new Error('تحديث البيانات متوقف مؤقتًا لحماية مساحة التخزين؛ الترتيب المحفوظ متاح.'),{status:503});
   const recent = await database.prepare('SELECT created_at FROM strategy_runs WHERE source=? ORDER BY created_at DESC LIMIT 1').bind(source).first() as any;
   if (recent && Date.now() - Date.parse(recent.created_at) < 30_000) throw Object.assign(new Error('انتظر نصف دقيقة قبل بدء فحص جديد من النوع نفسه.'), { status: 429 });
 
@@ -109,6 +111,7 @@ export async function processScanBatch(runId: string) {
   const initialQueue = JSON.parse(run.retry_queue || '[]');
   if ((run.stage >= 13 && run.offset >= run.total && !initialQueue.length) || !['running', 'partial'].includes(run.status)) return { run: publicRun(run), done: true };
 
+  if(await scanCapacityPaused())return {run:publicRun(run),done:false,pausedForCapacity:true};
   const lock = await database.prepare("UPDATE strategy_runs SET lease_until=?,status='running' WHERE id=? AND lease_until<? AND offset=? AND stage=? AND retry_queue=?").bind(Date.now() + 90_000, run.id, Date.now(), run.offset, run.stage, run.retry_queue).run();
   if (!lock.meta.changes) return { run: publicRun(run), done: false, busy: true };
 
