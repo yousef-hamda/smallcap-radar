@@ -1,6 +1,6 @@
 # Complete-universe rating model
 
-Active rubric: `1.2.5-complete-instrument-contract`. This is the final mathematical research rating used for sorting and display. Source review completeness, confidence and tradability findings are separate diagnostics.
+Active deployed rubric: `1.2.6-stable-import-identities` / `d21f9710`. This is the final mathematical research rating used for sorting and display. Source review completeness, confidence and tradability findings are separate diagnostics.
 
 ## Fixed factor weights and arithmetic
 

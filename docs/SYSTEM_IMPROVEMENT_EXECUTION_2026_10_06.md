@@ -1,6 +1,6 @@
 # Opportunity system improvement — execution contract
 
-Started: 2026-10-06. Status: active implementation; this document is not a completion claim.
+Started: 2026-10-06. Final mathematical ranking acceptance verified: 2026-10-07. Broader predictive/source-diligence requirements remain unvalidated. Read the [final audit](SYSTEM_IMPROVEMENT_FINAL_AUDIT_2026_10_07.md), [production proof](SYSTEM_IMPROVEMENT_PRODUCTION_VERIFICATION_2026_10_07.json) and [test ledger](SYSTEM_IMPROVEMENT_TEST_LEDGER_2026_10_07.md). Checkpoints below preserve intermediate results and failures; their pending statuses are historical.
 
 ## Objective and immutable contract
 
@@ -152,3 +152,14 @@ Storage audit identified 2.86 GB of duplicated inline historical source/evaluati
 
 
 Recovery gates PASS: the current full database was downloaded privately off-host (1,514,277,608 gzip bytes; restored 4,815,323,136 bytes), restored with immutable SQLite access and passed integrity checks. Checksum `8103eb52f91f4ec0a6838dbd6d947e5ae0bc5778aff4c43c4db765ead26dfcac`. Five bounded independent ranges verified exact restored source/evaluation byte parity for all 117,756 saved records and exact private-value parity; 102,744 lossless archives after migration. The compacted 3,040,825,344-byte copy passed integrity checks. Six sequential production copy blocks were verified byte-for-byte before installation. Only the confirmed backup-protected database file family was replaced while writers were stopped; source/evaluation contents, private values, run IDs and active acquisition checkpoints were preserved. The disk guard and canonical-hash release must still pass direct final deployment verification.
+
+
+### Final deployed acceptance — October 7, 2026
+
+Deployment `7a9f861a-4b77-41aa-a09f-dbc4f9fcbf2e` SUCCESS, application archive `6c452e5545b4c78ea25f09374794219f45f81afd`, rubric `1.2.6-stable-import-identities` / `d21f9710`; exact application CI `37568804637` PASS. Complete final published release `ca402eb1-9ba3-424d-a153-ce827c0498db:ratings-v5`, revision 22,518. All 7,506 saved evaluations, radar rows, report rows, profiles, export records and actual DOM ranking rows agree; 60,048 numeric factors, zero missing factors/final grades/hashes/ranks, all 7,506 sorted. Independent component arithmetic, strict import field preservation, imported/raw identity, repeated replay and Mac/Linux deep evaluation parity PASS. All grades are unchanged from the pre-hash-repair release. All 102,744 live historical archives restore with exact identity and all-factor parity; all 117,756 original saved source/evaluation records and private values survive recovery exactly.
+
+Mobile 390×844 reload/pagination, both positive and zero profiles, report pagination, background status-refresh retention, full 7,506-row DOM and explicit cached-subset offline grades PASS, without overflow or page errors. Offline proof covers 40 cached rows, not the complete universe. Final local gates: engine 196/196, runtime/API 91/91, verified build/root/UI 57/57, research 9/9, SQLite 4/4, typecheck/lint/script syntax/whitespace PASS.
+
+Independent live official downloads at 03:57:11.817 UTC contain 7,494 listings; none are missing, all original 6,954 remain, and the 12 retained unconfirmed symbols all have zero grades. No stock is removed for missing source facts or safety findings. Current primary ranked count is 7,506; secondary source-review diagnostics are 6,041 needs-research / 1,465 excluded.
+
+Native acquisition advanced from issuer offset 3,024 to 3,304 at stage 11 after restart, with browser resume blocked. At 04:02:36 UTC: 5,929 issuers, 12,701 SEC requests, 9,064 successes, 333 SEC failures, 481 carried historical-bar failures. These source gaps do not remove saved final grades. Actual filesystem free space was 1,743,847,424 bytes. Basic complete rating needs no further scan. The finite volume and capacity pause require monitoring. The broader request for comprehensive diligence and validated high-probability buying outcomes remains incomplete: source facts, specialized/fully diluted models, reviewed catalyst economics/governance and point-in-time calibration are still missing. Probabilities and six-month price targets remain null; no synthetic outcome is promoted as evidence.

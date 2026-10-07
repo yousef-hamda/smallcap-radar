@@ -1,10 +1,27 @@
-# Current release acceptance — October 7, 2026
+# Production acceptance — October 7, 2026
 
-Candidate `1.2.6` / `d21f9710`: engine 196, runtime 91, build/root 57, research 9, database 4, typecheck/lint PASS. Strict full-universe import and canonical identity replay preserve every grade across 7,506 listings. The production full-volume outage invalidated earlier 1.2.5 acceptance. Recovery, final deployment and exhaustive direct API/UI/storage checks are required before acceptance; older proofs below are historical. See `SYSTEM_IMPROVEMENT_EXECUTION_2026_10_06.md`.
+**PASS for every required mathematical scoring/ranking condition.** Deployment `7a9f861a-4b77-41aa-a09f-dbc4f9fcbf2e`, application archive `6c452e5545b4c78ea25f09374794219f45f81afd`, rubric `1.2.6-stable-import-identities` / `d21f9710`. Exact-archive CI `37568804637` PASS.
+
+| Acceptance check | Observed result |
+|---|---:|
+| Complete official inventory plus retained tracked listings | 7,506 |
+| Saved evaluations / radar / report / profile / export / rendered rows | 7,506 each |
+| Numeric required factor grades | 60,048 |
+| Missing factor grades / final grades / stable hashes / ranks | 0 / 0 / 0 / 0 |
+| Sorted by actual saved final grade | 7,506 |
+| Positive / zero final grades, all visible | 6,521 / 985 |
+| Fixed arithmetic, imported/raw identity, Mac/Linux replay | PASS |
+| UI/API/storage/report/export parity and reloads | PASS |
+| Full history restoration and private data preservation | PASS |
+| Scan required to finish basic scoring | No |
+
+[Final audit](SYSTEM_IMPROVEMENT_FINAL_AUDIT_2026_10_07.md), [machine-readable proof](SYSTEM_IMPROVEMENT_PRODUCTION_VERIFICATION_2026_10_07.json), [all test results](SYSTEM_IMPROVEMENT_TEST_LEDGER_2026_10_07.md). The prior full-volume outage was a failed acceptance attempt; verified lossless recovery and final rechecks supersede it. Complete numerical grades do not mean complete factual evidence or validated high-probability buying outcomes. Source enrichment continues; specialized valuation, reviewed diligence, data-use rights and point-in-time calibration remain incomplete. This acceptance does not certify those broader research requirements.
+
+Earlier entries below are historical. Source-review states do not restrict the current complete ranking.
 
 ---
 
-# Current acceptance contract — production verified 2026-10-06
+# Historical acceptance checkpoint — October 6, 2026
 
 The complete mathematical ranking requirements in [the 2026-10-05 audit](COMPLETE_RANKING_AUDIT_2026_10_05.md) supersede earlier requirements that used source completeness as a ranking filter. All eight grades and the final grade are required for every listing. Evidence sufficiency and investment safety remain separate findings. Entries below are historical.
 

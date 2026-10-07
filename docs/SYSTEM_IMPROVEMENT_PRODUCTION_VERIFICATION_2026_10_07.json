@@ -1,0 +1,719 @@
+{
+  "result": "PASS \u2014 complete mathematical ranking acceptance",
+  "verifiedAt": "2026-10-07T04:16:19.127717+00:00",
+  "productionUrl": "https://smallcap-radar-production.up.railway.app/",
+  "deployment": {
+    "id": "7a9f861a-4b77-41aa-a09f-dbc4f9fcbf2e",
+    "status": "SUCCESS",
+    "applicationCommit": "6c452e5545b4c78ea25f09374794219f45f81afd",
+    "rubricVersion": "1.2.6-stable-import-identities",
+    "rubricHash": "d21f9710",
+    "ciRun": 37568804637,
+    "ciResult": "PASS"
+  },
+  "contract": {
+    "weights": [
+      25,
+      20,
+      15,
+      12,
+      10,
+      10,
+      5,
+      3
+    ],
+    "factorRange": [
+      0,
+      10
+    ],
+    "finalRange": [
+      0,
+      100
+    ],
+    "arithmetic": "round(sum(round(factorGrade*100)*weight)/10)/100",
+    "sort": "final grade descending, symbol SQLite BINARY ascending",
+    "missingFactComponentCredit": 0,
+    "requiresScanForBasicScoring": false,
+    "probability": null,
+    "calibration": "unvalidated"
+  },
+  "inventory": {
+    "stage": "inventory",
+    "officialMethod": "live official URLs",
+    "officialRetrievedAt": "2026-10-07T03:57:11.817Z",
+    "officialListed": 7494,
+    "previousTracked": 6954,
+    "retainedUnconfirmed": 12,
+    "total": 7506,
+    "missingOfficial": 0,
+    "missingPreviouslyTracked": 0
+  },
+  "productionApis": {
+    "result": "PASS",
+    "runId": "ca402eb1-9ba3-424d-a153-ce827c0498db:ratings-v5",
+    "total": 7506,
+    "missingFactors": 0,
+    "missingFinalGrades": 0,
+    "sorted": 7506,
+    "radar": 7506,
+    "reports": 7506,
+    "profiles": 7506,
+    "rankMin": 1,
+    "rankMax": 7506,
+    "version": "1.2.6-stable-import-identities",
+    "rubricHash": "d21f9710",
+    "positive": 6521,
+    "zero": 985,
+    "top": [
+      {
+        "symbol": "IAG",
+        "score": 49.47,
+        "rank": 1
+      },
+      {
+        "symbol": "CGEN",
+        "score": 48.59,
+        "rank": 2
+      },
+      {
+        "symbol": "CELH",
+        "score": 47.95,
+        "rank": 3
+      },
+      {
+        "symbol": "B",
+        "score": 47.6,
+        "rank": 4
+      },
+      {
+        "symbol": "DLO",
+        "score": 46.39,
+        "rank": 5
+      },
+      {
+        "symbol": "MNDY",
+        "score": 46.02,
+        "rank": 6
+      },
+      {
+        "symbol": "CNX",
+        "score": 45.33,
+        "rank": 7
+      },
+      {
+        "symbol": "FIX",
+        "score": 45.07,
+        "rank": 8
+      },
+      {
+        "symbol": "SNDK",
+        "score": 44.18,
+        "rank": 9
+      },
+      {
+        "symbol": "ALSN",
+        "score": 44.12,
+        "rank": 10
+      }
+    ],
+    "reload": "PASS"
+  },
+  "release": {
+    "runId": "ca402eb1-9ba3-424d-a153-ce827c0498db:ratings-v5",
+    "revision": 22518,
+    "rubricHash": "d21f9710",
+    "token": "ca402eb1-9ba3-424d-a153-ce827c0498db:ratings-v5:22518:d21f9710"
+  },
+  "savedReplayAndStrictImport": {
+    "runId": "ca402eb1-9ba3-424d-a153-ce827c0498db:ratings-v5",
+    "total": 7506,
+    "factorDetails": {
+      "valuation": {
+        "numeric": 7506,
+        "positive": 3846,
+        "min": 0,
+        "max": 9.75
+      },
+      "catalysts": {
+        "numeric": 7506,
+        "positive": 1364,
+        "min": 0,
+        "max": 5
+      },
+      "financialStrength": {
+        "numeric": 7506,
+        "positive": 2305,
+        "min": 0,
+        "max": 10
+      },
+      "earningsQuality": {
+        "numeric": 7506,
+        "positive": 1445,
+        "min": 0,
+        "max": 10
+      },
+      "competitivePosition": {
+        "numeric": 7506,
+        "positive": 2736,
+        "min": 0,
+        "max": 7
+      },
+      "downsideRisk": {
+        "numeric": 7506,
+        "positive": 4099,
+        "min": 0,
+        "max": 7
+      },
+      "management": {
+        "numeric": 7506,
+        "positive": 3924,
+        "min": 0,
+        "max": 4
+      },
+      "technicalTiming": {
+        "numeric": 7506,
+        "positive": 6393,
+        "min": 0,
+        "max": 10
+      }
+    },
+    "missingFactors": 0,
+    "missingFinalGrades": 0,
+    "invalidImports": 0,
+    "imported": 7506,
+    "sorted": 7506,
+    "positive": 6521,
+    "zero": 985,
+    "types": [
+      "common",
+      "adr",
+      "unknown",
+      "preferred",
+      "unit",
+      "fund",
+      "warrant",
+      "right",
+      "debt"
+    ],
+    "top": [
+      {
+        "symbol": "IAG",
+        "score": 49.47,
+        "hash": "d21f9710:12cd5b06",
+        "type": "common"
+      },
+      {
+        "symbol": "CGEN",
+        "score": 48.59,
+        "hash": "d21f9710:fa548100",
+        "type": "common"
+      },
+      {
+        "symbol": "CELH",
+        "score": 47.95,
+        "hash": "d21f9710:47c2763a",
+        "type": "common"
+      },
+      {
+        "symbol": "B",
+        "score": 47.6,
+        "hash": "d21f9710:73010214",
+        "type": "common"
+      },
+      {
+        "symbol": "DLO",
+        "score": 46.39,
+        "hash": "d21f9710:aafd6222",
+        "type": "common"
+      },
+      {
+        "symbol": "MNDY",
+        "score": 46.02,
+        "hash": "d21f9710:da0b38cd",
+        "type": "common"
+      },
+      {
+        "symbol": "CNX",
+        "score": 45.33,
+        "hash": "d21f9710:fd05ecce",
+        "type": "common"
+      },
+      {
+        "symbol": "FIX",
+        "score": 45.07,
+        "hash": "d21f9710:c410b4ac",
+        "type": "common"
+      },
+      {
+        "symbol": "SNDK",
+        "score": 44.18,
+        "hash": "d21f9710:99717435",
+        "type": "common"
+      },
+      {
+        "symbol": "ALSN",
+        "score": 44.12,
+        "hash": "d21f9710:fce6c97b",
+        "type": "common"
+      }
+    ],
+    "bottom": [
+      {
+        "symbol": "ZKPW",
+        "score": 0,
+        "hash": "d21f9710:5e6471aa",
+        "type": "warrant"
+      },
+      {
+        "symbol": "ZNB",
+        "score": 0,
+        "hash": "d21f9710:eb7b5fa0",
+        "type": "common"
+      },
+      {
+        "symbol": "ZOOZW",
+        "score": 0,
+        "hash": "d21f9710:8c04b221",
+        "type": "warrant"
+      }
+    ]
+  },
+  "httpExport": {
+    "result": "PASS",
+    "runId": "ca402eb1-9ba3-424d-a153-ce827c0498db:ratings-v5",
+    "release": {
+      "runId": "ca402eb1-9ba3-424d-a153-ce827c0498db:ratings-v5",
+      "revision": 22518,
+      "rubricHash": "d21f9710",
+      "token": "ca402eb1-9ba3-424d-a153-ce827c0498db:ratings-v5:22518:d21f9710"
+    },
+    "records": 7506,
+    "numericFactors": 60048,
+    "matchingSavedEvaluations": 7506,
+    "ranks": "complete descending with symbol tie break"
+  },
+  "renderedUniverse": {
+    "backgroundRefresh": "PASS",
+    "result": "PASS",
+    "total": 7506,
+    "release": {
+      "runId": "ca402eb1-9ba3-424d-a153-ce827c0498db:ratings-v5",
+      "revision": 22518,
+      "rubricHash": "d21f9710",
+      "token": "ca402eb1-9ba3-424d-a153-ce827c0498db:ratings-v5:22518:d21f9710"
+    },
+    "rendered": 7506,
+    "apiGrades": 7506,
+    "factorGrades": 60048,
+    "mismatches": 0,
+    "examples": [],
+    "first": "IAG",
+    "last": "ZOOZW",
+    "zeroGrades": 985,
+    "hasMore": false,
+    "viewportWidth": 1440,
+    "documentWidth": 1440
+  },
+  "mobile": {
+    "result": "PASS",
+    "viewport": "390x844",
+    "overflow": false,
+    "reload": {
+      "width": 390,
+      "document": 390,
+      "cards": 40,
+      "first": "IAG",
+      "score": "49.47"
+    },
+    "pagination": {
+      "cards": 80,
+      "ranks": "1\u201380"
+    }
+  },
+  "profileAndReportUi": {
+    "result": "PASS",
+    "profiles": [
+      {
+        "symbol": "IAG",
+        "score": "49.47",
+        "factors": 8
+      },
+      {
+        "symbol": "ZOOZW",
+        "score": "0.00",
+        "factors": 8
+      }
+    ],
+    "report": {
+      "firstPage": 25,
+      "firstPageFactors": 200,
+      "secondPageFirstRank": 26
+    },
+    "pageErrors": [],
+    "width": {
+      "viewport": 390,
+      "document": 390
+    }
+  },
+  "offlineCachedSubset": {
+    "result": "PASS",
+    "cachedRows": 40,
+    "factorGrades": 320,
+    "release": {
+      "runId": "ca402eb1-9ba3-424d-a153-ce827c0498db:ratings-v5",
+      "revision": 22518,
+      "rubricHash": "d21f9710",
+      "token": "ca402eb1-9ba3-424d-a153-ce827c0498db:ratings-v5:22518:d21f9710"
+    },
+    "width": 390,
+    "viewport": 390,
+    "scope": "explicit cached subset"
+  },
+  "sourceCoverage": {
+    "runId": "ca402eb1-9ba3-424d-a153-ce827c0498db:ratings-v5",
+    "total": 7506,
+    "intrinsicModels": 394,
+    "peerModels": 535,
+    "missingStableHashes": 0,
+    "sourceReviewStates": {
+      "needs-research": 6041,
+      "excluded": 1465
+    },
+    "bySecurityType": {
+      "common": {
+        "listings": 5291,
+        "missingFactors": 0,
+        "missingGrades": 0,
+        "positiveGrades": 5193
+      },
+      "unit": {
+        "listings": 350,
+        "missingFactors": 0,
+        "missingGrades": 0,
+        "positiveGrades": 257
+      },
+      "warrant": {
+        "listings": 438,
+        "missingFactors": 0,
+        "missingGrades": 0,
+        "positiveGrades": 155
+      },
+      "adr": {
+        "listings": 321,
+        "missingFactors": 0,
+        "missingGrades": 0,
+        "positiveGrades": 309
+      },
+      "right": {
+        "listings": 129,
+        "missingFactors": 0,
+        "missingGrades": 0,
+        "positiveGrades": 26
+      },
+      "unknown": {
+        "listings": 426,
+        "missingFactors": 0,
+        "missingGrades": 0,
+        "positiveGrades": 378
+      },
+      "preferred": {
+        "listings": 474,
+        "missingFactors": 0,
+        "missingGrades": 0,
+        "positiveGrades": 127
+      },
+      "fund": {
+        "listings": 66,
+        "missingFactors": 0,
+        "missingGrades": 0,
+        "positiveGrades": 66
+      },
+      "debt": {
+        "listings": 11,
+        "missingFactors": 0,
+        "missingGrades": 0,
+        "positiveGrades": 10
+      }
+    },
+    "fields": {
+      "price": {
+        "numeric": 6973,
+        "datedHttpsSource": 6949,
+        "missing": 533
+      },
+      "marketCap": {
+        "numeric": 6385,
+        "datedHttpsSource": 6279,
+        "missing": 1121
+      },
+      "revenue": {
+        "numeric": 4673,
+        "datedHttpsSource": 4673,
+        "missing": 2833
+      },
+      "fcf": {
+        "numeric": 3462,
+        "datedHttpsSource": 3462,
+        "missing": 4044
+      },
+      "netIncome": {
+        "numeric": 5578,
+        "datedHttpsSource": 5578,
+        "missing": 1928
+      },
+      "cash": {
+        "numeric": 5602,
+        "datedHttpsSource": 5602,
+        "missing": 1904
+      },
+      "debt": {
+        "numeric": 1564,
+        "datedHttpsSource": 1564,
+        "missing": 5942
+      },
+      "ps": {
+        "numeric": 4523,
+        "datedHttpsSource": 4523,
+        "missing": 2983
+      },
+      "evSales": {
+        "numeric": 1104,
+        "datedHttpsSource": 1104,
+        "missing": 6402
+      },
+      "fcfYield": {
+        "numeric": 3444,
+        "datedHttpsSource": 3444,
+        "missing": 4062
+      },
+      "return12m": {
+        "numeric": 6552,
+        "datedHttpsSource": 6420,
+        "missing": 954
+      },
+      "ma30w": {
+        "numeric": 6143,
+        "datedHttpsSource": 6143,
+        "missing": 1363
+      },
+      "low52w": {
+        "numeric": 6960,
+        "datedHttpsSource": 6769,
+        "missing": 546
+      },
+      "high52w": {
+        "numeric": 6959,
+        "datedHttpsSource": 6768,
+        "missing": 547
+      },
+      "dilution": {
+        "numeric": 5243,
+        "datedHttpsSource": 5243,
+        "missing": 2263
+      },
+      "insiderBuyValue": {
+        "numeric": 0,
+        "datedHttpsSource": 0,
+        "missing": 7506
+      }
+    },
+    "probability": "unvalidated; null, no demonstrated investment success"
+  },
+  "historyAndPrivateData": {
+    "result": "PASS",
+    "archives": 102744,
+    "restored": 102744,
+    "identityAndAllFactorGradeParity": 102744,
+    "archiveSummaryVersion": 2,
+    "privateCounts": {
+      "personal_watchlist": 14,
+      "portfolio_transactions": 6,
+      "radar_accounts": 1,
+      "radar_sessions": 3,
+      "recovery_bundles": 1
+    }
+  },
+  "storageRecovery": {
+    "backup": {
+      "result": "PASS",
+      "sha256": "8103eb52f91f4ec0a6838dbd6d947e5ae0bc5778aff4c43c4db765ead26dfcac",
+      "compressedBytes": 1514277608,
+      "restoredBytes": 4815323136,
+      "integrity": "ok",
+      "canonical": 7506,
+      "counts": {
+        "fundamental_snapshots": 117756,
+        "snapshot_archives": 88558,
+        "personal_watchlist": 14,
+        "portfolio_transactions": 6,
+        "radar_accounts": 1,
+        "radar_sessions": 3,
+        "recovery_bundles": 1
+      }
+    },
+    "sourceAndEvaluationByteParity": {
+      "result": "PASS",
+      "sourceAndEvaluationByteParity": 117756,
+      "archives": 102744,
+      "privateValueParity": true,
+      "privateCounts": {
+        "personal_watchlist": 14,
+        "portfolio_transactions": 6,
+        "radar_accounts": 1,
+        "radar_sessions": 3,
+        "recovery_bundles": 1
+      }
+    },
+    "installation": {
+      "result": "PASS",
+      "copiedAndVerifiedBytes": 3040825344,
+      "canonical": 7506,
+      "counts": {
+        "fundamental_snapshots": 117756,
+        "snapshot_archives": 102744,
+        "personal_watchlist": 14,
+        "portfolio_transactions": 6,
+        "radar_accounts": 1,
+        "radar_sessions": 3,
+        "recovery_bundles": 1
+      },
+      "filesystemFreeBytes": 1779519488,
+      "at": "2026-10-07T03:52:44.861Z"
+    }
+  },
+  "tests": [
+    {
+      "command": "npm run test:engine (also run by test:runtime)",
+      "tests": 196,
+      "passed": 196,
+      "failed": 0
+    },
+    {
+      "command": "npm run test:runtime",
+      "tests": 91,
+      "passed": 91,
+      "failed": 0
+    },
+    {
+      "command": "npm test (verified production build and root/UI tests)",
+      "tests": 57,
+      "passed": 57,
+      "failed": 0
+    },
+    {
+      "command": "npm run test:research",
+      "tests": 9,
+      "passed": 9,
+      "failed": 0
+    },
+    {
+      "command": "python3 tests/test_database.py",
+      "tests": 4,
+      "passed": 4,
+      "failed": 0
+    },
+    {
+      "command": "npm run typecheck",
+      "result": "PASS"
+    },
+    {
+      "command": "npm run lint",
+      "result": "PASS"
+    },
+    {
+      "command": "node --check scripts/verify-complete-ranking.mjs",
+      "result": "PASS"
+    },
+    {
+      "command": "node --check scripts/verify-production-ranking.mjs",
+      "result": "PASS"
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS"
+    }
+  ],
+  "nativeIngestion": {
+    "at": "2026-10-07T04:02:36.031Z",
+    "capacity": {
+      "reusableBytes": 53248,
+      "filesystemFreeBytes": 1743847424
+    },
+    "runs": [
+      {
+        "id": "ca402eb1-9ba3-424d-a153-ce827c0498db:ratings-v5",
+        "status": "partial",
+        "stage": 13,
+        "offset": 7506,
+        "total": 7506,
+        "universeTotal": 7506,
+        "secRequests": 0,
+        "secSuccess": 0,
+        "secFailed": 0,
+        "historyFailed": 0,
+        "strategyHash": "UNIFIED_OPPORTUNITY:f7c5745f",
+        "updatedAt": "2026-10-06T23:58:01.599Z"
+      },
+      {
+        "id": "ca402eb1-9ba3-424d-a153-ce827c0498db",
+        "status": "running",
+        "stage": 11,
+        "offset": 3304,
+        "total": 5929,
+        "universeTotal": 7506,
+        "secRequests": 12701,
+        "secSuccess": 9064,
+        "secFailed": 333,
+        "historyFailed": 481,
+        "strategyHash": "UNIFIED_OPPORTUNITY:d21f9710",
+        "updatedAt": "2026-10-07T04:02:27.120Z"
+      }
+    ]
+  },
+  "remainingLimitations": [
+    "Buying success probabilities and six-month price targets are unvalidated and remain null.",
+    "Factual source gaps, investor safety and research-review findings remain explicit; complete numeric grades do not assert complete factual evidence.",
+    "Full fresh acquisition continues independently; historical-bar failures (481) and provider acquisition failures are recorded, with complete saved numerical ratings retained.",
+    "Fully diluted/senior-claim, specialized-sector/security valuation, reviewed catalyst economics and comprehensive governance/risk diligence remain incomplete.",
+    "Market-data product-use rights and point-in-time/delisted total-return calibration remain unresolved; no calibrated high-probability return claim is enabled.",
+    "The existing 5,000 MB storage volume remains finite; monitor capacity pauses and arrange verified reclamation or explicitly approved capacity changes."
+  ],
+  "remainingScoringRankingAcceptanceFailures": 0,
+  "finalDirectRecheck": {
+    "at": "2026-10-07T04:22:25.089Z",
+    "http": 200,
+    "deploymentId": "7a9f861a-4b77-41aa-a09f-dbc4f9fcbf2e",
+    "deploymentStatus": "SUCCESS",
+    "release": {
+      "runId": "ca402eb1-9ba3-424d-a153-ce827c0498db:ratings-v5",
+      "revision": 22518,
+      "rubricHash": "d21f9710",
+      "token": "ca402eb1-9ba3-424d-a153-ce827c0498db:ratings-v5:22518:d21f9710"
+    },
+    "summary": {
+      "total": 7506,
+      "sortedCount": 7506,
+      "missingFactorScores": 0,
+      "missingFinalGrades": 0,
+      "opportunityRanked": 7506,
+      "opportunityNeedsResearch": 0,
+      "opportunityExcluded": 0
+    },
+    "capacity": {
+      "reusableBytes": 0,
+      "filesystemFreeBytes": 1626980352
+    },
+    "nativeProgress": [
+      {
+        "id": "ca402eb1-9ba3-424d-a153-ce827c0498db",
+        "stage": 11,
+        "offset": 4488,
+        "total": 5929,
+        "status": "running",
+        "secSuccess": 10233,
+        "secFailed": 348,
+        "historyFailed": 481
+      }
+    ]
+  }
+}
