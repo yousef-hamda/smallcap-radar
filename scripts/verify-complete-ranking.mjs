@@ -7,7 +7,9 @@ import {evaluateOpportunityDossier,opportunityDossierFromSnapshot} from '../.tes
 import {isCurrentOpportunityEvaluation} from '../.test-build/opportunity-engine.mjs';
 import {completeSnapshotSchema} from '../.test-build/validation.mjs';
 import {applyFinancingRisk} from '../.test-build/financing-risk.mjs';
-const file=process.argv[2];if(!file)throw Error('Usage: node scripts/verify-complete-ranking.mjs universe.json|universe.jsonl [--stored]');
+const file=process.argv[2];if(!file)throw Error('Usage: node scripts/verify-complete-ranking.mjs universe.json|universe.jsonl [--stored|--candidate]');
+const candidate=process.argv.includes('--candidate');
+assert.ok(!(candidate&&process.argv.includes('--stored')),'Candidate ranks cannot be checked against saved baseline ranks');
 const factorDetails={};
 const rows=[];
 let runId,expectedRows;
@@ -57,7 +59,7 @@ for await(const row of sourceRows()){
   }
  for(const factor of evaluation.factors){const detail=factorDetails[factor.id]??={numeric:0,positive:0,min:10,max:0};detail.numeric++;detail.positive+=factor.score>0;detail.min=Math.min(detail.min,factor.score);detail.max=Math.max(detail.max,factor.score);}
  if(row.rank!==undefined)assert.ok(Number.isSafeInteger(row.rank)&&row.rank>0,`${row.symbol}: invalid export rank`);
- rows.push({symbol:row.symbol,score:evaluation.score,hash:evaluation.evaluationHash,type:snapshot.securityType,rank:row.rank});
+ rows.push({symbol:row.symbol,score:evaluation.score,hash:evaluation.evaluationHash,type:snapshot.securityType,rank:candidate?undefined:row.rank});
 }
 assert.equal(rows.length,expectedRows,'Incomplete universe export');
 rows.sort((a,b)=>b.score-a.score||(a.symbol<b.symbol?-1:a.symbol>b.symbol?1:0));

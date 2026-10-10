@@ -5,6 +5,8 @@ import { OPPORTUNITY_SPEC, type OpportunityFactorId } from './opportunity-spec';
 import { compatibleSnapshotMetrics, commercialObservationKind, operatingIssuerMetricsApplicable, commonPerShareMetricsApplicable,modelEvidenceAvailable } from './financial-integrity';
 import {peerObservation,peerContext,uniqueIssuerPeers} from './opportunity-peers';
 import {buildOpportunityThesis,intrinsicValuationGrade} from './opportunity-thesis';
+import {MODEL_DEPENDENCIES,conflictAffectsKeys,modelFactorConflicts} from './opportunity-conflicts';
+export {conflictAffectsKeys,modelFactorConflicts} from './opportunity-conflicts';
 
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 const clamp = (value: number, low = 0, high = 10) => Math.max(low, Math.min(high, value));
@@ -59,9 +61,10 @@ export function proxyOpportunityEvidence(snapshot: Snapshot,horizonMonths:number
     return { name, weight, keys, values: values.map(value => value ?? 'missing-or-ineligible'), grade: compatible && values.every(finite) ? clamp(calculate(...values as number[])) : null };
   };
   const set = (id: OpportunityFactorId, rationale: string, components: Component[]) => {
-    const conflicts = snapshot.sourceConflicts ?? [];
+    const conflicts = modelFactorConflicts(snapshot, id);
     const applicable=snapshot.listingStatus!=='not-confirmed-current' && (id==='technicalTiming'||(operatingIssuerMetricsApplicable(snapshot)&&(id!=='valuation'||commonPerShareMetricsApplicable(snapshot))));
-    const usable = conflicts.length || !applicable ? [] : components.filter(item => item.grade !== null);
+    const componentBlocked = (item: Component) => conflictAffectsKeys(conflicts, MODEL_DEPENDENCIES[id][item.name] ?? item.keys);
+    const usable = !applicable ? [] : components.filter(item => item.grade !== null && !componentBlocked(item));
     const coveragePct = usable.reduce((sum, item) => sum + item.weight, 0);
     const sources: Provenance[] = [...new Map(usable.flatMap(item => item.keys.flatMap(key => {
       const source = snapshot.provenance?.[key];
@@ -71,10 +74,10 @@ export function proxyOpportunityEvidence(snapshot: Snapshot,horizonMonths:number
     output[id] = {
       score: Math.round(usable.reduce((sum, item) => sum + item.grade! * item.weight / 100, 0) * 100) / 100,
       proxy: true, coveragePct, confidence: 'low', sources, conflicts,
-      rationale: `${rationale} Model components use a fixed denominator; missing components earn zero. Input coverage ${coveragePct}%; this is a model rating, not a qualitative review.${conflicts.length ? ' Unresolved snapshot conflicts withhold model points.' : ''}`,
+      rationale: `${rationale} Model components use a fixed denominator; missing components earn zero. Input coverage ${coveragePct}%; this is a model rating, not a qualitative review.${conflicts.length ? ' Unresolved source conflicts withhold dependent component points.' : ''}`,
       calculation: { rubricId: `${id}-model-v5-opportunity`, inputs: [...components.flatMap(item => [
         { name: `${item.name}:weight`, value: item.weight },
-        { name: `${item.name}:grade`, value: !applicable ? 'withheld-instrument' : conflicts.length ? 'withheld-conflict' : item.grade ?? 'missing-zero' },
+        { name: `${item.name}:grade`, value: !applicable ? 'withheld-instrument' : componentBlocked(item) ? 'withheld-conflict' : item.grade ?? 'missing-zero' },
         ...item.keys.map((key, index) => ({ name: `${item.name}:${key}`, value: item.values[index] })),
       ]), ...(components.some(item=>item.keys.includes('revenueGrowth')) ? growthTrace : [])] },
     };
@@ -89,7 +92,7 @@ export function proxyOpportunityEvidence(snapshot: Snapshot,horizonMonths:number
       ?component('fcf-yield',15,['fcfYield'],value=>clamp(value*100))
       :component('fcf-yield-from-margin-and-sales-multiple',15,['fcf','revenue','ps'],(fcf,sales,ps)=>sales>0&&ps>0?clamp(fcf/sales/ps*100):0),
   ]);
-  if(intrinsicGrade!==null&&output.valuation){
+  if(intrinsicGrade!==null&&output.valuation&&output.valuation.calculation?.inputs.some(item=>item.name==='intrinsic-value-sensitivity:grade'&&typeof item.value==='number')){
     output.valuation.sources.push(...thesis.valuation.sources);
     output.valuation.calculation!.inputs.push(
       {name:'normalized owner cash flow',value:thesis.valuation.normalizedCashflow!,unit:'USD'},
@@ -129,7 +132,7 @@ export function proxyOpportunityEvidence(snapshot: Snapshot,horizonMonths:number
     component('margin-trend', 30, ['operatingMarginTrend'], value => value > 0 ? clamp(value * 100) : 0),
     component('growth', 20, ['revenueGrowth'], value => clamp(value * 25)),
   ]);
-  if(output.competitivePosition&&validatedPeerContext?.grade!=null){output.competitivePosition.sources.push(...(ownPeer?.sources??[]),...validatedPeerContext.peers.flatMap(peer=>peer.sources));output.competitivePosition.calculation?.inputs.push(...(ownPeer?[{name:"issuer:annual-gross-margin",value:ownPeer.grossMargin,unit:"ratio"}]:[]),...validatedPeerContext.peers.map(peer=>({name:'peer:'+peer.symbol+':gross-margin',value:peer.grossMargin,unit:'ratio'})));}
+  if(output.competitivePosition&&validatedPeerContext?.grade!=null&&output.competitivePosition.calculation?.inputs.some(item=>item.name==='industry-peer-gross-margin:grade'&&typeof item.value==='number')){output.competitivePosition.sources.push(...(ownPeer?.sources??[]),...validatedPeerContext.peers.flatMap(peer=>peer.sources));output.competitivePosition.calculation?.inputs.push(...(ownPeer?[{name:"issuer:annual-gross-margin",value:ownPeer.grossMargin,unit:"ratio"}]:[]),...validatedPeerContext.peers.map(peer=>({name:'peer:'+peer.symbol+':gross-margin',value:peer.grossMargin,unit:'ratio'})));}
   const financingSource = snapshot.provenance?.deathSpiral;
   const financingKnown = !!financingSource && modelEvidenceAvailable(financingSource, snapshot.asOf)
     &&Number.isFinite(Date.parse(financingSource.retrievedAt))&&Date.parse(financingSource.retrievedAt)<=Date.parse(snapshot.asOf)

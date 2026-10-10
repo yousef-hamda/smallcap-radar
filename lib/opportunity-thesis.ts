@@ -1,5 +1,6 @@
 import type {Snapshot,Provenance} from './engine';
 import {commonPerShareMetricsApplicable,compatibleFinancialSources,modelEvidenceAvailable} from './financial-integrity';
+import {conflictAffectsKeys} from './opportunity-conflicts';
 
 export const INTRINSIC_POLICY = Object.freeze({version:'normalized-owner-cashflow-v3-current-period',years:5,bearReturn:.18,baseReturn:.14,bullReturn:.10,terminalGrowth:.02,maxGrowth:.15,minGrowth:-.10,earningsMultiples:[8,12,16]});
 export type IntrinsicScenario={name:'bear'|'base'|'bull';requiredReturn:number;initialGrowth:number;terminalGrowth:number;cashflowValue:number;earningsValue:number;equityValue:number;valuePerSecurity:number;upside:number;discount:number};
@@ -21,7 +22,8 @@ export function buildOpportunityThesis(snapshot:Snapshot,horizonMonths=6):Opport
  if(!finite(snapshot.price)||snapshot.price<=0||!finite(snapshot.marketCap)||snapshot.marketCap<=0||!usable(snapshot.provenance.price)||!usable(snapshot.provenance.marketCap))gaps.push('USD price and equity capitalization are unavailable.');
  if(['price','marketCap'].some(key=>!snapshot.provenance[key]||(Date.parse(snapshot.asOf)-Date.parse(snapshot.provenance[key].periodEnd))/864e5>7))gaps.push('Price or capitalization is older than seven calendar days.');
  if(snapshot.splitAdjusted!==true)gaps.push('Corporate actions and dilution are not reconciled.');
- if(snapshot.sourceConflicts?.length||snapshot.opportunityResearch?.earnings?.conflicts?.length)gaps.push('Financial source conflicts remain unresolved.');
+ if(conflictAffectsKeys(snapshot.sourceConflicts,['price','marketCap','revenue','netIncome','ocf','capex','fcf','shares','priorShares','shareCountRatio'])
+   ||snapshot.opportunityResearch?.earnings?.conflicts?.length)gaps.push('Valuation input source conflicts remain unresolved.');
  if(periods.length!==3||periods.some((period,index)=>{
   const duration=(Date.parse(period.end)-Date.parse(period.start))/864e5;
   return duration<300||duration>400||(index>0&&Math.abs(Date.parse(period.start)-Date.parse(periods[index-1].end)-864e5)>864e5)

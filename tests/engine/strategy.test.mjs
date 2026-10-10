@@ -496,6 +496,20 @@ test('catalyst rubric scores sourced binding events and preserves status, materi
  const result=scoreCatalysts(catalystInput());assert.equal(result.score,7.8);assert.equal(result.eventScores.length,1);assert.equal(result.confidence,'high');assert.equal(result.calculation.rubricId,'catalysts-v2-explicit-units');assert.ok(result.sources.length>=2);
  const evidence=opportunityEvidence();evidence.catalysts=result;const evaluated=evaluateOpportunity(opportunitySnapshot,evidence);assert.equal(evaluated.factors.find(factor=>factor.id==='catalysts').score,7.8);
 });
+test('investment thesis catalyst gate requires a reviewed material future event, not proxy momentum or a calendar date',()=>{
+ const review=opportunityEvidence();
+ const gate=evidence=>evaluateOpportunity(opportunitySnapshot,evidence).checks.find(check=>check.id==='thesis-catalyst').status;
+ assert.equal(gate(review),'UNKNOWN','a generic high reviewed grade cannot claim a material event');
+ review.catalysts=scoreCatalysts(catalystInput());
+ assert.equal(gate(review),'PASS');
+ for(const events of [[],[{...catalystInput().events[0],classification:'non-binding'}],[{...catalystInput().events[0],impactAsPctTtmRevenue:{...catalystInput().events[0].impactAsPctTtmRevenue,value:4.99}}],[{...catalystInput().events[0],marketPricing:'priced'}]]){
+  assert.equal(gate({...review,catalysts:scoreCatalysts(catalystInput({events}))}),'UNKNOWN');
+ }
+ assert.equal(gate({...review,catalysts:{...scoreCatalysts(catalystInput()),proxy:true}}),'UNKNOWN','a supplied proxy trace cannot satisfy a reviewed thesis gate');
+ const financed=evaluateOpportunity({...opportunitySnapshot,deathSpiral:'clean'},review);
+ assert.equal(financed.checks.find(check=>check.id==='thesis-financing').status,'PASS');
+ assert.equal(evaluateOpportunity({...opportunitySnapshot,deathSpiral:'unknown'},review).checks.find(check=>check.id==='thesis-financing').status,'UNKNOWN');
+});
 test('catalyst rubric distinguishes a documented empty search from missing search and handles nonbinding and priced events conservatively',()=>{
  assert.equal(scoreCatalysts(catalystInput({events:[]})).score,1);
  assert.equal(scoreCatalysts(catalystInput({searchCompleted:false})).score,null);

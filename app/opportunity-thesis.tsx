@@ -6,7 +6,8 @@ export default function OpportunityThesis({evaluation}:{evaluation:OpportunityEv
  const names={bear:'محافظ',base:'أساسي',bull:'متفائل'};
  return <section className="detail-box opportunity-thesis" aria-label="فرضية الفرصة الاستثمارية">
   <h3>فرضية الفرصة · {thesis.horizonMonths} أشهر</h3>
-  <p>{thesis.action==='risk-review'?'مخاطر التمويل تحتاج مراجعة قبل قرار الشراء.':thesis.action==='candidate-review'?'مرشح لمراجعة استثمارية؛ تحقّق من المحفزات وشروط التمويل.':'البحث غير مكتمل لاتخاذ قرار شراء؛ الدرجة النهائية تظل مستخدمة في الترتيب.'}</p>
+  <p>{thesis.action==='risk-review'?'مخاطر التمويل تحتاج مراجعة قبل قرار الشراء.':thesis.action==='candidate-review'?'مرشح لمراجعة استثمارية بعد تحقق الأدلة الأساسية؛ راجع الإفصاحات والمخاطر قبل أي قرار.':'البحث غير مكتمل لاتخاذ قرار شراء؛ الدرجة النهائية تظل مستخدمة في الترتيب.'}</p>
+  <p>شروط الترشيح: القيمة الجوهرية {thesis.valuation.status==='available'?'محسوبة':'غير متاحة'} · محفز مستقبلي جوهري ومراجع {evaluation.checks.find(check=>check.id==='thesis-catalyst')?.status==='PASS'?'موثق':'غير موثق'} · مراجعة التمويل {evaluation.checks.find(check=>check.id==='thesis-financing')?.status==='PASS'?'مقبولة':'ناقصة أو مرتفعة المخاطر'} · أهلية الأدلة {evaluation.sourceEligible?'مكتملة':'غير مكتملة'}.</p>
   <h4>القيمة الجوهرية وحساسية الافتراضات</h4>
   {thesis.valuation.status==='available'?<>
    <p>تقدير رياضي من التدفق النقدي بعد الإنفاق الرأسمالي وتعويضات الأسهم، مع مقارنة بصافي الدخل المعتاد. يُستخدم الأقل بين الطريقتين. الافتراضات ثابتة لجميع الشركات، وليست حقائق أعلنتها الشركة.</p>

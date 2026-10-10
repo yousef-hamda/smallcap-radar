@@ -1,0 +1,1620 @@
+{
+  "status": "PASS",
+  "cutoffDate": "2026-10-09",
+  "input": {
+    "sha256": "eb3b2e0fb9f01d11f310539bd170f132aff08033de634c9c63df9569758d41ce",
+    "runId": "74a8e534-9912-4c31-bc64-3eba0ef8d4ad:ratings-v5",
+    "rows": 7517,
+    "asOf": {
+      "distinct": 1,
+      "first": "2026-10-09T15:58:28.220Z",
+      "last": "2026-10-09T15:58:28.220Z"
+    }
+  },
+  "baseline": {
+    "version": "1.2.6-stable-import-identities",
+    "savedParity": 7517
+  },
+  "candidate": {
+    "version": "1.4.0-scoped-conflicts-thesis-gates",
+    "rubricHash": "55dd2e8a"
+  },
+  "weights": [
+    25,
+    20,
+    15,
+    12,
+    10,
+    10,
+    5,
+    3
+  ],
+  "acceptance": {
+    "numericFactors": 60136,
+    "missingFactors": 0,
+    "missingFinalGrades": 0,
+    "retainedListings": 7517,
+    "sortedListings": 7517,
+    "independentComponentChecks": 54428,
+    "normalizationAndIdentifierControls": 163,
+    "scoreSort": "descending, symbol BINARY ascending",
+    "predictiveClaim": false
+  },
+  "changes": {
+    "changed": 1451,
+    "unchanged": 6066,
+    "increased": 1090,
+    "decreased": 361,
+    "beforeZero": 926,
+    "afterZero": 929,
+    "factors": {
+      "valuation": {
+        "weight": 25,
+        "increased": 0,
+        "decreased": 13,
+        "unchanged": 7504,
+        "totalDelta": -10.79,
+        "beforePositive": 3888,
+        "afterPositive": 3888
+      },
+      "catalysts": {
+        "weight": 20,
+        "increased": 0,
+        "decreased": 3,
+        "unchanged": 7514,
+        "totalDelta": -4.25,
+        "beforePositive": 1369,
+        "afterPositive": 1367
+      },
+      "financialStrength": {
+        "weight": 15,
+        "increased": 20,
+        "decreased": 31,
+        "unchanged": 7466,
+        "totalDelta": -62.33,
+        "beforePositive": 2385,
+        "afterPositive": 2392
+      },
+      "earningsQuality": {
+        "weight": 12,
+        "increased": 0,
+        "decreased": 3,
+        "unchanged": 7514,
+        "totalDelta": -18.4,
+        "beforePositive": 1483,
+        "afterPositive": 1480
+      },
+      "competitivePosition": {
+        "weight": 10,
+        "increased": 65,
+        "decreased": 403,
+        "unchanged": 7049,
+        "totalDelta": -322.15,
+        "beforePositive": 2748,
+        "afterPositive": 2703
+      },
+      "downsideRisk": {
+        "weight": 10,
+        "increased": 1049,
+        "decreased": 3,
+        "unchanged": 6465,
+        "totalDelta": 1880.22,
+        "beforePositive": 4138,
+        "afterPositive": 4238
+      },
+      "management": {
+        "weight": 5,
+        "increased": 0,
+        "decreased": 4,
+        "unchanged": 7513,
+        "totalDelta": -15.99,
+        "beforePositive": 3926,
+        "afterPositive": 3922
+      },
+      "technicalTiming": {
+        "weight": 3,
+        "increased": 0,
+        "decreased": 0,
+        "unchanged": 7517,
+        "totalDelta": 0,
+        "beforePositive": 6469,
+        "afterPositive": 6469
+      }
+    },
+    "reviewedFactorCountBefore": 2522,
+    "reviewedFactorCountAfter": 2473
+  },
+  "topSets": {
+    "20": {
+      "overlap": 17,
+      "before": {
+        "count": 20,
+        "types": {
+          "common": 20
+        },
+        "sectors": {
+          "unknown": 20
+        },
+        "missingCapitalization": 0,
+        "below5B": 9,
+        "atLeast5B": 11
+      },
+      "after": {
+        "count": 20,
+        "types": {
+          "common": 20
+        },
+        "sectors": {
+          "unknown": 20
+        },
+        "missingCapitalization": 0,
+        "below5B": 8,
+        "atLeast5B": 12
+      }
+    },
+    "100": {
+      "overlap": 82,
+      "before": {
+        "count": 100,
+        "types": {
+          "common": 99,
+          "adr": 1
+        },
+        "sectors": {
+          "unknown": 100
+        },
+        "missingCapitalization": 0,
+        "below5B": 56,
+        "atLeast5B": 44
+      },
+      "after": {
+        "count": 100,
+        "types": {
+          "common": 99,
+          "adr": 1
+        },
+        "sectors": {
+          "unknown": 100
+        },
+        "missingCapitalization": 0,
+        "below5B": 59,
+        "atLeast5B": 41
+      }
+    },
+    "752": {
+      "overlap": 712,
+      "before": {
+        "count": 752,
+        "types": {
+          "common": 742,
+          "adr": 10
+        },
+        "sectors": {
+          "unknown": 752
+        },
+        "missingCapitalization": 0,
+        "below5B": 461,
+        "atLeast5B": 291
+      },
+      "after": {
+        "count": 752,
+        "types": {
+          "common": 741,
+          "adr": 11
+        },
+        "sectors": {
+          "unknown": 752
+        },
+        "missingCapitalization": 0,
+        "below5B": 464,
+        "atLeast5B": 288
+      }
+    }
+  },
+  "conflictSlices": {
+    "all": {
+      "rows": 7517,
+      "any": 2821,
+      "source": 6,
+      "earnings": 2764,
+      "factor": {
+        "valuation": 6,
+        "catalysts": 6,
+        "financialStrength": 378,
+        "earningsQuality": 2821,
+        "competitivePosition": 6,
+        "downsideRisk": 6,
+        "management": 6,
+        "technicalTiming": 6
+      }
+    },
+    "changed": {
+      "rows": 1451,
+      "any": 670,
+      "source": 5,
+      "earnings": 642,
+      "factor": {
+        "valuation": 5,
+        "catalysts": 5,
+        "financialStrength": 109,
+        "earningsQuality": 670,
+        "competitivePosition": 5,
+        "downsideRisk": 5,
+        "management": 5,
+        "technicalTiming": 5
+      }
+    },
+    "increased": {
+      "rows": 1090,
+      "any": 489,
+      "source": 0,
+      "earnings": 467,
+      "factor": {
+        "valuation": 0,
+        "catalysts": 0,
+        "financialStrength": 76,
+        "earningsQuality": 489,
+        "competitivePosition": 0,
+        "downsideRisk": 0,
+        "management": 0,
+        "technicalTiming": 0
+      }
+    },
+    "decreased": {
+      "rows": 361,
+      "any": 181,
+      "source": 5,
+      "earnings": 175,
+      "factor": {
+        "valuation": 5,
+        "catalysts": 5,
+        "financialStrength": 33,
+        "earningsQuality": 181,
+        "competitivePosition": 5,
+        "downsideRisk": 5,
+        "management": 5,
+        "technicalTiming": 5
+      }
+    },
+    "top20": {
+      "rows": 20,
+      "any": 0,
+      "source": 0,
+      "earnings": 0,
+      "factor": {
+        "valuation": 0,
+        "catalysts": 0,
+        "financialStrength": 0,
+        "earningsQuality": 0,
+        "competitivePosition": 0,
+        "downsideRisk": 0,
+        "management": 0,
+        "technicalTiming": 0
+      }
+    },
+    "top100": {
+      "rows": 100,
+      "any": 0,
+      "source": 0,
+      "earnings": 0,
+      "factor": {
+        "valuation": 0,
+        "catalysts": 0,
+        "financialStrength": 0,
+        "earningsQuality": 0,
+        "competitivePosition": 0,
+        "downsideRisk": 0,
+        "management": 0,
+        "technicalTiming": 0
+      }
+    }
+  },
+  "thesisReview": {
+    "definition": "Thesis-qualified requires candidate-review action, source eligibility, available intrinsic model, reviewed catalyst, clean or mild financing-risk state, and no factor conflict. It is an evidence audit, not a return probability or trade recommendation.",
+    "all": {
+      "rows": 7517,
+      "intrinsicAvailable": 374,
+      "reviewedCatalyst": 0,
+      "sourceEligible": 0,
+      "candidateReview": 0,
+      "thesisQualified": 0,
+      "fundingRisk": {
+        "clean": 214,
+        "mild": 395,
+        "elevated": 435,
+        "severe": 1070,
+        "unknown": 5403
+      },
+      "riskReview": 1248
+    },
+    "top20": {
+      "rows": 20,
+      "intrinsicAvailable": 10,
+      "reviewedCatalyst": 0,
+      "sourceEligible": 0,
+      "candidateReview": 0,
+      "thesisQualified": 0,
+      "fundingRisk": {
+        "clean": 13,
+        "mild": 0,
+        "elevated": 1,
+        "severe": 3,
+        "unknown": 3
+      },
+      "riskReview": 3
+    },
+    "top100": {
+      "rows": 100,
+      "intrinsicAvailable": 53,
+      "reviewedCatalyst": 0,
+      "sourceEligible": 0,
+      "candidateReview": 0,
+      "thesisQualified": 0,
+      "fundingRisk": {
+        "clean": 51,
+        "mild": 12,
+        "elevated": 5,
+        "severe": 10,
+        "unknown": 22
+      },
+      "riskReview": 10
+    }
+  },
+  "topRankAudit": {
+    "top20": [
+      {
+        "symbol": "DLO",
+        "rank": 1,
+        "intrinsicAvailable": false,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "clean",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "IAG",
+        "rank": 2,
+        "intrinsicAvailable": false,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "clean",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "CELH",
+        "rank": 3,
+        "intrinsicAvailable": true,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "clean",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "B",
+        "rank": 4,
+        "intrinsicAvailable": true,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "clean",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "CGEN",
+        "rank": 5,
+        "intrinsicAvailable": false,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "unknown",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "AGI",
+        "rank": 6,
+        "intrinsicAvailable": true,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "clean",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "FIX",
+        "rank": 7,
+        "intrinsicAvailable": true,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "clean",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "AG",
+        "rank": 8,
+        "intrinsicAvailable": false,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "severe",
+        "riskReview": true,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "WSE",
+        "rank": 9,
+        "intrinsicAvailable": true,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "clean",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "SNDK",
+        "rank": 10,
+        "intrinsicAvailable": false,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "clean",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "ELE",
+        "rank": 11,
+        "intrinsicAvailable": false,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "clean",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "CNX",
+        "rank": 12,
+        "intrinsicAvailable": true,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "severe",
+        "riskReview": true,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "MU",
+        "rank": 13,
+        "intrinsicAvailable": false,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "clean",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "MNDY",
+        "rank": 14,
+        "intrinsicAvailable": true,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "unknown",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "HRB",
+        "rank": 15,
+        "intrinsicAvailable": true,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "clean",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "ALSN",
+        "rank": 16,
+        "intrinsicAvailable": true,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "severe",
+        "riskReview": true,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "LGCY",
+        "rank": 17,
+        "intrinsicAvailable": false,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "clean",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "RELY",
+        "rank": 18,
+        "intrinsicAvailable": false,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "clean",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "ERO",
+        "rank": 19,
+        "intrinsicAvailable": false,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "elevated",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "PAYS",
+        "rank": 20,
+        "intrinsicAvailable": true,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "unknown",
+        "riskReview": false,
+        "unresolvedConflict": false
+      }
+    ],
+    "top100Counts": {
+      "rows": 100,
+      "intrinsicAvailable": 53,
+      "reviewedCatalyst": 0,
+      "sourceEligible": 0,
+      "candidateReview": 0,
+      "thesisQualified": 0,
+      "fundingRisk": {
+        "clean": 51,
+        "mild": 12,
+        "elevated": 5,
+        "severe": 10,
+        "unknown": 22
+      },
+      "riskReview": 10
+    }
+  },
+  "largestIncreases": [
+    {
+      "symbol": "HITI",
+      "before": 6.31,
+      "after": 16.31,
+      "delta": 10,
+      "rankBefore": 4054,
+      "rankAfter": 1932,
+      "causes": [
+        {
+          "factor": "financialStrength",
+          "before": 0,
+          "after": 4
+        },
+        {
+          "factor": "downsideRisk",
+          "before": 3,
+          "after": 7
+        }
+      ]
+    },
+    {
+      "symbol": "OGG",
+      "before": 0.98,
+      "after": 10.98,
+      "delta": 10,
+      "rankBefore": 5641,
+      "rankAfter": 2980,
+      "causes": [
+        {
+          "factor": "financialStrength",
+          "before": 0,
+          "after": 4
+        },
+        {
+          "factor": "downsideRisk",
+          "before": 0,
+          "after": 4
+        }
+      ]
+    },
+    {
+      "symbol": "SPOT",
+      "before": 6.19,
+      "after": 16.19,
+      "delta": 10,
+      "rankBefore": 4100,
+      "rankAfter": 1946,
+      "causes": [
+        {
+          "factor": "financialStrength",
+          "before": 0,
+          "after": 4
+        },
+        {
+          "factor": "downsideRisk",
+          "before": 2.88,
+          "after": 6.88
+        }
+      ]
+    },
+    {
+      "symbol": "SAP",
+      "before": 7.47,
+      "after": 13.35,
+      "delta": 5.88,
+      "rankBefore": 3741,
+      "rankAfter": 2404,
+      "causes": [
+        {
+          "factor": "financialStrength",
+          "before": 0,
+          "after": 2.67
+        },
+        {
+          "factor": "competitivePosition",
+          "before": 0.8,
+          "after": 0
+        },
+        {
+          "factor": "downsideRisk",
+          "before": 3,
+          "after": 5.67
+        }
+      ]
+    },
+    {
+      "symbol": "TTAM",
+      "before": 12.73,
+      "after": 18.4,
+      "delta": 5.67,
+      "rankBefore": 2502,
+      "rankAfter": 1638,
+      "causes": [
+        {
+          "factor": "financialStrength",
+          "before": 3.62,
+          "after": 4.69
+        },
+        {
+          "factor": "downsideRisk",
+          "before": 0,
+          "after": 4.07
+        }
+      ]
+    },
+    {
+      "symbol": "CCJ",
+      "before": 5.84,
+      "after": 11.43,
+      "delta": 5.59,
+      "rankBefore": 4212,
+      "rankAfter": 2839,
+      "causes": [
+        {
+          "factor": "financialStrength",
+          "before": 0,
+          "after": 2.24
+        },
+        {
+          "factor": "downsideRisk",
+          "before": 3,
+          "after": 5.23
+        }
+      ]
+    },
+    {
+      "symbol": "YXT",
+      "before": 6.61,
+      "after": 11.51,
+      "delta": 4.9,
+      "rankBefore": 3975,
+      "rankAfter": 2818,
+      "causes": [
+        {
+          "factor": "downsideRisk",
+          "before": 0,
+          "after": 4.9
+        }
+      ]
+    },
+    {
+      "symbol": "CHRN",
+      "before": 13.93,
+      "after": 18.13,
+      "delta": 4.2,
+      "rankBefore": 2268,
+      "rankAfter": 1678,
+      "causes": [
+        {
+          "factor": "financialStrength",
+          "before": 1.2,
+          "after": 4
+        }
+      ]
+    },
+    {
+      "symbol": "RTO",
+      "before": 11.55,
+      "after": 15.75,
+      "delta": 4.2,
+      "rankBefore": 2784,
+      "rankAfter": 2006,
+      "causes": [
+        {
+          "factor": "financialStrength",
+          "before": 4.21,
+          "after": 5.05
+        },
+        {
+          "factor": "downsideRisk",
+          "before": 2.99,
+          "after": 5.93
+        }
+      ]
+    },
+    {
+      "symbol": "FER",
+      "before": 5.39,
+      "after": 9.54,
+      "delta": 4.15,
+      "rankBefore": 4340,
+      "rankAfter": 3359,
+      "causes": [
+        {
+          "factor": "financialStrength",
+          "before": 0,
+          "after": 0.82
+        },
+        {
+          "factor": "downsideRisk",
+          "before": 3,
+          "after": 5.92
+        }
+      ]
+    },
+    {
+      "symbol": "PRQR",
+      "before": 9.21,
+      "after": 13.21,
+      "delta": 4,
+      "rankBefore": 3372,
+      "rankAfter": 2426,
+      "causes": [
+        {
+          "factor": "downsideRisk",
+          "before": 2.98,
+          "after": 6.98
+        }
+      ]
+    },
+    {
+      "symbol": "ZKH",
+      "before": 9.74,
+      "after": 13.74,
+      "delta": 4,
+      "rankBefore": 3256,
+      "rankAfter": 2331,
+      "causes": [
+        {
+          "factor": "downsideRisk",
+          "before": 3,
+          "after": 7
+        }
+      ]
+    },
+    {
+      "symbol": "SU",
+      "before": 7.63,
+      "after": 11.55,
+      "delta": 3.92,
+      "rankBefore": 3702,
+      "rankAfter": 2812,
+      "causes": [
+        {
+          "factor": "financialStrength",
+          "before": 0,
+          "after": 0.73
+        },
+        {
+          "factor": "downsideRisk",
+          "before": 3,
+          "after": 5.83
+        }
+      ]
+    },
+    {
+      "symbol": "PHAT",
+      "before": 36.32,
+      "after": 39.57,
+      "delta": 3.25,
+      "rankBefore": 112,
+      "rankAfter": 62,
+      "causes": [
+        {
+          "factor": "competitivePosition",
+          "before": 6.58,
+          "after": 6.83
+        },
+        {
+          "factor": "downsideRisk",
+          "before": 5.09,
+          "after": 8.09
+        }
+      ]
+    },
+    {
+      "symbol": "GLOB",
+      "before": 32.78,
+      "after": 35.9,
+      "delta": 3.12,
+      "rankBefore": 276,
+      "rankAfter": 155,
+      "causes": [
+        {
+          "factor": "competitivePosition",
+          "before": 0.3,
+          "after": 0.42
+        },
+        {
+          "factor": "downsideRisk",
+          "before": 4.33,
+          "after": 7.33
+        }
+      ]
+    },
+    {
+      "symbol": "DLO",
+      "before": 56.46,
+      "after": 59.48,
+      "delta": 3.02,
+      "rankBefore": 1,
+      "rankAfter": 1,
+      "causes": [
+        {
+          "factor": "competitivePosition",
+          "before": 2.53,
+          "after": 2.55
+        },
+        {
+          "factor": "downsideRisk",
+          "before": 6.6,
+          "after": 9.6
+        }
+      ]
+    },
+    {
+      "symbol": "ACMR",
+      "before": 21.14,
+      "after": 24.14,
+      "delta": 3,
+      "rankBefore": 1205,
+      "rankAfter": 956,
+      "causes": [
+        {
+          "factor": "downsideRisk",
+          "before": 4,
+          "after": 7
+        }
+      ]
+    },
+    {
+      "symbol": "ADMA",
+      "before": 32.77,
+      "after": 35.77,
+      "delta": 3,
+      "rankBefore": 277,
+      "rankAfter": 160,
+      "causes": [
+        {
+          "factor": "downsideRisk",
+          "before": 4.38,
+          "after": 7.38
+        }
+      ]
+    },
+    {
+      "symbol": "ADPT",
+      "before": 21.06,
+      "after": 24.06,
+      "delta": 3,
+      "rankBefore": 1214,
+      "rankAfter": 961,
+      "causes": [
+        {
+          "factor": "downsideRisk",
+          "before": 6.96,
+          "after": 9.96
+        }
+      ]
+    },
+    {
+      "symbol": "AEIS",
+      "before": 14.36,
+      "after": 17.36,
+      "delta": 3,
+      "rankBefore": 2190,
+      "rankAfter": 1780,
+      "causes": [
+        {
+          "factor": "downsideRisk",
+          "before": 5.19,
+          "after": 8.19
+        }
+      ]
+    }
+  ],
+  "largestDecreases": [
+    {
+      "symbol": "TPR",
+      "before": 18,
+      "after": 0,
+      "delta": -18,
+      "rankBefore": 1666,
+      "rankAfter": 7417,
+      "causes": [
+        {
+          "factor": "financialStrength",
+          "before": 6.4,
+          "after": 0
+        },
+        {
+          "factor": "earningsQuality",
+          "before": 7,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "JBSS",
+      "before": 13.44,
+      "after": 0,
+      "delta": -13.44,
+      "rankBefore": 2341,
+      "rankAfter": 7012,
+      "causes": [
+        {
+          "factor": "financialStrength",
+          "before": 4,
+          "after": 0
+        },
+        {
+          "factor": "earningsQuality",
+          "before": 6.2,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "CABO",
+      "before": 37.12,
+      "after": 25.29,
+      "delta": -11.83,
+      "rankBefore": 88,
+      "rankAfter": 854,
+      "causes": [
+        {
+          "factor": "valuation",
+          "before": 8.11,
+          "after": 3.38
+        }
+      ]
+    },
+    {
+      "symbol": "WS",
+      "before": 9.6,
+      "after": 0,
+      "delta": -9.6,
+      "rankBefore": 3288,
+      "rankAfter": 7496,
+      "causes": [
+        {
+          "factor": "financialStrength",
+          "before": 6.4,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "CNXC",
+      "before": 38.25,
+      "after": 29.23,
+      "delta": -9.02,
+      "rankBefore": 64,
+      "rankAfter": 565,
+      "causes": [
+        {
+          "factor": "valuation",
+          "before": 7.27,
+          "after": 3.75
+        },
+        {
+          "factor": "competitivePosition",
+          "before": 0.35,
+          "after": 0.13
+        }
+      ]
+    },
+    {
+      "symbol": "ETS",
+      "before": 10.37,
+      "after": 3.89,
+      "delta": -6.48,
+      "rankBefore": 3108,
+      "rankAfter": 4612,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 2.7,
+          "after": 0
+        },
+        {
+          "factor": "competitivePosition",
+          "before": 1.5,
+          "after": 0.42
+        }
+      ]
+    },
+    {
+      "symbol": "ULBI",
+      "before": 20.45,
+      "after": 14.03,
+      "delta": -6.42,
+      "rankBefore": 1315,
+      "rankAfter": 2290,
+      "causes": [
+        {
+          "factor": "financialStrength",
+          "before": 4,
+          "after": 0.22
+        },
+        {
+          "factor": "competitivePosition",
+          "before": 1.85,
+          "after": 1.1
+        }
+      ]
+    },
+    {
+      "symbol": "AVT",
+      "before": 6.24,
+      "after": 0,
+      "delta": -6.24,
+      "rankBefore": 4076,
+      "rankAfter": 6675,
+      "causes": [
+        {
+          "factor": "earningsQuality",
+          "before": 5.2,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "SMP",
+      "before": 24.32,
+      "after": 18.31,
+      "delta": -6.01,
+      "rankBefore": 893,
+      "rankAfter": 1650,
+      "causes": [
+        {
+          "factor": "financialStrength",
+          "before": 4,
+          "after": 0.95
+        },
+        {
+          "factor": "competitivePosition",
+          "before": 2.87,
+          "after": 1.44
+        }
+      ]
+    },
+    {
+      "symbol": "KTCC",
+      "before": 16.71,
+      "after": 10.71,
+      "delta": -6,
+      "rankBefore": 1833,
+      "rankAfter": 3058,
+      "causes": [
+        {
+          "factor": "financialStrength",
+          "before": 4,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "OII",
+      "before": 19.85,
+      "after": 13.85,
+      "delta": -6,
+      "rankBefore": 1404,
+      "rankAfter": 2314,
+      "causes": [
+        {
+          "factor": "financialStrength",
+          "before": 4,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "PHR",
+      "before": 20.21,
+      "after": 14.21,
+      "delta": -6,
+      "rankBefore": 1359,
+      "rankAfter": 2255,
+      "causes": [
+        {
+          "factor": "financialStrength",
+          "before": 4,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "FOXF",
+      "before": 19.86,
+      "after": 14.11,
+      "delta": -5.75,
+      "rankBefore": 1402,
+      "rankAfter": 2268,
+      "causes": [
+        {
+          "factor": "financialStrength",
+          "before": 4,
+          "after": 0.17
+        }
+      ]
+    },
+    {
+      "symbol": "PZZA",
+      "before": 18.62,
+      "after": 13.15,
+      "delta": -5.47,
+      "rankBefore": 1577,
+      "rankAfter": 2445,
+      "causes": [
+        {
+          "factor": "financialStrength",
+          "before": 4,
+          "after": 0.35
+        }
+      ]
+    },
+    {
+      "symbol": "ANAB",
+      "before": 32.87,
+      "after": 27.44,
+      "delta": -5.43,
+      "rankBefore": 270,
+      "rankAfter": 682,
+      "causes": [
+        {
+          "factor": "financialStrength",
+          "before": 4,
+          "after": 0.38
+        }
+      ]
+    },
+    {
+      "symbol": "RR",
+      "before": 7.9,
+      "after": 2.5,
+      "delta": -5.4,
+      "rankBefore": 3633,
+      "rankAfter": 4732,
+      "causes": [
+        {
+          "factor": "financialStrength",
+          "before": 3.6,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "UMAC",
+      "before": 26.85,
+      "after": 21.45,
+      "delta": -5.4,
+      "rankBefore": 700,
+      "rankAfter": 1224,
+      "causes": [
+        {
+          "factor": "financialStrength",
+          "before": 3.6,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "PRGO",
+      "before": 27.62,
+      "after": 22.49,
+      "delta": -5.13,
+      "rankBefore": 654,
+      "rankAfter": 1107,
+      "causes": [
+        {
+          "factor": "financialStrength",
+          "before": 4,
+          "after": 0.58
+        }
+      ]
+    },
+    {
+      "symbol": "CEPL",
+      "before": 12.53,
+      "after": 7.5,
+      "delta": -5.03,
+      "rankBefore": 2553,
+      "rankAfter": 3770,
+      "causes": [
+        {
+          "factor": "financialStrength",
+          "before": 4,
+          "after": 0.65
+        }
+      ]
+    },
+    {
+      "symbol": "AVLN",
+      "before": 5.42,
+      "after": 0.42,
+      "delta": -5,
+      "rankBefore": 4332,
+      "rankAfter": 6346,
+      "causes": [
+        {
+          "factor": "downsideRisk",
+          "before": 3,
+          "after": 0
+        },
+        {
+          "factor": "management",
+          "before": 4,
+          "after": 0
+        }
+      ]
+    }
+  ],
+  "top20": [
+    {
+      "symbol": "DLO",
+      "before": 56.46,
+      "after": 59.48,
+      "delta": 3.02,
+      "rankBefore": 1,
+      "rankAfter": 1,
+      "causes": [
+        {
+          "factor": "competitivePosition",
+          "before": 2.53,
+          "after": 2.55
+        },
+        {
+          "factor": "downsideRisk",
+          "before": 6.6,
+          "after": 9.6
+        }
+      ]
+    },
+    {
+      "symbol": "IAG",
+      "before": 49.47,
+      "after": 51.72,
+      "delta": 2.25,
+      "rankBefore": 2,
+      "rankAfter": 2,
+      "causes": [
+        {
+          "factor": "competitivePosition",
+          "before": 2.75,
+          "after": 2
+        },
+        {
+          "factor": "downsideRisk",
+          "before": 3.88,
+          "after": 6.88
+        }
+      ]
+    },
+    {
+      "symbol": "CELH",
+      "before": 48,
+      "after": 51,
+      "delta": 3,
+      "rankBefore": 4,
+      "rankAfter": 3,
+      "causes": [
+        {
+          "factor": "downsideRisk",
+          "before": 4.87,
+          "after": 7.87
+        }
+      ]
+    },
+    {
+      "symbol": "B",
+      "before": 47.61,
+      "after": 50.61,
+      "delta": 3,
+      "rankBefore": 6,
+      "rankAfter": 4,
+      "causes": [
+        {
+          "factor": "downsideRisk",
+          "before": 5.85,
+          "after": 8.85
+        }
+      ]
+    },
+    {
+      "symbol": "CGEN",
+      "before": 49.43,
+      "after": 49.43,
+      "delta": 0,
+      "rankBefore": 3,
+      "rankAfter": 5,
+      "causes": []
+    },
+    {
+      "symbol": "AGI",
+      "before": 45.25,
+      "after": 48.25,
+      "delta": 3,
+      "rankBefore": 8,
+      "rankAfter": 6,
+      "causes": [
+        {
+          "factor": "downsideRisk",
+          "before": 7,
+          "after": 10
+        }
+      ]
+    },
+    {
+      "symbol": "FIX",
+      "before": 45.04,
+      "after": 48.04,
+      "delta": 3,
+      "rankBefore": 9,
+      "rankAfter": 7,
+      "causes": [
+        {
+          "factor": "downsideRisk",
+          "before": 7,
+          "after": 10
+        }
+      ]
+    },
+    {
+      "symbol": "AG",
+      "before": 47.93,
+      "after": 47.93,
+      "delta": 0,
+      "rankBefore": 5,
+      "rankAfter": 8,
+      "causes": []
+    },
+    {
+      "symbol": "WSE",
+      "before": 44.09,
+      "after": 47.09,
+      "delta": 3,
+      "rankBefore": 13,
+      "rankAfter": 9,
+      "causes": [
+        {
+          "factor": "downsideRisk",
+          "before": 4,
+          "after": 7
+        }
+      ]
+    },
+    {
+      "symbol": "SNDK",
+      "before": 44,
+      "after": 47,
+      "delta": 3,
+      "rankBefore": 15,
+      "rankAfter": 10,
+      "causes": [
+        {
+          "factor": "downsideRisk",
+          "before": 6.97,
+          "after": 9.97
+        }
+      ]
+    },
+    {
+      "symbol": "ELE",
+      "before": 44.26,
+      "after": 46.12,
+      "delta": 1.86,
+      "rankBefore": 11,
+      "rankAfter": 11,
+      "causes": [
+        {
+          "factor": "competitivePosition",
+          "before": 3.14,
+          "after": 2
+        },
+        {
+          "factor": "downsideRisk",
+          "before": 4,
+          "after": 7
+        }
+      ]
+    },
+    {
+      "symbol": "CNX",
+      "before": 45.61,
+      "after": 45.61,
+      "delta": 0,
+      "rankBefore": 7,
+      "rankAfter": 12,
+      "causes": []
+    },
+    {
+      "symbol": "MU",
+      "before": 42.27,
+      "after": 45.27,
+      "delta": 3,
+      "rankBefore": 18,
+      "rankAfter": 13,
+      "causes": [
+        {
+          "factor": "downsideRisk",
+          "before": 7,
+          "after": 10
+        }
+      ]
+    },
+    {
+      "symbol": "MNDY",
+      "before": 44.78,
+      "after": 44.78,
+      "delta": 0,
+      "rankBefore": 10,
+      "rankAfter": 14,
+      "causes": []
+    },
+    {
+      "symbol": "HRB",
+      "before": 41.7,
+      "after": 44.7,
+      "delta": 3,
+      "rankBefore": 22,
+      "rankAfter": 15,
+      "causes": [
+        {
+          "factor": "downsideRisk",
+          "before": 4.29,
+          "after": 7.29
+        }
+      ]
+    },
+    {
+      "symbol": "ALSN",
+      "before": 44.22,
+      "after": 44.22,
+      "delta": 0,
+      "rankBefore": 12,
+      "rankAfter": 16,
+      "causes": []
+    },
+    {
+      "symbol": "LGCY",
+      "before": 40.56,
+      "after": 43.56,
+      "delta": 3,
+      "rankBefore": 29,
+      "rankAfter": 17,
+      "causes": [
+        {
+          "factor": "downsideRisk",
+          "before": 6.98,
+          "after": 9.98
+        }
+      ]
+    },
+    {
+      "symbol": "RELY",
+      "before": 40.38,
+      "after": 43.38,
+      "delta": 3,
+      "rankBefore": 31,
+      "rankAfter": 18,
+      "causes": [
+        {
+          "factor": "downsideRisk",
+          "before": 7,
+          "after": 10
+        }
+      ]
+    },
+    {
+      "symbol": "ERO",
+      "before": 42.31,
+      "after": 43.21,
+      "delta": 0.9,
+      "rankBefore": 17,
+      "rankAfter": 19,
+      "causes": [
+        {
+          "factor": "downsideRisk",
+          "before": 3.27,
+          "after": 4.17
+        }
+      ]
+    },
+    {
+      "symbol": "PAYS",
+      "before": 44.04,
+      "after": 43.18,
+      "delta": -0.86,
+      "rankBefore": 14,
+      "rankAfter": 20,
+      "causes": [
+        {
+          "factor": "competitivePosition",
+          "before": 5.6,
+          "after": 4.74
+        }
+      ]
+    }
+  ],
+  "limitations": [
+    "A single contemporary acquisition release cannot establish six-month realized outcomes or predictive improvement.",
+    "Source acquisition fixes are validated separately; this replay never invents newly acquired facts.",
+    "Complete numeric grades do not imply reviewed catalysts, fully diluted value, governance diligence or trading safety.",
+    "Composition by capitalization and sector is descriptive; no size or sector quota changes the ranking."
+  ]
+}

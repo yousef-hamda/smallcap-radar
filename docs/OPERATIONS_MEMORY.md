@@ -1,5 +1,11 @@
 # Operations memory — Railway
 
+## October 10 capacity and release hold (current)
+
+Direct `railway deployment list` still reports deployment `7a9f861a-4b77-41aa-a09f-dbc4f9fcbf2e` SUCCESS. Public export pinned release `74a8e534-9912-4c31-bc64-3eba0ef8d4ad:ratings-v5:15034:d21f9710` contains 7,517 saved rows on the old `1.2.6` rubric. Read-only `railway ssh df -B1 /app/data` reported 4,838,498,304 total, 4,568,621,056 used and **253,100,032 bytes available** (95% used). `/app/data/state/v3/d1` uses roughly 4.57 GB; there is no obvious disposable volume artifact. The live stage-11 acquisition is paused below the app's 256 MiB physical reserve. An application rollout with rubric `1.4.0-scoped-conflicts-thesis-gates` / `55dd2e8a` could cause read-triggered reevaluation writes, so **do not deploy or write-heavy repair** before safe capacity plus a fresh consistent off-host backup. Do not delete live D1 files. A volume-plan increase requires the user's authorization if it changes recurring cost. No resize, deletion, new scan, billable provider call or deployment occurred in the October 10 work.
+
+The local [plan](ALGORITHM_IMPROVEMENT_PLAN_2026_10_10.md), [report](ALGORITHM_IMPROVEMENT_REPORT_2026_10_10.md) and [7,517-row replay](ALGORITHM_COMPARISON_2026_10_10.json) supersede older candidate totals. Commit/push and CI status must be recorded after final gates. Historical predictive validation remains blocked by zero usable point-in-time outcomes.
+
 ## Scope and evidence date
 
 Keep this file free of credentials, contact values, private recovery links and user data. Operational dates are explicit: the current documentation was updated October 9; the last direct production observations were made October 8. Recheck live state before carrying out further operations. [Handoff](../HANDOFF.md) lists continuation work; [project memory](PROJECT_MEMORY.md) owns product/data/scoring rules.

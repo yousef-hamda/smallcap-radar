@@ -7,6 +7,7 @@ import {compatibleFinancialSources,alignSnapshotFinancials,commercialObservation
 import {reportedBorrowings} from '../../.test-build/sec.mjs';
 import {evaluateOpportunity} from '../../.test-build/opportunity-engine.mjs';
 import {evaluateOpportunityDossier} from '../../.test-build/opportunity-dossier.mjs';
+import {conflictAffectsKeys,modelFactorConflicts,proxyOpportunityEvidence} from '../../.test-build/opportunity-proxies.mjs';
 import {OPPORTUNITY_SPEC} from '../../.test-build/opportunity-spec.mjs';
 import {buildOpportunityThesis,intrinsicValuationGrade} from '../../.test-build/opportunity-thesis.mjs';
 import {parseFilingObservations,persistFilingDocument} from '../../.test-build/filing-observations.mjs';
@@ -177,4 +178,51 @@ test('stale technical assessments cannot suppress independently sourced current 
  const expected=evaluateOpportunity(s).factors.find(f=>f.id==='technicalTiming');assert(expected.score>0);
  const actual=evaluateOpportunityDossier(s,{asOf:s.asOf,technicalTimingScore:{asOf:'2026-09-30T12:00:00Z',score:9}}).factors.find(f=>f.id==='technicalTiming');assert.equal(actual.score,expected.score);assert.equal(actual.proxy,true);assert.equal(actual.complete,false);assert.deepEqual(actual.conflicts,[]);assert.match(actual.rationale,/timestamp does not match/);
  const conflict=evaluateOpportunityDossier({...s,sourceConflicts:['actual vendor-price contradiction']},{asOf:s.asOf,technicalTimingScore:{asOf:'2026-09-30T12:00:00Z',score:9}}).factors.find(f=>f.id==='technicalTiming');assert.equal(conflict.score,0);assert(conflict.conflicts.includes('actual vendor-price contradiction'));
+});
+
+test('typed source conflicts withhold only dependent model components while unknown conflicts fail closed',()=>{
+ const s=base();
+ for(const key of ['cash','debt'])delete s.provenance[key].periodStart;
+ s.backlog={kind:'remaining-performance-obligation',amount:100,expectedRecognitionBy:'2026-12-31',currency:'USD'};
+ s.provenance.backlog={...source(),periodStart:undefined};
+ s.ma30w=9;s.low52w=8;s.high52w=12;s.return12m=.2;
+ for(const key of ['price','ma30w','low52w','high52w','return12m'])s.provenance[key]={...source(),periodStart:undefined,periodEnd:'2026-10-02',availableAt:'2026-10-02T21:00:00Z'};
+ const clean=proxyOpportunityEvidence(s);
+ assert(clean.catalysts.score>0);assert(clean.financialStrength.score>0);assert(clean.technicalTiming.score>0);
+ const backlogConflict='backlog: 1 (frames) مقابل 2 (Company Facts) في 2026-06-30; same fiscal window/unit/scope; symmetric difference 50.000000% > 1%';
+ const backlog={...s,sourceConflicts:[backlogConflict]};
+ const scoped=proxyOpportunityEvidence(backlog);
+ const backlogGrade=clean.catalysts.calculation.inputs.find(item=>item.name==='backlog:grade').value;
+ assert.equal(scoped.catalysts.score,clean.catalysts.score-backlogGrade*.3,'only the backlog component loses its fixed-denominator points');
+ assert.equal(scoped.catalysts.calculation.inputs.find(item=>item.name==='backlog:grade').value,'withheld-conflict');
+ assert.equal(scoped.financialStrength.score,clean.financialStrength.score);
+ assert.equal(scoped.technicalTiming.score,clean.technicalTiming.score);
+ assert.deepEqual(modelFactorConflicts(backlog,'catalysts'),[backlogConflict]);
+ assert.deepEqual(modelFactorConflicts(backlog,'technicalTiming'),[]);
+ assert.equal(conflictAffectsKeys(backlog.sourceConflicts,['backlog']),true);
+ assert.equal(conflictAffectsKeys(backlog.sourceConflicts,['cash','debt']),false);
+
+ const debtConflict='debtTotal: 1 (frames) مقابل 2 (Company Facts) في 2026-06-30; same fiscal window/unit/scope; symmetric difference 50.000000% > 1%';
+ const debt=proxyOpportunityEvidence({...s,sourceConflicts:[debtConflict]});
+ assert.equal(debt.financialStrength.calculation.inputs.find(item=>item.name==='cash-debt:grade').value,'withheld-conflict');
+ assert.equal(debt.financialStrength.calculation.inputs.find(item=>item.name==='fcf-margin:grade').value,clean.financialStrength.calculation.inputs.find(item=>item.name==='fcf-margin:grade').value);
+ assert.equal(debt.technicalTiming.score,clean.technicalTiming.score);
+
+ const unknown=proxyOpportunityEvidence({...s,sourceConflicts:['unstructured discrepancy']});
+ assert(unknown.technicalTiming.score===0&&unknown.financialStrength.score===0);
+ assert.equal(conflictAffectsKeys(['marketCap: unexplained mismatch'],['backlog']),true,'a recognizable field alone does not establish a trusted typed conflict');
+});
+
+test('scoped disagreement preserves independent final grades and intrinsic evidence while blocking a decision',()=>{
+ const s=valuationFixture();s.ma30w=9;s.low52w=8;s.high52w=12;s.return12m=.2;
+ for(const key of ['ma30w','low52w','high52w','return12m'])s.provenance[key]={...s.provenance.price};
+ const clean=evaluateOpportunity(s);
+ const conflict='backlog: 1 (frames) مقابل 2 (Company Facts) في 2026-06-30; same fiscal window/unit/scope; symmetric difference 50.000000% > 1%';
+ const disagreed=evaluateOpportunity({...s,sourceConflicts:[conflict]});
+ assert.equal(disagreed.factors.find(item=>item.id==='valuation').score,clean.factors.find(item=>item.id==='valuation').score);
+ assert.equal(disagreed.factors.find(item=>item.id==='technicalTiming').score,clean.factors.find(item=>item.id==='technicalTiming').score);
+ assert.equal(disagreed.thesis.valuation.status,'available');
+ assert.equal(disagreed.sourceEligible,false);
+ assert.equal(disagreed.checks.find(item=>item.id==='source-conflict').status,'UNKNOWN');
+ assert.equal(disagreed.factors.length,8);
 });

@@ -1,5 +1,6 @@
 import type { Snapshot, Provenance, Status } from './engine';
 import { proxyOpportunityEvidence } from './opportunity-proxies';
+import { modelFactorConflicts } from './opportunity-conflicts';
 import { usableEvidence, evidenceTimestamp, validEvidenceConversion } from './evidence';
 import { OPPORTUNITY_SPEC, opportunitySpecHash, type OpportunityFactorId, type OpportunityRiskTolerance } from './opportunity-spec';
 import { financialIntegrityFindings, operatingIssuerMetricsApplicable, commonPerShareMetricsApplicable } from './financial-integrity';
@@ -65,6 +66,33 @@ export type OpportunityEvaluation = {
 };
 
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+
+/** A researched event must have auditable economics before it can support the
+ * investment thesis. Proxy growth, backlog and an earnings date are discovery
+ * signals; they cannot pass this separate decision gate. */
+function hasMaterialReviewedCatalyst(factor: OpportunityEvaluation['factors'][number] | undefined, asOf: string, horizonMonths: number) {
+  if (!factor?.complete || factor.proxy || factor.calculation?.rubricId !== 'catalysts-v2-explicit-units') return false;
+  const inputs = new Map(factor.calculation.inputs.map(input => [input.name, input]));
+  const horizonEnd = Date.parse(asOf) + horizonMonths * 30.4375 * 86_400_000;
+  return factor.calculation.inputs.some(input => {
+    if (!input.name.startsWith('event:') || !input.name.endsWith(':classification')) return false;
+    const prefix = input.name.slice(0, -'classification'.length);
+    const classification = input.value;
+    const impact = inputs.get(`${prefix}impact`);
+    const unit = impact?.unit?.trim().toLowerCase();
+    const ratio = unit === 'ratio-of-ttm-revenue' || unit === 'fraction-of-ttm-revenue'
+      ? impact?.value : unit === 'percent-of-ttm-revenue' || unit === '%-of-ttm-revenue'
+        ? Number(impact?.value) / 100 : null;
+    const certainty = inputs.get(`${prefix}certainty`)?.value;
+    const expected = Date.parse(String(inputs.get(`${prefix}expected-at`)?.value ?? ''));
+    const pricing = inputs.get(`${prefix}market-pricing`)?.value;
+    return ['binding-contract', 'funded-conditional', 'realized-revenue'].includes(String(classification))
+      && typeof ratio === 'number' && Number.isFinite(ratio) && ratio >= 0.05
+      && typeof certainty === 'number' && certainty >= 6
+      && Number.isFinite(expected) && expected >= Date.parse(asOf) && expected <= horizonEnd
+      && (pricing === 'not-priced' || pricing === 'partly-priced');
+  });
+}
 
 function marketWeekdayAge(availableAt: string, asOf: string) {
   const start = Date.parse(availableAt);
@@ -181,7 +209,9 @@ export function evaluateOpportunity(
     // Model scores and coverage are reconstructed from the snapshot. A supplied
     // proxy cannot replace the fixed component calculation or its source trace.
     const candidate = supplied?.proxy ? { ...model, rationale: supplied.rationale || model.rationale } : supplied;
-    const conflicts = [...new Set([...(snapshot.sourceConflicts ?? []), ...(supplied?.conflicts ?? [])])];
+    const rawConflicts = snapshot.sourceConflicts ?? [];
+    const assessmentConflicts = (supplied?.conflicts ?? []).filter(conflict => !rawConflicts.includes(conflict));
+    const conflicts = [...new Set([...modelFactorConflicts(snapshot, spec.id), ...assessmentConflicts])];
     const sources = (candidate?.sources ?? []).filter(source => isOpportunityProvenanceValid(source, snapshot.asOf));
     const calculationValid = !!candidate?.calculation?.rubricId?.trim()
       && candidate.calculation.inputs.length > 0
@@ -206,7 +236,7 @@ export function evaluateOpportunity(
     const useReviewed = applicable && evidenced && !proxy;
     const score = !applicable ? 0 : useReviewed
       ? Math.round(Math.round(candidate!.score! * 100) * Math.round(rawCoverage * 100) / 10000) / 100
-      : Math.round((conflicts.length ? 0 : model.score!) * 100) / 100;
+      : Math.round((assessmentConflicts.length ? 0 : model.score!) * 100) / 100;
     const algorithmicCoveragePct = 100;
     const coveragePct = applicable && evidenced ? rawCoverage : 0;
     const points = Math.round(score * 100) * spec.weight / 1000;
@@ -226,7 +256,7 @@ export function evaluateOpportunity(
       // proof of low-quality evidence. It can never contribute to high overall
       // confidence, but it may support medium confidence for a complete rank.
       confidence: applicable && evidenced ? candidate!.confidence ?? 'medium' : 'low',
-      rationale: !applicable ? 'Instrument payoff or ADR conversion is unverified; operating-company points are withheld. This listing retains its final numeric grade and ranking.' : useReviewed ? `${candidate!.rationale} Final factor grade includes ${rawCoverage}% reviewed coverage; missing dimensions earn zero.` : conflicts.length ? `Source conflict: ${conflicts.join('; ')}; final factor grade is zero until reconciled.` : proxy ? candidate!.rationale : `${candidate?.rationale ?? ''} ${model.rationale}`,
+      rationale: !applicable ? 'Instrument payoff or ADR conversion is unverified; operating-company points are withheld. This listing retains its final numeric grade and ranking.' : useReviewed ? `${candidate!.rationale} Final factor grade includes ${rawCoverage}% reviewed coverage; missing dimensions earn zero.` : assessmentConflicts.length ? `Factor assessment conflict: ${assessmentConflicts.join('; ')}; this factor is withheld until reconciled.` : conflicts.length ? `${model.rationale} Conflicted inputs are withheld; independent component points remain diagnostic only.` : proxy ? candidate!.rationale : `${candidate?.rationale ?? ''} ${model.rationale}`,
       sources: useReviewed ? sources : model.sources,
       calculation: !applicable ? model.calculation : useReviewed ? { ...candidate!.calculation!, inputs: [...candidate!.calculation!.inputs, { name: 'reviewed-grade', value: candidate!.score! }, { name: 'reviewed-coverage-pct', value: rawCoverage }] } : model.calculation,
       conflicts,
@@ -262,7 +292,15 @@ export function evaluateOpportunity(
         : 'Visible for research, but one or more material factors or the evidence-coverage threshold is incomplete.';
 
   const thesis=buildOpportunityThesis(snapshot,horizonMonths);
-  if(!sourceEligible&&thesis.action==='candidate-review')thesis.action='research-required';
+  const materialReviewedCatalyst = hasMaterialReviewedCatalyst(factors.find(factor => factor.id === 'catalysts'), snapshot.asOf, horizonMonths);
+  const financingReviewed = snapshot.deathSpiral === 'clean' || snapshot.deathSpiral === 'mild';
+  add('thesis-catalyst', materialReviewedCatalyst ? 'PASS' : 'UNKNOWN', materialReviewedCatalyst
+    ? 'A source-reviewed, quantified event within the horizon has material revenue impact, verified progress, and unresolved pricing upside.'
+    : 'No source-reviewed material future catalyst qualifies. Historical growth, backlog and scheduled earnings are research signals only.', 'evidence');
+  add('thesis-financing', financingReviewed ? 'PASS' : 'UNKNOWN', financingReviewed
+    ? 'Financing review found clean or mild risk.'
+    : 'Financing risk is unknown or elevated; verify capital needs and dilution before treating this as an investment candidate.', 'evidence');
+  if((!sourceEligible || !materialReviewedCatalyst || !financingReviewed)&&thesis.action==='candidate-review')thesis.action='research-required';
   return {
     strategy: OPPORTUNITY_SPEC.id,
     version: OPPORTUNITY_SPEC.version,
