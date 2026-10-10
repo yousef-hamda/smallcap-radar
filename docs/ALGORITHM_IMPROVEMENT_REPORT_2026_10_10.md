@@ -1,6 +1,6 @@
 # Opportunity ranking evidence and thesis audit
 
-Study and replay cutoff: 2026-10-10 UTC. [Plan](ALGORITHM_IMPROVEMENT_PLAN_2026_10_10.md) preceded the code changes. [Full aggregate comparison](ALGORITHM_COMPARISON_2026_10_10.json) is reproducible from the private pinned export using the documented scripts. The private export and account data are excluded from Git.
+Study and replay cutoff: 2026-10-10 UTC. [Plan](ALGORITHM_IMPROVEMENT_PLAN_2026_10_10.md) preceded the code changes. [Full aggregate comparison](ALGORITHM_COMPARISON_2026_10_10.json) is reproducible from the private pinned export using the documented scripts. The private export and account data are excluded from Git. Implementation commit `95700e4` was pushed to `origin/master`; CI run `38028284917` passed. Railway remains on the older rubric because of the capacity block below.
 
 ## What changed
 
