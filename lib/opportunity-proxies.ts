@@ -1,33 +1,38 @@
 import type { Snapshot, Provenance } from './engine';
 import type { OpportunityEvidenceSet } from './opportunity-engine';
-import { derivedEvidence, usableEvidence } from './evidence';
+import { derivedEvidence } from './evidence';
 import { OPPORTUNITY_SPEC, type OpportunityFactorId } from './opportunity-spec';
-import { compatibleSnapshotMetrics, commercialObservationKind, operatingIssuerMetricsApplicable, commonPerShareMetricsApplicable } from './financial-integrity';
+import { compatibleSnapshotMetrics, commercialObservationKind, operatingIssuerMetricsApplicable, commonPerShareMetricsApplicable,modelEvidenceAvailable } from './financial-integrity';
 import {peerObservation,peerContext,uniqueIssuerPeers} from './opportunity-peers';
 import {buildOpportunityThesis,intrinsicValuationGrade} from './opportunity-thesis';
 
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 const clamp = (value: number, low = 0, high = 10) => Math.max(low, Math.min(high, value));
+const auditableUrl=(value:string|undefined)=>{try{return !!value&&new URL(value).protocol==='https:';}catch{return false;}};
 type Component = { name: string; weight: number; grade: number | null; keys: string[]; values: Array<string | number> };
 
 /** Fixed component denominators: missing observations earn zero, never a positive prior.
  * These are model estimates, not assertions of fair value, a moat, or reviewed governance. */
-export function proxyOpportunityEvidence(snapshot: Snapshot): OpportunityEvidenceSet {
+export function proxyOpportunityEvidence(snapshot: Snapshot,horizonMonths:number=OPPORTUNITY_SPEC.defaultHorizonMonths): OpportunityEvidenceSet {
   if(snapshot.listingStatus==='not-confirmed-current')snapshot={...snapshot,provenance:{},peerContext:undefined,opportunityResearch:undefined};
   const output: OpportunityEvidenceSet = {};
   const ownPeer=peerObservation(snapshot);
   const validatedPeerContext=snapshot.peerContext?peerContext(snapshot,uniqueIssuerPeers(snapshot.peerContext.peers)):undefined;
   const derivedGrowth = deriveRevenueGrowth(snapshot);
-  const growthTrace = derivedGrowth?.inputs ?? [];
+  const oldGrowthSource=snapshot.provenance?.revenueGrowth;
+  const useDerivedGrowth=!!derivedGrowth&&(!finite(snapshot.revenueGrowth)||!modelEvidenceAvailable(oldGrowthSource,snapshot.asOf)
+    ||(oldGrowthSource!.scope??'consolidated')!=='consolidated'
+    ||Date.parse(derivedGrowth.source.periodEnd)>=Date.parse(oldGrowthSource!.periodEnd));
+  const growthTrace = useDerivedGrowth?derivedGrowth!.inputs:[];
   const observation = (key: string): number | null => {
     if (key === 'dilution' && snapshot.splitAdjusted !== true) return null;
     if (['ps','evSales','fcfYield'].includes(key) && !commonPerShareMetricsApplicable(snapshot)) return null;
     if (!operatingIssuerMetricsApplicable(snapshot) && !['price','ma30w','low52w','high52w','return12m','nextEarnings'].includes(key)) return null;
-    const value = key==='revenueGrowth' && !finite(snapshot.revenueGrowth) ? derivedGrowth?.value : snapshot[key as keyof Snapshot];
-    const source = key==='revenueGrowth' && !finite(snapshot.revenueGrowth) ? derivedGrowth?.source : snapshot.provenance?.[key];
-    if (!finite(value) || !source || !usableEvidence(source, snapshot.asOf)
-      || !Number.isFinite(Date.parse(source.retrievedAt)) || Date.parse(source.retrievedAt) > Date.parse(snapshot.asOf)) return null;
-    try { if (new URL(source.url!).protocol !== 'https:') return null; } catch { return null; }
+    const value = key==='revenueGrowth'&&useDerivedGrowth ? derivedGrowth?.value : snapshot[key as keyof Snapshot];
+    const source = key==='revenueGrowth'&&useDerivedGrowth ? derivedGrowth?.source : snapshot.provenance?.[key];
+    if (!finite(value) || !source || !modelEvidenceAvailable(source, snapshot.asOf)) return null;
+    if(['revenue','netIncome','fcf','cash','debt','ps','evSales','fcfYield','grossMargin','operatingMarginTrend','revenueGrowth'].includes(key)
+      &&(source.scope??'consolidated')!=='consolidated')return null;
     // Retain original rights metadata. Using an observed value in a model does
     // not certify its source, freshness or redistribution entitlement.
     const age = (Date.parse(snapshot.asOf) - Date.parse(source.periodEnd)) / 86_400_000;
@@ -60,7 +65,7 @@ export function proxyOpportunityEvidence(snapshot: Snapshot): OpportunityEvidenc
     const coveragePct = usable.reduce((sum, item) => sum + item.weight, 0);
     const sources: Provenance[] = [...new Map(usable.flatMap(item => item.keys.flatMap(key => {
       const source = snapshot.provenance?.[key];
-      if(key==='revenueGrowth'&&derivedGrowth&&!finite(snapshot.revenueGrowth))return derivedGrowth.sources.map(item=>[JSON.stringify(item),item] as const);
+      if(key==='revenueGrowth'&&useDerivedGrowth)return derivedGrowth!.sources.map(item=>[JSON.stringify(item),item] as const);
       return source ? [[JSON.stringify(source), source] as const] : [];
     }))).values()];
     output[id] = {
@@ -94,15 +99,25 @@ export function proxyOpportunityEvidence(snapshot: Snapshot): OpportunityEvidenc
   }
   const earningsDate = Date.parse(snapshot.nextEarnings ?? '');
   const inHorizon = Number.isFinite(earningsDate) && earningsDate > Date.parse(snapshot.asOf)
-    && earningsDate <= Date.parse(snapshot.asOf) + OPPORTUNITY_SPEC.defaultHorizonMonths * 30.4375 * 86_400_000
-    && !!snapshot.provenance?.nextEarnings && usableEvidence(snapshot.provenance.nextEarnings, snapshot.asOf);
+    && earningsDate <= Date.parse(snapshot.asOf) + horizonMonths * 30.4375 * 86_400_000
+    && !!snapshot.provenance?.nextEarnings && modelEvidenceAvailable(snapshot.provenance.nextEarnings, snapshot.asOf)
+    &&Number.isFinite(Date.parse(snapshot.provenance.nextEarnings.retrievedAt))&&Date.parse(snapshot.provenance.nextEarnings.retrievedAt)<=Date.parse(snapshot.asOf)
+    &&(Date.parse(snapshot.asOf)-Date.parse(snapshot.provenance.nextEarnings.periodEnd))/864e5<=400
+    &&auditableUrl(snapshot.provenance.nextEarnings.url);
   const backlog = snapshot.backlog;
   const revenue = observation('revenue');
   const backlogEligible = finite(backlog?.amount) && backlog!.amount! >= 0 && revenue !== null && revenue > 0
     && ['backlog','remaining-performance-obligation'].includes(commercialObservationKind(snapshot))
     && !!backlog?.expectedRecognitionBy && Date.parse(backlog.expectedRecognitionBy) > Date.parse(snapshot.asOf)
-    && Date.parse(backlog.expectedRecognitionBy) <= Date.parse(snapshot.asOf) + OPPORTUNITY_SPEC.defaultHorizonMonths * 30.4375 * 86_400_000
-    && !!snapshot.provenance?.backlog && usableEvidence(snapshot.provenance.backlog, snapshot.asOf);
+    && Date.parse(backlog.expectedRecognitionBy) <= Date.parse(snapshot.asOf) + horizonMonths * 30.4375 * 86_400_000
+    && !!snapshot.provenance?.backlog && modelEvidenceAvailable(snapshot.provenance.backlog, snapshot.asOf)
+    && Number.isFinite(Date.parse(snapshot.provenance.backlog.retrievedAt))&&Date.parse(snapshot.provenance.backlog.retrievedAt)<=Date.parse(snapshot.asOf)
+    &&(Date.parse(snapshot.asOf)-Date.parse(snapshot.provenance.backlog.periodEnd))/864e5<=400
+    &&!!snapshot.provenance.backlog.currency&&snapshot.provenance.backlog.currency===snapshot.provenance.revenue?.currency
+    &&(!backlog.currency||backlog.currency===snapshot.provenance.backlog.currency)
+    &&(snapshot.provenance.backlog.scope??'consolidated')==='consolidated'
+    &&(snapshot.provenance.revenue?.scope??'consolidated')==='consolidated'
+    &&auditableUrl(snapshot.provenance.backlog.url);
   set('catalysts', 'Observed growth and disclosed backlog approximate business momentum; a scheduled earnings event earns only limited timing credit, not positive impact.', [
     component('growth-momentum', 50, ['revenueGrowth'], value => clamp(value * 25)),
     { name: 'backlog', weight: 30, grade: backlogEligible ? clamp(backlog!.amount! / revenue! * 5) : null, keys: ['backlog','revenue'], values: [backlog?.amount ?? 'missing', revenue ?? 'missing'] },
@@ -116,17 +131,21 @@ export function proxyOpportunityEvidence(snapshot: Snapshot): OpportunityEvidenc
   ]);
   if(output.competitivePosition&&validatedPeerContext?.grade!=null){output.competitivePosition.sources.push(...(ownPeer?.sources??[]),...validatedPeerContext.peers.flatMap(peer=>peer.sources));output.competitivePosition.calculation?.inputs.push(...(ownPeer?[{name:"issuer:annual-gross-margin",value:ownPeer.grossMargin,unit:"ratio"}]:[]),...validatedPeerContext.peers.map(peer=>({name:'peer:'+peer.symbol+':gross-margin',value:peer.grossMargin,unit:'ratio'})));}
   const financingSource = snapshot.provenance?.deathSpiral;
-  const financingKnown = !!financingSource && usableEvidence(financingSource, snapshot.asOf)
-    && ['clean','moderate','severe'].includes(snapshot.deathSpiral ?? '');
+  const financingKnown = !!financingSource && modelEvidenceAvailable(financingSource, snapshot.asOf)
+    &&Number.isFinite(Date.parse(financingSource.retrievedAt))&&Date.parse(financingSource.retrievedAt)<=Date.parse(snapshot.asOf)
+    &&(Date.parse(snapshot.asOf)-Date.parse(financingSource.periodEnd))/864e5<=400
+    &&auditableUrl(financingSource.url)
+    && ['clean','mild','elevated','severe'].includes(snapshot.deathSpiral ?? '');
   set('downsideRisk', 'Cash versus debt, dilution and observed financing findings approximate downside resilience.', [
     component('cash-debt', 40, ['cash','debt'], (cash, debt) => cash < 0 || debt < 0 ? 0 : debt === 0 ? 10 : clamp(cash / debt * 5)),
     component('dilution', 30, ['dilution'], value => clamp(10 - Math.max(0, value) * 40)),
-    { name: 'financing-review', weight: 30, grade: financingKnown ? snapshot.deathSpiral === 'clean' ? 10 : snapshot.deathSpiral === 'severe' ? 0 : 3 : null, keys: ['deathSpiral'], values: [snapshot.deathSpiral ?? 'missing'] },
+    { name: 'financing-review', weight: 30, grade: financingKnown ? snapshot.deathSpiral === 'clean' ? 10 : snapshot.deathSpiral === 'mild' ? 7 : snapshot.deathSpiral === 'severe' ? 0 : 3 : null, keys: ['deathSpiral'], values: [snapshot.deathSpiral ?? 'missing'] },
   ]);
   set('management', 'Dilution discipline, sourced insider purchases and earnings outcomes approximate alignment; governance diligence remains separate.', [
     component('dilution-discipline', 40, ['dilution'], value => clamp(10 - Math.max(0, value) * 40)),
     component('insider-purchases', 30, ['insiderBuyValue'], value => value > 0 ? 7 : 0),
-    { name: 'earnings-outcome', weight: 30, grade: snapshot.provenance?.lastEarningsStatus && usableEvidence(snapshot.provenance.lastEarningsStatus, snapshot.asOf) ? snapshot.lastEarningsStatus === 'إيجابي' ? 7 : snapshot.lastEarningsStatus === 'سلبي' ? 0 : null : null, keys: ['lastEarningsStatus'], values: [snapshot.lastEarningsStatus ?? 'missing'] },
+    { name: 'earnings-outcome', weight: 30, grade: snapshot.provenance?.lastEarningsStatus && modelEvidenceAvailable(snapshot.provenance.lastEarningsStatus, snapshot.asOf)
+      &&(Date.parse(snapshot.asOf)-Date.parse(snapshot.provenance.lastEarningsStatus.periodEnd))/864e5<=400 ? snapshot.lastEarningsStatus === 'إيجابي' ? 7 : snapshot.lastEarningsStatus === 'سلبي' ? 0 : null : null, keys: ['lastEarningsStatus'], values: [snapshot.lastEarningsStatus ?? 'missing'] },
   ]);
   set('technicalTiming', 'Observed trend, range and return approximate entry timing; dates and market-source metadata are retained.', [
     component('moving-average', 40, ['price','ma30w'], (price, average) => price > 0 && average > 0 ? clamp(5 + (price / average - 1) * 20) : 0),
@@ -153,18 +172,22 @@ function deriveRevenueGrowth(snapshot: Snapshot) {
   const research=snapshot.opportunityResearch?.earnings;
   if(!research || (research.conflicts??[]).length)return null;
   type Metric={value:number;unit:string;source:Provenance};
-  const metrics=(periods:typeof research.annual):Metric[]=>Array.isArray(periods)?periods.flatMap(period=>{
+  const metrics=(periods:typeof research.annual,annual:boolean):Metric[]=>Array.isArray(periods)?periods.flatMap(period=>{
     const metric=period?.metrics?.revenue;
-    if(!metric||!finite(metric.value)||metric.value<=0||!metric.unit||!usableEvidence(metric.source,snapshot.asOf)
+    const duration=period?(Date.parse(period.end)-Date.parse(period.start))/864e5:NaN;
+    if(!metric||!finite(metric.value)||metric.value<=0||!metric.unit||!modelEvidenceAvailable(metric.source,snapshot.asOf)
+      ||!Number.isFinite(duration)||(annual?(duration<330||duration>380):(duration<55||duration>120))
+      ||metric.source.periodStart!==period.start||metric.source.periodEnd!==period.end
+      ||metric.source.currency!==metric.unit||(metric.source.scope??'consolidated')!=='consolidated'
       ||!Number.isFinite(Date.parse(metric.source.retrievedAt))||Date.parse(metric.source.retrievedAt)>Date.parse(snapshot.asOf))return [];
     try{if(new URL(metric.source.url!).protocol!=='https:')return [];}catch{return [];}
     return [metric];
   }).sort((a,b)=>Date.parse(a.source.periodEnd)-Date.parse(b.source.periodEnd)):[];
-  const quarters=metrics(research.quarterly),annual=metrics(research.annual);
+  const quarters=metrics(research.quarterly,false),annual=metrics(research.annual,true);
   let selected:Metric[]=[],value:number|null=null,method='';
   if(quarters.length>=8){
     const last=quarters.slice(-8);
-    const adjacent=last.every((item,index)=>index===0||((Date.parse(item.source.periodEnd)-Date.parse(last[index-1].source.periodEnd))/86_400_000>=60&&(Date.parse(item.source.periodEnd)-Date.parse(last[index-1].source.periodEnd))/86_400_000<=120));
+    const adjacent=last.every((item,index)=>index===0||Date.parse(item.source.periodStart!)-Date.parse(last[index-1].source.periodEnd)===86_400_000);
     if(adjacent&&new Set(last.map(item=>item.unit)).size===1){
       selected=last;value=last.slice(4).reduce((sum,item)=>sum+item.value,0)/last.slice(0,4).reduce((sum,item)=>sum+item.value,0)-1;method='latest-four-quarter-revenue / prior-four-quarter-revenue - 1';
     }
@@ -174,7 +197,7 @@ function deriveRevenueGrowth(snapshot: Snapshot) {
     const years=(Date.parse(last.source.periodEnd)-Date.parse(prior.source.periodEnd))/(365.25*86_400_000);
     // Adjacent reported fiscal years are comparable without normalizing by
     // exponentiation, whose final bits depend on the runtime's math library.
-    if(years>=0.9&&years<=1.1&&last.unit===prior.unit){selected=[prior,last];value=last.value/prior.value-1;method='latest-reported-annual-revenue / prior-reported-annual-revenue - 1';}
+    if(years>=0.9&&years<=1.1&&last.unit===prior.unit&&Date.parse(last.source.periodStart!)-Date.parse(prior.source.periodEnd)===86_400_000){selected=[prior,last];value=last.value/prior.value-1;method='latest-reported-annual-revenue / prior-reported-annual-revenue - 1';}
   }
   if(value===null||!finite(value)||!selected.length)return null;
   const latest=selected.at(-1)!;

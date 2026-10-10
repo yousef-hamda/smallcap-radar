@@ -2,14 +2,39 @@
  * Run test:runtime first to prepare .test-build. No private data are written here. */
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
+import {createInterface} from 'node:readline';
 import {evaluateOpportunityDossier,opportunityDossierFromSnapshot} from '../.test-build/opportunity-dossier.mjs';
 import {isCurrentOpportunityEvaluation} from '../.test-build/opportunity-engine.mjs';
 import {completeSnapshotSchema} from '../.test-build/validation.mjs';
 import {applyFinancingRisk} from '../.test-build/financing-risk.mjs';
-const file=process.argv[2];if(!file)throw Error('Usage: node scripts/verify-complete-ranking.mjs universe.json [--stored]');
+const file=process.argv[2];if(!file)throw Error('Usage: node scripts/verify-complete-ranking.mjs universe.json|universe.jsonl [--stored]');
 const factorDetails={};
-const input=JSON.parse(fs.readFileSync(file,'utf8')),rows=[];
-for(const row of input.rows){
+const rows=[];
+let runId,expectedRows;
+async function* sourceRows(){
+ if(/\.(?:jsonl|ndjson)$/i.test(file)){
+  let header=true;
+  for await(const line of createInterface({input:fs.createReadStream(file),crlfDelay:Infinity})){
+   if(!line.trim())continue;
+   const record=JSON.parse(line);
+   if(header){
+    assert.ok(typeof record.runId==='string'&&record.runId,'Missing JSONL runId');
+    assert.ok(Number.isSafeInteger(record.rowCount)&&record.rowCount>0,'Invalid JSONL rowCount');
+    runId=record.runId;expectedRows=record.rowCount;header=false;
+    continue;
+   }
+   yield record;
+  }
+  assert.equal(header,false,'Missing JSONL header');
+ }else{
+  const input=JSON.parse(fs.readFileSync(file,'utf8'));
+  assert.ok(typeof input.runId==='string'&&input.runId,'Missing runId');
+  assert.ok(Array.isArray(input.rows)&&input.rows.length>0,'Missing rows');
+  runId=input.runId;expectedRows=input.rows.length;
+  yield* input.rows;
+ }
+}
+for await(const row of sourceRows()){
  const rawSnapshot=JSON.parse(row.payload);
  const parsedSnapshot=completeSnapshotSchema.parse(rawSnapshot);
  assert.deepEqual(parsedSnapshot,rawSnapshot,`${row.symbol}: strict import must preserve saved source fields`);
@@ -31,8 +56,13 @@ for(const row of input.rows){
     }
   }
  for(const factor of evaluation.factors){const detail=factorDetails[factor.id]??={numeric:0,positive:0,min:10,max:0};detail.numeric++;detail.positive+=factor.score>0;detail.min=Math.min(detail.min,factor.score);detail.max=Math.max(detail.max,factor.score);}
- rows.push({symbol:row.symbol,score:evaluation.score,hash:evaluation.evaluationHash,type:snapshot.securityType});
+ if(row.rank!==undefined)assert.ok(Number.isSafeInteger(row.rank)&&row.rank>0,`${row.symbol}: invalid export rank`);
+ rows.push({symbol:row.symbol,score:evaluation.score,hash:evaluation.evaluationHash,type:snapshot.securityType,rank:row.rank});
 }
+assert.equal(rows.length,expectedRows,'Incomplete universe export');
 rows.sort((a,b)=>b.score-a.score||(a.symbol<b.symbol?-1:a.symbol>b.symbol?1:0));
 assert.equal(new Set(rows.map(row=>row.symbol)).size,rows.length);
-console.log(JSON.stringify({runId:input.runId,total:rows.length,factorDetails,missingFactors:0,missingFinalGrades:0,invalidImports:0,imported:rows.length,sorted:rows.length,positive:rows.filter(row=>row.score>0).length,zero:rows.filter(row=>row.score===0).length,types:[...new Set(rows.map(row=>row.type))],top:rows.slice(0,10),bottom:rows.slice(-3)},null,2));
+const ranked=rows.filter(row=>row.rank!==undefined);
+assert.ok(ranked.length===0||ranked.length===rows.length,'Partially ranked export');
+if(ranked.length)rows.forEach((row,index)=>assert.equal(row.rank,index+1,`${row.symbol}: exported rank differs from evaluated score order`));
+console.log(JSON.stringify({runId,total:rows.length,factorDetails,missingFactors:0,missingFinalGrades:0,invalidImports:0,imported:rows.length,sorted:rows.length,positive:rows.filter(row=>row.score>0).length,zero:rows.filter(row=>row.score===0).length,types:[...new Set(rows.map(row=>row.type))],top:rows.slice(0,10),bottom:rows.slice(-3)},null,2));

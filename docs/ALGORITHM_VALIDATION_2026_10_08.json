@@ -1,0 +1,117 @@
+{
+  "verifiedAt": "2026-10-09",
+  "scope": "Algorithm/input/protocol integrity; synthetic counterexamples, not realized stock performance",
+  "weights": [
+    25,
+    20,
+    15,
+    12,
+    10,
+    10,
+    5,
+    3
+  ],
+  "baselineSavedParity": 7506,
+  "frozenInputSha256": "fad5cf851e2bda0b576490878f3013de414fe7c2db173653114a9f85f1332e79",
+  "wholeUniverse": {
+    "numericFactors": 60048,
+    "missingFactors": 0,
+    "missingFinalGrades": 0,
+    "retainedListings": 7506,
+    "sortedListings": 7506,
+    "independentComponentChecks": 54332,
+    "normalizationAndIdentifierControls": 160,
+    "scoreSort": "descending, symbol BINARY ascending",
+    "predictiveClaim": false,
+    "strictImportExactSourceFields": 7506,
+    "candidateReplayRows": 7506,
+    "streamingJsonlVerified": true,
+    "httpExportJsonlConversionParity": 7506,
+    "httpExportRankSequenceVerified": true
+  },
+  "syntheticBeforeAfter": {
+    "invalidEntryPreviouslyAccepted": true,
+    "invalidEntryNowAccepted": false,
+    "postDelistingPreviouslyTotalReturn": 8.99,
+    "postDelistingNowAccepted": false,
+    "takeoverPreviouslyMajorUpside": false,
+    "takeoverNowMajorUpside": true,
+    "leakedTrailingReturnBefore": 99,
+    "trailingReturnAfter": 0,
+    "invalidPeriodsBefore": 2,
+    "invalidPeriodsAfter": 0
+  },
+  "historicalValidation": {
+    "status": "BLOCKED",
+    "counts": {
+      "total": 0,
+      "accepted": 0,
+      "rejected": 0,
+      "censored": 0,
+      "issuers": 0,
+      "purged": 0
+    },
+    "probability": null,
+    "blockers": [
+      "Insufficient uncensored point-in-time rows: 0",
+      "Insufficient independent issuers: 0",
+      "Insufficient historical coverage in months: 0.0",
+      "Purged chronological or issuer holdout partition is empty"
+    ]
+  },
+  "localTests": {
+    "engine": {
+      "tests": 255,
+      "pass": 255,
+      "fail": 0
+    },
+    "root": [
+      {
+        "tests": 67,
+        "pass": 67,
+        "fail": 0
+      }
+    ],
+    "research": [
+      {
+        "tests": 19,
+        "pass": 19,
+        "fail": 0
+      }
+    ],
+    "database": {
+      "pass": 4,
+      "fail": 0
+    },
+    "typecheck": "PASS",
+    "lint": "PASS",
+    "build": "PASS",
+    "runtime": {
+      "tests": 91,
+      "pass": 91,
+      "fail": 0
+    },
+    "exportConverter": {
+      "rows": 7506,
+      "exactSnapshotAndEvaluationParity": true,
+      "rankSequence": true,
+      "rejectsWrongRank": true,
+      "rejectsEvaluatedRankMismatch": true
+    }
+  },
+  "deployment": {
+    "status": "PENDING",
+    "reason": "Restricted terminal DNS blocks Railway/public app/GitHub; local .git writes denied; GitHub connected-app tree write requires approval but session approval policy is never. No production adoption proof.",
+    "candidateRubric": "1.3.0-evidence-consistent-opportunity",
+    "candidateHash": "6ccccbc7"
+  },
+  "delivery": {
+    "status": "LOCAL_CANDIDATE_ONLY",
+    "baseCommit": "3b17bb88655f8bb97dd183cbf346b89fddc39017",
+    "patchAndBundleVerified": true,
+    "githubCommit": null,
+    "productionDeploymentId": null,
+    "liveReleaseToken": null,
+    "fullLiveAcceptance": false
+  }
+}

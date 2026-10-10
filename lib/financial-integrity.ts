@@ -1,5 +1,19 @@
 import type { Provenance, Snapshot } from './engine';
-import { derivedEvidence, usableEvidence } from './evidence';
+import { derivedEvidence, usableEvidence,evidenceTimestamp,validEvidenceConversion } from './evidence';
+
+/** Model observations retain unknown rights separately, but every dependency
+ * must be auditable and actually available at the saved research cutoff. */
+export function modelEvidenceAvailable(source:Provenance|undefined,asOf:string,ancestors=new Set<Provenance>(),depth=0):boolean {
+  if(!source||depth>12||ancestors.has(source)||!usableEvidence(source,asOf)
+    ||!Number.isFinite(evidenceTimestamp(source.retrievedAt))||evidenceTimestamp(source.retrievedAt)>evidenceTimestamp(asOf)
+    ||!validEvidenceConversion(source,asOf))return false;
+  try{if(new URL(source.url!).protocol!=='https:')return false;}catch{return false;}
+  if(!source.dependencies)return true;
+  if(!Array.isArray(source.dependencies))return false;
+  const lineage=new Set(ancestors).add(source);
+  return source.dependencies.every(item=>modelEvidenceAvailable(item,asOf,lineage,depth+1)
+    &&Date.parse(item.availableAt)<=Date.parse(source.availableAt)&&Date.parse(item.retrievedAt)<=Date.parse(source.retrievedAt));
+}
 
 /** Fiscal compatibility is distinct from recency. Ratios must not mix currencies,
  * consolidated/segment scopes, or annual/quarter/YTD observation windows. */
@@ -80,13 +94,14 @@ export function alignSnapshotFinancials(original: Snapshot): Snapshot {
       delete snapshot.backlog;delete snapshot.provenance.backlog;
     } else snapshot.backlog={...original.backlog,kind};
   }
-  const research = original.opportunityResearch?.earnings;
-  if (!research || research.conflicts?.length) return alignPricingRatios(snapshot);
+  const acquiredResearch = original.opportunityResearch?.earnings;
+  // Earnings conflicts cannot erase independently sourced balance observations.
+  const research = acquiredResearch&&!acquiredResearch.conflicts?.length?acquiredResearch:undefined;
   const valid = (metric: {value:number;unit:string;source:Provenance} | undefined) => !!metric
     && Number.isFinite(metric.value) && metric.unit === 'USD' && metric.source.currency === 'USD'
-    && usableEvidence(metric.source,snapshot.asOf)
-    && Date.parse(metric.source.retrievedAt) <= Date.parse(snapshot.asOf);
-  const quarters = [...(research.quarterly ?? [])].sort((a,b) => a.end.localeCompare(b.end)).slice(-4);
+    &&(metric.source.scope??'consolidated')==='consolidated'
+    && modelEvidenceAvailable(metric.source,snapshot.asOf);
+  const quarters = [...(research?.quarterly ?? [])].sort((a,b) => a.end.localeCompare(b.end)).slice(-4);
   const contiguous = quarters.length === 4 && quarters.every((item,index) => {
     const duration = (Date.parse(item.end)-Date.parse(item.start))/86_400_000;
     return duration >= 55 && duration <= 120 && (!index || Date.parse(item.start)-Date.parse(quarters[index-1].end) === 86_400_000);
@@ -104,7 +119,7 @@ export function alignSnapshotFinancials(original: Snapshot): Snapshot {
       const source = derivedEvidence(`SEC aligned four-quarter ${key}`,metrics.map(item=>item.source),snapshot.asOf,`sum of four contiguous standalone ${key} quarters`)!;
       promote(key,metrics.reduce((sum,item)=>sum+item.value,0),{...source,periodStart:quarters[0].start,periodEnd:quarters[3].end});
     } else {
-      const annual = [...(research.annual ?? [])].sort((a,b)=>a.end.localeCompare(b.end)).at(-1);
+      const annual = [...(research?.annual ?? [])].sort((a,b)=>a.end.localeCompare(b.end)).at(-1);
       const metric = annual?.metrics[key];
       if (annual && valid(metric) && metric!.source.periodStart === annual.start && metric!.source.periodEnd === annual.end)
         promote(key,metric!.value,metric!.source);
@@ -120,9 +135,12 @@ export function alignSnapshotFinancials(original: Snapshot): Snapshot {
     promote('fcf',value,{...source,periodStart:quarters[0].start,periodEnd:quarters[3].end});
   }
   const financial=original.opportunityResearch?.financialStrength;
-  if (!financial?.conflicts?.length) for (const [input,output] of [['unrestrictedCash','cash'],['totalDebt','debt']] as const) {
+  const debtContradiction=(financial?.conflicts??[]).some(item=>item.startsWith('totalDebt: reported aggregate contradicts contemporaneous components'));
+  if(debtContradiction){delete snapshot.debt;delete snapshot.provenance.debt;}
+  const unrelatedFinancialConflict=(financial?.conflicts??[]).some(item=>!item.startsWith('totalDebt: reported aggregate contradicts contemporaneous components'));
+  if (!unrelatedFinancialConflict) for (const [input,output] of [['unrestrictedCash','cash'],['totalDebt','debt']] as const) {
     const metric=financial?.metrics?.[input];
-    if (valid(metric) && metric!.value >= 0) promote(output,metric!.value,metric!.source);
+    if (!(output==='debt'&&debtContradiction)&&valid(metric) && metric!.value >= 0) promote(output,metric!.value,metric!.source);
   }
   alignPricingRatios(snapshot);
   snapshot.dataIssues=[...new Set([...(original.dataIssues ?? []).filter(item=>!item.startsWith('[integrity] ')),...financialIntegrityFindings(snapshot).map(item=>`[integrity] ${item}`)])];
@@ -135,7 +153,10 @@ function alignPricingRatios(snapshot: Snapshot) {
   const observed = (key: 'marketCap'|'revenue'|'fcf'|'cash'|'debt') => {
     const source=snapshot.provenance[key],value=snapshot[key];
     return typeof value==='number' && Number.isFinite(value) && !!source?.currency
-      && usableEvidence(source,snapshot.asOf) && Date.parse(source.retrievedAt)<=Date.parse(snapshot.asOf);
+      &&(source.scope??'consolidated')==='consolidated'
+      && modelEvidenceAvailable(source,snapshot.asOf)
+      && (key!=='marketCap'||((Date.parse(snapshot.asOf)-Date.parse(source.periodEnd))/864e5<=7
+        &&(Date.parse(snapshot.asOf)-Date.parse(source.availableAt))/864e5<=7));
   };
   const sameCurrency = (keys: Array<'marketCap'|'revenue'|'fcf'|'cash'|'debt'>) => keys.every(observed)
     && new Set(keys.map(key=>snapshot.provenance[key].currency)).size===1;

@@ -3,7 +3,7 @@ import {readSecArtifact,recordSecArtifact,secArtifactCik} from './sec-artifact-c
 import {persistFilingDocument} from './filing-observations';
 import { reserveProviderRequest } from './provider-quota';
 import type { Snapshot, Provenance, InsiderPurchase, SecFilingResearch } from './engine';
-import { completedSessionQuote, ma30Weeks } from './research';
+import { completedSessionQuote, ma30Weeks, reviewShareSplits } from './research';
 import { observations, latestInstant, trailingAnnual, provenance, REVENUE_TAGS } from './sec';
 import bundledUniverse from './universe.generated.json';
 import quickCache from './quick-cache.generated.json';
@@ -409,6 +409,13 @@ function applyBundledFundamentals(snapshot:Snapshot,cik:number,now:string){
 }
 
 type RecentSecSubmission={form:string;accession:string;document:string;filed:string;reportDate?:string};
+/** SEC ownership submissions commonly name the rendered XSL route. The raw
+ * ownership XML is the same basename at the accession root. */
+export function rawSecOwnershipDocument(document:string):string|null {
+ if(/^[A-Za-z0-9][A-Za-z0-9._-]*\.xml$/i.test(document)&&!document.includes('..'))return document;
+ const match=document.match(/^xslF345X\d{2}\/([A-Za-z0-9][A-Za-z0-9._-]*\.xml)$/i);
+ return match&&!match[1].includes('..')?match[1]:null;
+}
 const validSecDate=(value:unknown):value is string=>typeof value==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(`${value}T00:00:00Z`))&&new Date(`${value}T00:00:00Z`).toISOString().slice(0,10)===value;
 function recentSubmissions(payload:any):RecentSecSubmission[]{
  const recent=payload?.filings?.recent;
@@ -417,7 +424,7 @@ function recentSubmissions(payload:any):RecentSecSubmission[]{
  const rows:RecentSecSubmission[]=[];
  for(let index=0;index<length;index++){
   const form=recent.form[index],accession=recent.accessionNumber[index],document=recent.primaryDocument[index],filed=recent.filingDate[index],reportDate=recent.reportDate?.[index];
-  if(typeof form!=='string'||typeof accession!=='string'||!/^[0-9]{10}-[0-9]{2}-[0-9]{6}$/.test(accession)||typeof document!=='string'||!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(document)||!validSecDate(filed))continue;
+  if(typeof form!=='string'||typeof accession!=='string'||!/^[0-9]{10}-[0-9]{2}-[0-9]{6}$/.test(accession)||typeof document!=='string'||!(/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(document)||(['4','4/A','3','3/A','5','5/A'].includes(form)&&rawSecOwnershipDocument(document)))||document.includes('..')||!validSecDate(filed))continue;
   rows.push({form,accession,document,filed,...(typeof reportDate==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(reportDate)?{reportDate}:{})});
  }
  return rows;
@@ -431,10 +438,14 @@ const INSIDER_FORM4_FETCH_LIMIT=100;
 const INSIDER_FORM4_MAX_DURATION_MS=12_000;
 export function selectRecentForm4Filings(payload:any,asOf:string,limit=INSIDER_FORM4_FETCH_LIMIT){
  const end=asOf.slice(0,10),cutoff=dateOffset(end,-INSIDER_FORM4_WINDOW_DAYS);
- const rows=recentSubmissions(payload).filter(row=>row.form==='4'&&/^\d{4}-\d{2}-\d{2}$/.test(row.filed)&&row.filed>=cutoff&&row.filed<=end).sort((a,b)=>b.filed.localeCompare(a.filed)||b.accession.localeCompare(a.accession));
+ const recentRows=recentSubmissions(payload);
+ const rows=recentRows.filter(row=>row.form==='4'&&/^\d{4}-\d{2}-\d{2}$/.test(row.filed)&&row.filed>=cutoff&&row.filed<=end).sort((a,b)=>b.filed.localeCompare(a.filed)||b.accession.localeCompare(a.accession));
  const selected=rows.slice(0,Math.max(0,limit));
- const allRecentDates=recentSubmissions(payload).map(row=>row.filed).filter(date=>/^\d{4}-\d{2}-\d{2}$/.test(date)&&date<=end).sort();
- const submissionWindowComplete=allRecentDates.length>0&&allRecentDates[0]<=cutoff;
+ const allRecentDates=recentRows.map(row=>row.filed).filter(date=>/^\d{4}-\d{2}-\d{2}$/.test(date)&&date<=end).sort();
+ const rawRecent=payload?.filings?.recent;
+ const validAccessions=new Set(recentRows.map(row=>row.accession));
+ const malformedInWindow=Array.isArray(rawRecent?.form)&&rawRecent.form.some((form:string,index:number)=>['4','4/A'].includes(form)&&(!validSecDate(rawRecent.filingDate?.[index])||(rawRecent.filingDate[index]>=cutoff&&rawRecent.filingDate[index]<=end&&!validAccessions.has(rawRecent.accessionNumber?.[index]))));
+ const submissionWindowComplete=allRecentDates.length>0&&allRecentDates[0]<=cutoff&&!malformedInWindow;
  const formWindowComplete=rows.length<=selected.length||selected.at(-1)?.filed===cutoff||!!selected.at(-1)&&selected.at(-1)!.filed<cutoff;
  return {selected,coverage:{windowStart:cutoff,windowEnd:end,availableForm4Count:rows.length,selectedForm4Count:selected.length,fetchedForm4Count:0,failedForm4Count:0,reviewedForm4Count:0,invalidForm4Count:0,unattemptedForm4Count:0,httpStatusCounts:{},submissionWindowComplete,state:'partial' as const,message:!submissionWindowComplete?'SEC recent-submission index does not prove it spans the full 12-month window.':!formWindowComplete?`More than ${limit} Form 4 filings were found; only the newest filings are fetched.`:'Form 4 coverage will be complete only after every in-window filing is fetched successfully.'}};
 }
@@ -633,7 +644,9 @@ export async function fetchInsiderPurchases(cik: number,asOf:string,submissionsI
       if(Date.now()>=deadline){unattemptedForm4Count=filings.length-offset;break;}
       await Promise.all(filings.slice(offset,offset+4).map(async filing => {
       const accessionPath = filing.accession.replaceAll('-', '');
-      const url = `https://www.sec.gov/Archives/edgar/data/${cik}/${accessionPath}/${filing.document}`;
+      const rawDocument=rawSecOwnershipDocument(filing.document);
+      if(!rawDocument){invalidForm4Count++;return;}
+      const url = `https://www.sec.gov/Archives/edgar/data/${cik}/${accessionPath}/${rawDocument}`;
       let responseStatus:number|undefined;
       const remaining=Math.max(1,deadline-Date.now());
       const xml = await providerFetch(url, { headers: requestHeaders(url), signal: AbortSignal.timeout(Math.min(8_000,remaining)) }).then(async response => {responseStatus=response.status;if(!response.ok)return '';return (await readLimitedText(response,512_000,512_000)).text;}).catch(() => '');
@@ -851,15 +864,17 @@ export async function enrichSnapshotsWithSecOpportunity(snapshots: Snapshot[], m
   }
 }
 
-function attachScanMarketResearch(snapshot: Snapshot, stock: HistoricalResult) {
+export function attachScanMarketResearch(snapshot: Snapshot, stock: HistoricalResult) {
   snapshot.history = stock.history;
-  snapshot.splitAdjusted = stock.source.includes('Yahoo Finance chart API') && stock.splits !== null;
   const last = stock.history.at(-1)?.date ?? stock.availableAt.slice(0, 10);
   snapshot.provenance.history = {
     source: stock.source, url: stock.url, periodEnd: last, availableAt: stock.availableAt,
     retrievedAt: stock.retrievedAt, currency: 'USD', confidence: stock.source.includes('bundled') ? 'low' : 'medium',
     rightsStatus: 'unknown', tag: 'scan daily market history; reuse rights not verified',
   };
+  // Split-adjusted price history does not reconcile the SEC share-count change.
+  // Require the event response to cover both reported share observation dates.
+  if(stock.source.includes('Yahoo Finance chart API'))Object.assign(snapshot,reviewShareSplits(snapshot,stock.splits,stock.history[0]?.date??'',last,snapshot.provenance.history));
 }
 
 function compactTechnicalResearch(snapshot: Snapshot) {
@@ -915,7 +930,7 @@ export async function companySnapshot(company: Company, options: { includeOpport
     snapshot.provenance.price={source:'Yahoo Finance chart metadata',url:historyUrl,periodEnd:quoteDate,availableAt:quoteAvailableAt,retrievedAt:historyRetrievedAt,currency:'USD',confidence:'medium'};
   }
 
-  const session=completedSessionQuote(history);
+  const session=completedSessionQuote(history,now);
   if (price != null) snapshot.provenance.price = {...quoteEvidence,tag:'last completed session close'};
   if(session){snapshot.price=session.price;snapshot.dailyChange=session.dailyChange;snapshot.provenance.price={...quoteEvidence,periodEnd:session.periodEnd,tag:'last completed session close'};snapshot.provenance.dailyChange={...quoteEvidence,periodEnd:session.periodEnd,tag:'last completed close / previous completed close - 1'};}
   if(history.length)snapshot.provenance.history=quoteEvidence;

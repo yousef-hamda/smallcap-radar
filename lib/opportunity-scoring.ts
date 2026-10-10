@@ -1,6 +1,7 @@
 import type { Provenance } from './engine';
 import type { OpportunityEvidence } from './opportunity-engine';
 import { isOpportunityProvenanceValid } from './opportunity-engine';
+import { compatibleFinancialSources } from './financial-integrity';
 
 export type FairValueMethodId = 'normalized-dcf' | 'peer-multiples' | 'sum-of-parts' | 'residual-income' | 'risk-adjusted-npv' | 'asset-value';
 
@@ -83,6 +84,7 @@ export type CatalystEvent = {
   announcedAt: string;
   expectedAt: string;
   source: Provenance;
+  /** Explicit ratio/fraction-of-ttm-revenue or percent/%-of-ttm-revenue. */
   impactAsPctTtmRevenue?: SourcedValue;
   conditions: string[];
   progressVerified: boolean;
@@ -414,6 +416,9 @@ function scoreEarningsQualityCore(input: EarningsQualityAssessment, allowPartial
   }
   const units = new Set(allMetrics.map(metric => metric.unit.toUpperCase()));
   if (units.size !== 1) return unavailableEarnings('Earnings inputs use different currencies or units.', ['currency/unit mismatch']);
+  if (allMetrics.some(metric => metric.source.currency !== metric.unit || (metric.source.scope ?? 'consolidated') !== 'consolidated')) {
+    return unavailableEarnings('Comparable consolidated earnings and cash-flow inputs must retain their reported currency and scope.', ['earnings source currency/scope mismatch']);
+  }
   const annualPeriods = [...input.annual].sort((a, b) => Date.parse(a.revenue.source.periodEnd) - Date.parse(b.revenue.source.periodEnd));
   const quarterlyPeriods = [...input.quarterly].sort((a, b) => Date.parse(a.revenue.source.periodEnd) - Date.parse(b.revenue.source.periodEnd));
   const annualEnds = annualPeriods.map(period => Date.parse(period.revenue.source.periodEnd));
@@ -554,20 +559,31 @@ export function scoreCatalysts(input: CatalystAssessment): CatalystScore {
       regulatory: 5, operational: 5, 'customer-expansion': 6, guidance: 4,
       'non-binding': 2, unverified: 0,
     };
+    if (!Object.hasOwn(certaintyByClass, event.classification)
+      || !['not-priced', 'partly-priced', 'priced', 'unknown'].includes(event.marketPricing)
+      || !Array.isArray(event.conditions) || event.conditions.some(condition => typeof condition !== 'string' || !condition.trim())
+      || typeof event.progressVerified !== 'boolean') {
+      conflicts.push(`invalid catalyst classification or review fields: ${event.id}`);
+      continue;
+    }
     let certainty = certaintyByClass[event.classification];
     if (!event.progressVerified) certainty = Math.min(certainty, 4);
     if (event.conditions.length > 0) certainty = Math.max(0, certainty - Math.min(3, event.conditions.length));
 
-    let materiality = 2;
+    // Missing economics earns no impact credit. Units, not the magnitude of
+    // the number, distinguish a fraction from a percentage.
+    let materiality = 0;
     if (event.impactAsPctTtmRevenue) {
       const impact = event.impactAsPctTtmRevenue;
-      if (!Number.isFinite(impact.value) || impact.value < 0 || !impact.unit.toUpperCase().includes('REVENUE')
+      const unit = impact.unit.trim().toLowerCase();
+      const ratio = ['ratio-of-ttm-revenue', 'fraction-of-ttm-revenue'].includes(unit) ? impact.value
+        : ['percent-of-ttm-revenue', '%-of-ttm-revenue'].includes(unit) ? impact.value / 100 : null;
+      if (ratio === null || !Number.isFinite(ratio) || ratio < 0
         || !isOpportunityProvenanceValid(impact.source, input.asOf)) {
         conflicts.push(`invalid or unauditable catalyst materiality: ${event.id}`);
         continue;
       }
-      const ratio = impact.value > 1 ? impact.value / 100 : impact.value;
-      materiality = ratio < 0.01 ? 1 : ratio < 0.05 ? 3 : ratio < 0.1 ? 5 : ratio < 0.25 ? 7 : ratio < 0.5 ? 8 : 9;
+      materiality = ratio === 0 ? 0 : ratio < 0.01 ? 1 : ratio < 0.05 ? 3 : ratio < 0.1 ? 5 : ratio < 0.25 ? 7 : ratio < 0.5 ? 8 : 9;
     }
     const daysToEvent = (Date.parse(event.expectedAt) - Date.parse(input.asOf)) / 86_400_000;
     const timing = daysToEvent <= 30 ? 9 : daysToEvent <= 90 ? 8 : daysToEvent <= 180 ? 7 : 5;
@@ -582,8 +598,10 @@ export function scoreCatalysts(input: CatalystAssessment): CatalystScore {
   const sources = [...searchSources, ...relevant.flatMap(item => [item.event.source, ...(item.event.impactAsPctTtmRevenue ? [item.event.impactAsPctTtmRevenue.source] : [])])];
   // A documented empty search earns at most 1/10. It is distinct from missing
   // search coverage, which returns null above.
-  const score = relevant.length === 0 ? 1 : rounded(Math.min(10, relevant.reduce((sum, item) => sum + item.score, 0) / Math.sqrt(relevant.length)), 2);
-  const confidence: CatalystScore['confidence'] = relevant.length > 0 && relevant.every(item => item.certainty >= 7 && item.event.marketPricing !== 'unknown') ? 'high'
+  // Events often describe the same economics. Until independence is reviewed,
+  // additional announcements cannot multiply impact or breach status ceilings.
+  const score = relevant.length === 0 ? 1 : Math.max(...relevant.map(item => item.score));
+  const confidence: CatalystScore['confidence'] = relevant.length > 0 && relevant.every(item => item.certainty >= 7 && item.event.marketPricing !== 'unknown' && !!item.event.impactAsPctTtmRevenue) ? 'high'
     : relevant.length > 0 ? 'medium' : 'medium';
   return {
     score,
@@ -592,8 +610,9 @@ export function scoreCatalysts(input: CatalystAssessment): CatalystScore {
     confidence,
     eventScores: relevant.map(item => ({ id: item.event.id, score: item.score, rationale: `certainty ${item.certainty}/10; materiality ${item.materiality}/10; timing ${item.timing}/10; pricing-in ${item.pricing}/10` })),
     calculation: {
-      rubricId: 'catalysts-v1',
+      rubricId: 'catalysts-v2-explicit-units',
       inputs: [
+        { name: 'event-aggregation', value: 'strongest independently scored event; no announcement-count bonus' },
         { name: 'horizon-months', value: input.horizonMonths },
         { name: 'documented-search', value: 1 },
         { name: 'in-horizon-events', value: relevant.length },
@@ -602,6 +621,11 @@ export function scoreCatalysts(input: CatalystAssessment): CatalystScore {
           { name: `event:${item.event.id}:score`, value: item.score },
           { name: `event:${item.event.id}:expected-at`, value: item.event.expectedAt },
           { name: `event:${item.event.id}:market-pricing`, value: item.event.marketPricing },
+          { name: `event:${item.event.id}:certainty`, value: item.certainty },
+          { name: `event:${item.event.id}:materiality`, value: item.materiality },
+          { name: `event:${item.event.id}:timing`, value: item.timing },
+          { name: `event:${item.event.id}:pricing`, value: item.pricing },
+          ...(item.event.impactAsPctTtmRevenue ? [{ name: `event:${item.event.id}:impact`, value: item.event.impactAsPctTtmRevenue.value, unit: item.event.impactAsPctTtmRevenue.unit }] : []),
         ]),
       ],
     },
@@ -625,6 +649,11 @@ export function scoreFinancialStrength(input: FinancialStrengthAssessment): Fina
   }
   if (new Set(metrics.map(metric => metric.unit.toUpperCase())).size !== 1) {
     return unavailableFinancial('Financial inputs use different currencies or units.', ['currency/unit mismatch']);
+  }
+  if (!solvencyBalanceAligned(input.unrestrictedCash, input.totalDebt, input.debtDueWithin24Months)
+    || !solvencyAnnualFlowAligned(input.freeCashFlowTtm, input.operatingIncomeTtm, input.interestExpenseTtm)
+    || !solvencySameEndScope(input.unrestrictedCash, input.freeCashFlowTtm)) {
+    return unavailableFinancial('Solvency requires aligned annual/TTM flow windows, instant balance dates, currencies and consolidated scope.', ['solvency period/scope mismatch']);
   }
   const latestPeriod = Math.min(...metrics.map(metric => Date.parse(metric.source.periodEnd)));
   const periodAgeDays = (Date.parse(input.asOf) - latestPeriod) / 86_400_000;
@@ -658,7 +687,7 @@ export function scoreFinancialStrength(input: FinancialStrengthAssessment): Fina
     confidence: metrics.every(metric => metric.source.confidence === 'high') ? 'high' : 'medium',
     subScores: { cashRunway, interestCoverage, maturityCoverage },
     calculation: {
-      rubricId: 'financial-strength-industrial-v1',
+      rubricId: 'financial-strength-industrial-v2-aligned',
       inputs: [
         { name: 'unrestricted-cash', value: cash, unit: input.unrestrictedCash.unit },
         { name: 'total-debt', value: debt, unit: input.totalDebt.unit },
@@ -676,6 +705,25 @@ export function scoreFinancialStrength(input: FinancialStrengthAssessment): Fina
 export type PartialFinancialStrengthAssessment = Pick<FinancialStrengthAssessment, 'asOf' | 'industryModel'>
   & Partial<Pick<FinancialStrengthAssessment, 'unrestrictedCash' | 'totalDebt' | 'freeCashFlowTtm' | 'operatingIncomeTtm' | 'interestExpenseTtm' | 'debtDueWithin24Months'>>;
 
+function solvencyCurrency(metric: SourcedValue | undefined) {
+  return !!metric && /^[A-Z]{3}$/.test(metric.unit) && metric.source.currency === metric.unit
+    && (metric.source.scope ?? 'consolidated') === 'consolidated';
+}
+function solvencySameEndScope(...metrics: Array<SourcedValue | undefined>) {
+  return metrics.every(solvencyCurrency) && new Set(metrics.map(metric => metric!.source.periodEnd)).size === 1
+    && new Set(metrics.map(metric => metric!.source.scope ?? 'consolidated')).size === 1;
+}
+function solvencyBalanceAligned(...metrics: Array<SourcedValue | undefined>) {
+  return metrics.every(solvencyCurrency) && compatibleFinancialSources(metrics.map(metric => metric?.source), 'balance');
+}
+function solvencyAnnualFlowAligned(...metrics: Array<SourcedValue | undefined>) {
+  return metrics.every(solvencyCurrency) && compatibleFinancialSources(metrics.map(metric => metric?.source), 'flow')
+    && metrics.every(metric => {
+      const days = (Date.parse(metric!.source.periodEnd) - Date.parse(metric!.source.periodStart!)) / 86_400_000;
+      return days >= 330 && days <= 380;
+    });
+}
+
 /** Score only independently computable solvency dimensions; keep missing slices uncovered. */
 export function scoreFinancialStrengthPartial(input: PartialFinancialStrengthAssessment): FinancialStrengthScore {
   if (input.industryModel !== 'industrial-operating-company' || !Number.isFinite(Date.parse(input.asOf))) {
@@ -688,7 +736,8 @@ export function scoreFinancialStrengthPartial(input: PartialFinancialStrengthAss
     && new Set(metrics.map(metric => metric!.unit.toUpperCase())).size === 1;
   const scores: Array<{ id: 'cashRunway' | 'interestCoverage' | 'maturityCoverage'; score: number; weight: number; metrics: SourcedValue[]; inputs: Array<{ name: string; value: string | number; unit?: string }> }> = [];
   const cash = input.unrestrictedCash, debt = input.totalDebt, fcf = input.freeCashFlowTtm;
-  if (unitAligned(cash, fcf) && cash!.value >= 0) {
+  if (unitAligned(cash, fcf) && cash!.value >= 0 && solvencyBalanceAligned(cash)
+    && solvencyAnnualFlowAligned(fcf) && solvencySameEndScope(cash, fcf)) {
     const runwayMonths = fcf!.value >= 0 ? Number.POSITIVE_INFINITY : cash!.value / (-fcf!.value / 12);
     const score = fcf!.value >= 0 ? 10 : runwayMonths < 6 ? 0 : runwayMonths < 12 ? 3 : runwayMonths < 18 ? 5 : runwayMonths < 24 ? 6 : runwayMonths < 36 ? 8 : 9;
     scores.push({ id: 'cashRunway', score, weight: 0.4, metrics: [cash!, fcf!], inputs: [
@@ -698,7 +747,8 @@ export function scoreFinancialStrengthPartial(input: PartialFinancialStrengthAss
     ] });
   }
   const operating = input.operatingIncomeTtm, interest = input.interestExpenseTtm;
-  if (unitAligned(debt, operating, interest) && debt!.value >= 0 && interest!.value >= 0) {
+  if (unitAligned(debt, operating, interest) && debt!.value >= 0 && interest!.value >= 0
+    && solvencyBalanceAligned(debt) && solvencyAnnualFlowAligned(operating, interest) && solvencySameEndScope(debt, operating)) {
     let score: number | null = null;
     if (debt!.value === 0 && interest!.value === 0) score = 10;
     else if (interest!.value > 0) { const ratio = operating!.value / interest!.value; score = ratio < 1 ? 0 : ratio < 1.5 ? 2 : ratio < 2 ? 4 : ratio < 4 ? 6 : ratio < 8 ? 8 : 10; }
@@ -711,7 +761,7 @@ export function scoreFinancialStrengthPartial(input: PartialFinancialStrengthAss
   }
   const maturities = input.debtDueWithin24Months;
   if (unitAligned(cash, maturities) && cash!.value >= 0 && maturities!.value >= 0
-    && cash!.source.periodEnd === maturities!.source.periodEnd) {
+    && solvencyBalanceAligned(cash, maturities)) {
     const ratio = maturities!.value === 0 ? Number.POSITIVE_INFINITY : cash!.value / maturities!.value;
     const score = maturities!.value === 0 ? 10 : ratio < 0.5 ? 0 : ratio < 1 ? 3 : ratio < 2 ? 6 : ratio < 3 ? 8 : 10;
     scores.push({ id: 'maturityCoverage', score, weight: 0.3, metrics: [cash!, maturities!], inputs: [
@@ -730,7 +780,7 @@ export function scoreFinancialStrengthPartial(input: PartialFinancialStrengthAss
     score, coveragePct: rounded(coveredWeight * 100, 2),
     rationale: `Source-validated solvency dimensions: ${scores.map(item => `${item.id} ${item.score}/10`).join(', ')}. ${Math.round(coveredWeight * 100)}% of the financial-strength factor is evidenced; unavailable dimensions remain uncovered.`,
     sources, confidence: sources.every(source => source.confidence === 'high') ? 'high' : 'medium', subScores,
-    calculation: { rubricId: 'financial-strength-industrial-partial-v1', inputs: [
+    calculation: { rubricId: 'financial-strength-industrial-partial-v2-aligned', inputs: [
       { name: 'covered-solvency-weight', value: rounded(coveredWeight, 2) },
       ...scores.flatMap(item => [...item.inputs, { name: `${item.id}-weight`, value: item.weight }]),
     ] },

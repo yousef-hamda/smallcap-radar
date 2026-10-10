@@ -1,6 +1,6 @@
 import type { Provenance } from './engine';
 import type { EarningsPeriod, EarningsQualityAssessment, FinancialStrengthAssessment, SourcedValue } from './opportunity-scoring';
-import { REVENUE_TAGS, reportedBorrowings } from './sec';
+import { REVENUE_TAGS, reportedBorrowings,observations,latestInstant,AGGREGATE_BORROWING_TAGS,CURRENT_BORROWING_TAGS,NONCURRENT_BORROWING_TAGS } from './sec';
 import { isOpportunityProvenanceValid } from './opportunity-engine';
 
 type SecRow = { start?: string; end?: string; val?: number; filed?: string; form?: string; accn?: string };
@@ -209,6 +209,7 @@ function toSourcedValue(metric: MetricId, period: PeriodValue, cik: number, retr
       retrievedAt,
       rightsStatus: 'redistribution-permitted',
       currency: period.unit,
+      scope: /ContinuingOperations/.test(period.concept)?'continuing-operations':'consolidated',
       tag: period.tag,
       confidence: 'high',
     },
@@ -219,12 +220,7 @@ const CASH_TAGS = ['CashAndCashEquivalentsAtCarryingValue', 'CashAndCashEquivale
 // IFRS Company Facts coverage uses a different split from US-GAAP. Keep the
 // aliases mutually exclusive at selection time (instantValue chooses one
 // reported concept); never add broad `Borrowings` totals to their components.
-const CURRENT_DEBT_TAGS = [
-  'LongTermDebtCurrent', 'ShortTermBorrowings', 'BorrowingsCurrent',
-  'CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings',
-  'CurrentPortionOfLongtermBorrowings',
-  'CurrentSecuredBankLoansReceivedAndCurrentPortionOfNoncurrentSecuredBankLoansReceived',
-] as const;
+const CURRENT_DEBT_TAGS = CURRENT_BORROWING_TAGS;
 const NONCURRENT_DEBT_TAGS = [
   'LongTermDebtNoncurrent', 'BorrowingsNoncurrent', 'LongtermBorrowings',
   'NoncurrentPortionOfOtherNoncurrentBorrowings',
@@ -283,6 +279,7 @@ function derivedSourcedValue(value: number, unit: string, source: string, tag: s
       availableAt: latest('availableAt'),
       retrievedAt: latest('retrievedAt'),
       currency: unit,
+      scope: new Set(inputs.map(item=>item.source.scope??'consolidated')).size===1?(inputs[0].source.scope??'consolidated'):'mixed-scopes',
       rightsStatus: 'redistribution-permitted',
       tag,
       confidence: 'high',
@@ -310,16 +307,14 @@ export function buildSecFinancialStrengthInputs(
   const missing: string[] = [];
   const cash = instantValue(record, CASH_TAGS, unit, asOf, cik, retrievedAt);
   const currentDebt = instantValue(record, CURRENT_DEBT_TAGS, unit, asOf, cik, retrievedAt);
+  const shortTermDebt=instantValue(record,['ShortTermBorrowings'],unit,asOf,cik,retrievedAt);
   const noncurrentDebt = instantValue(record, NONCURRENT_DEBT_TAGS, unit, asOf, cik, retrievedAt);
   const yearTwoMaturities = instantValue(record, YEAR_TWO_MATURITY_TAGS, unit, asOf, cik, retrievedAt);
   for (const [name, value] of [['unrestricted cash', cash], ['current debt', currentDebt], ['noncurrent debt', noncurrentDebt], ['year-two debt maturities', yearTwoMaturities]] as const) {
     if (!value) missing.push(`${name}: no standard ${unit} Company Facts value`);
   }
   if (cash) metrics.unrestrictedCash = cash;
-  if (currentDebt && noncurrentDebt) {
-    if (currentDebt.source.periodEnd !== noncurrentDebt.source.periodEnd) missing.push('total debt: current and noncurrent balances end on different dates');
-    else metrics.totalDebt = derivedSourcedValue(currentDebt.value + noncurrentDebt.value, unit, 'SEC Company Facts · current + noncurrent debt', `${currentDebt.source.tag} + ${noncurrentDebt.source.tag}`, [currentDebt, noncurrentDebt]);
-  }
+  if(currentDebt&&noncurrentDebt&&currentDebt.source.periodEnd!==noncurrentDebt.source.periodEnd)missing.push('total debt: current and noncurrent balances end on different dates');
   const borrowing = reportedBorrowings(record.facts,asOf,unit);
   if (borrowing) {
     const sources=borrowing.components.map(item=>({ value:item.val, unit,
@@ -328,11 +323,14 @@ export function buildSecFinancialStrengthInputs(
         accession:item.accn,tag:item.tag,confidence:'high' as const } }));
     metrics.totalDebt=derivedSourcedValue(borrowing.val,unit,'SEC reported borrowings',borrowing.method,sources);
     metrics.totalDebt.source.metricScope=borrowing.scope;
-  }
-  if (currentDebt && yearTwoMaturities) {
-    if (currentDebt.source.periodEnd !== yearTwoMaturities.source.periodEnd) missing.push('24-month maturities: current debt and year-two maturity facts end on different dates');
-    else metrics.debtDueWithin24Months = derivedSourcedValue(currentDebt.value + yearTwoMaturities.value, unit, 'SEC Company Facts · current debt + year-two principal maturities', `${currentDebt.source.tag} + ${yearTwoMaturities.source.tag}`, [currentDebt, yearTwoMaturities]);
-  }
+  }else missing.push('total debt: supported aggregate or complete non-overlapping components are unavailable or inconsistent; incomplete components are not a substitute');
+  const broadCurrent=currentDebt&&['BorrowingsCurrent','CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings'].includes(currentDebt.source.tag??'');
+  const currentPrincipal=broadCurrent?currentDebt:currentDebt&&shortTermDebt&&currentDebt.value>=0&&shortTermDebt.value>=0
+    &&currentDebt.source.periodEnd===shortTermDebt.source.periodEnd?derivedSourcedValue(currentDebt.value+shortTermDebt.value,unit,'SEC complete current principal',`${currentDebt.source.tag} + ${shortTermDebt.source.tag}`,[currentDebt,shortTermDebt]):undefined;
+  if (currentPrincipal && yearTwoMaturities) {
+    if (currentPrincipal.source.periodEnd !== yearTwoMaturities.source.periodEnd) missing.push('24-month maturities: current debt and year-two maturity facts end on different dates');
+    else {metrics.debtDueWithin24Months = derivedSourcedValue(currentPrincipal.value + yearTwoMaturities.value, unit, 'SEC Company Facts · complete current debt + year-two principal maturities', `${currentPrincipal.source.tag} + ${yearTwoMaturities.source.tag}`, [currentPrincipal, yearTwoMaturities]);metrics.debtDueWithin24Months.source.metricScope='complete-current-principal-plus-rolling-year-two';}
+  }else if(currentDebt&&yearTwoMaturities)missing.push('24-month maturities: full current principal requires broad current borrowings or disclosed aligned short-term borrowing plus current long-term principal; absent short-term debt is not zero');
 
   const recentQuarters = [...earnings.periods.quarterly].sort((a, b) => a.end.localeCompare(b.end)).slice(-4);
   if (recentQuarters.length !== 4 || !periodsAreContiguous(recentQuarters)) {
@@ -352,10 +350,10 @@ export function buildSecFinancialStrengthInputs(
     }
   }
 
-  const interestSeries = INTEREST_TAGS.map(tag => metricPeriods(collectRows(record, [tag], unit, asOf), [], 'operatingIncome')
-    .filter(period => daysBetween(period.start, period.end) >= 55 && daysBetween(period.start, period.end) <= 120)
-    .sort((a, b) => a.end.localeCompare(b.end)).slice(-4));
-  const recentInterest = interestSeries.find(series => series.length === 4 && periodsAreContiguous(series)) ?? [];
+  const interestSeries = INTEREST_TAGS.map(tag => selectPeriods(metricPeriods(collectRows(record, [tag], unit, asOf), [], 'operatingIncome')
+    .filter(period => daysBetween(period.start, period.end) >= 55 && daysBetween(period.start, period.end) <= 120),false,4,[tag]));
+  const recentInterest = interestSeries.find(series => series.length === 4 && periodsAreContiguous(series)
+    &&recentQuarters.length===4&&series.every((period,index)=>period.start===recentQuarters[index].start&&period.end===recentQuarters[index].end)) ?? [];
   if (recentInterest.length !== 4) {
     missing.push(`TTM interest expense: only ${recentInterest.length}/4 consecutive standalone quarters under a supported standard concept`);
   } else if (recentInterest.some(period => period.value < 0)) missing.push('TTM interest expense: a selected expense fact is negative and requires filing-level interpretation');
@@ -376,6 +374,13 @@ export function buildSecFinancialStrengthInputs(
     'The solvency formula is not suitable for banks, insurers, REITs, utilities, or issuers without a verified operating-company model classification.',
   ];
   const upstreamConflicts = (earnings.conflicts ?? []).filter(conflict => /\b(operatingCashFlow|capitalExpenditure|operatingIncome)\b/.test(conflict));
+  if(!borrowing){
+    const pick=(tags:string[])=>latestInstant(observations(record.facts,tags,unit),asOf);
+    const aggregate=pick(AGGREGATE_BORROWING_TAGS),parts=[pick(CURRENT_BORROWING_TAGS),pick(NONCURRENT_BORROWING_TAGS)].filter(item=>item&&aggregate&&item.end===aggregate.end);
+    if(aggregate&&parts.length&&((aggregate.val<0)||parts.some(item=>item!.val<0||item!.val>aggregate.val+Math.max(.01,Math.abs(aggregate.val)*.01))
+      ||(parts.length===2&&['Borrowings','DebtAndCapitalLeaseObligations'].includes(aggregate.tag??'')&&parts.reduce((sum,item)=>sum+item!.val,0)>aggregate.val+Math.max(.01,Math.abs(aggregate.val)*.01))))
+      upstreamConflicts.push('totalDebt: reported aggregate contradicts contemporaneous components; filing-level reconciliation is required');
+  }
   const ids: FinancialMetricId[] = ['unrestrictedCash', 'totalDebt', 'freeCashFlowTtm', 'operatingIncomeTtm', 'interestExpenseTtm', 'debtDueWithin24Months'];
   if (industryModel !== 'industrial-operating-company') missing.push('industry model: a sourced operating-company classification is required; financial institutions, REITs and other specialized balance sheets need a separate formula');
   const complete = industryModel === 'industrial-operating-company' && upstreamConflicts.length === 0 && ids.every(id => !!metrics[id]) && new Set(balanceDates).size === 1 && unit === 'USD'
@@ -477,8 +482,12 @@ export function buildSecEarningsQualityAssessment(
       });
       const exact = alternatives[0];
       if(alternatives.length>1){
-        const values=alternatives.map(item=>item.value),spread=Math.max(...values)-Math.min(...values),tolerance=Math.max(1,Math.max(...values.map(Math.abs))*1e-6);
-        if(spread>tolerance)conflicts.push(`${label} ${anchor.start}..${anchor.end}: competing ${metric} concepts report different values (${alternatives.map(item=>`${item.concept}=${item.value}`).join(', ')})`);
+        // Total operations and continuing operations are explicitly distinct
+        // scopes, so different reported values do not contradict one another.
+        const scope=(item:PeriodValue)=>/ContinuingOperations/.test(item.concept)?'continuing-operations':'total-operations';
+        const comparable=alternatives.filter(item=>scope(item)===scope(exact));
+        const values=comparable.map(item=>item.value),spread=Math.max(...values)-Math.min(...values),tolerance=Math.max(1,Math.max(...values.map(Math.abs))*1e-6);
+        if(spread>tolerance)conflicts.push(`${label} ${anchor.start}..${anchor.end}: competing ${metric} concepts report different values (${comparable.map(item=>`${item.concept}=${item.value}`).join(', ')})`);
       }
       if (!exact) { missing.push(`${label} ${anchor.start}..${anchor.end}: ${metric}`); continue; }
       period[metric] = toSourcedValue(metric, exact, cik, retrievedAt);

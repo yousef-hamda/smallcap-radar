@@ -8,7 +8,7 @@ import {SEC_FRAME_DATASET_COUNT} from './strategy-spec';
 import {applyFinancingRisk} from './financing-risk';
 
 type FrameFact = { cik: number; entityName?: string; start?: string; end: string; val: number; filed?: string; form?: string; accn?: string; frame?: string };
-type StoredFact = FrameFact & { tag: string; priority: number; url: string; fallback?: boolean; observedAt?:string; kind?: 'frames'|'companyfacts'; components?: StoredFact[]; metricScope?:string };
+type StoredFact = FrameFact & { tag: string; priority: number; url: string; fallback?: boolean; observedAt?:string; kind?: 'frames'|'companyfacts'; components?: StoredFact[]; metricScope?:string;unit?:string;currency?:string;scope?:string };
 export type BulkFundamentals = {
   revenue?: StoredFact;
   netIncome?: StoredFact;
@@ -24,8 +24,9 @@ export type BulkFundamentals = {
   backlog?: StoredFact;
   contractLiabilities?: StoredFact;
   conflicts?: string[];
+  warnings?: string[];
 };
-type FundamentalKey = Exclude<keyof BulkFundamentals, 'conflicts'>;
+type FundamentalKey = Exclude<keyof BulkFundamentals, 'conflicts'|'warnings'>;
 type FrameConfig = { key: FundamentalKey; tag: string; taxonomy?: 'us-gaap' | 'ifrs-full' | 'dei'; unit: string; period: string; priority: number };
 
 const FRAME_BASE = 'https://data.sec.gov/api/xbrl/frames/us-gaap';
@@ -77,7 +78,7 @@ function usableCompanyFact(fact: any, asOf: Date): fact is { start?: string; end
 
 function toStoredFact(fact: any, cik: number, key: FundamentalKey, url: string, priority: number): StoredFact | undefined {
   if (!fact || !Number.isFinite(fact.val) || !fact.end) return undefined;
-  return { cik, start: fact.start, end: fact.end, val: fact.val, filed: fact.filed, form: fact.form, accn: fact.accn, tag: fact.tag || key, priority, url, observedAt: new Date().toISOString(), kind: 'companyfacts' };
+  return { cik, start: fact.start, end: fact.end, val: fact.val, filed: fact.filed, form: fact.form, accn: fact.accn, tag: fact.tag || key, priority, url,unit:fact.unit??(['shares','priorShares'].includes(key)?'shares':'USD'),scope:fact.scope??(/ContinuingOperations/.test(fact.tag??'')?'continuing-operations':'consolidated'), observedAt: new Date().toISOString(), kind: 'companyfacts' };
 }
 
 function latestInstantPair(rows: any[], asOf: Date) {
@@ -134,16 +135,31 @@ export function needsCompanyFacts(facts: BulkFundamentals | undefined) {
   return (['revenue', 'netIncome', 'ocf', 'capex', 'shares', 'priorShares', 'cash'] as const).some((key) => !facts[key]) || (!facts.debtTotal && (!facts.debtCurrent || !facts.debtNoncurrent));
 }
 
-function mergeCompanyFacts(existing: BulkFundamentals | undefined, fallback: BulkFundamentals) {
+/** Same SEC data in Frames and Company Facts is not independent corroboration.
+ * Only comparable observation definitions may generate a contradiction. */
+export function mergeCompanyFacts(existing: BulkFundamentals | undefined, fallback: BulkFundamentals) {
   const merged: BulkFundamentals = { ...(existing || {}) };
   const conflicts = [...(merged.conflicts || [])];
+  const warnings=[...(merged.warnings??[]),...(fallback.warnings??[])];
+  const unit=(fact:StoredFact,key:FundamentalKey)=>fact.unit??fact.currency??(['shares','priorShares'].includes(key)?'shares':'USD');
+  const currency=(fact:StoredFact,key:FundamentalKey)=>fact.currency??(/^[A-Z]{3}$/.test(unit(fact,key))?unit(fact,key):null);
+  const scope=(fact:StoredFact)=>fact.scope??(/ContinuingOperations/.test(fact.tag)?'continuing-operations':'consolidated');
   for (const key of ['revenue', 'netIncome', 'ocf', 'capex', 'shares', 'priorShares', 'cash', 'debtCurrent', 'debtNoncurrent','debtTotal','costOfRevenue','backlog','contractLiabilities'] as const) {
     const candidate = fallback[key], current = merged[key];
     if (!candidate) continue;
-    if (current && current.end === candidate.end && current.val !== candidate.val) conflicts.push(`${key}: ${current.val} (${current.kind || 'frames'}) مقابل ${candidate.val} (Company Facts) في ${candidate.end}`);
+    if (current && current.val !== candidate.val) {
+      const comparable=current.cik===candidate.cik&&current.start===candidate.start&&current.end===candidate.end
+        &&unit(current,key)===unit(candidate,key)&&currency(current,key)===currency(candidate,key)&&scope(current)===scope(candidate)&&current.metricScope===candidate.metricScope;
+      const scale=Math.max(Math.abs(current.val),Math.abs(candidate.val));
+      const difference=scale?Math.abs(current.val-candidate.val)/scale:0;
+      const trace=(fact:StoredFact)=>({value:fact.val,start:fact.start??null,end:fact.end,unit:unit(fact,key),currency:currency(fact,key),scope:scope(fact),metricScope:fact.metricScope??null,cik:fact.cik,tag:fact.tag,kind:fact.kind??'frames',url:fact.url,filed:fact.filed??null,observedAt:fact.observedAt??null,accession:fact.accn??null});
+      warnings.push(`${key}: SEC source comparison ${comparable?difference<=.01?'within 1% rounding/materiality tolerance':'material difference above 1%':'not comparable fiscal period/unit/scope'}; symmetric difference ${(difference*100).toFixed(6)}%; ${JSON.stringify({prior:trace(current),candidate:trace(candidate)})}; repeated SEC facts are not independent verification.`);
+      if(comparable&&difference>.01)conflicts.push(`${key}: ${current.val} (${current.kind || 'frames'}) مقابل ${candidate.val} (Company Facts) في ${candidate.end}; same fiscal window/unit/scope; symmetric difference ${(difference*100).toFixed(6)}% > 1%`);
+    }
     if (!current || newer(candidate, current)) merged[key] = candidate;
   }
   if (conflicts.length) merged.conflicts = [...new Set(conflicts)].slice(0, 12);
+  if(warnings.length)merged.warnings=[...new Set(warnings)].slice(-24);
   return merged;
 }
 
@@ -241,7 +257,7 @@ export async function fetchBulkFundamentals(candidateCiks: number[], asOf = new 
       for (const row of rows) {
         const cik = Number(row.cik);
         if (!allowed.has(cik) || !Number.isFinite(row.val) || !row.end || !Number.isFinite(Date.parse(row.end)) || Date.parse(row.end)>asOf.getTime() || (row.filed&&Date.parse(row.filed+'T23:59:59Z')>asOf.getTime())) continue;
-        const stored: StoredFact = { ...row, tag: config.tag, priority: config.priority, url,observedAt:asOf.toISOString() };
+        const stored: StoredFact = { ...row, tag: config.tag, priority: config.priority, url,unit:config.unit,observedAt:asOf.toISOString() };
         const record: BulkFundamentals = {...fundamentals.get(cik)};
         const current = record[config.key];
         if (newer(stored, current)) {record[config.key] = stored;changed.add(cik);}
@@ -279,6 +295,7 @@ function frameProvenance(fact: StoredFact, retrievedAt: string): Provenance {
   return {
     ...(fact.components ? { dependencies: fact.components.map(item => frameProvenance(item,retrievedAt)) } : {}),
     metricScope: fact.metricScope,
+    scope:fact.scope??(/ContinuingOperations/.test(fact.tag)?'continuing-operations':'consolidated'),
     accession: fact.accn,
     parserVersion: 'sec-normalization-v2',
     rightsStatus: 'redistribution-permitted',
@@ -292,7 +309,7 @@ function frameProvenance(fact: StoredFact, retrievedAt: string): Provenance {
     // available no later than this retrieval, so do not invent an earlier date.
     availableAt: fact.filed ? `${fact.filed}T23:59:59.000Z` : fact.observedAt??(fact.fallback?bundledFrames.generatedAt:retrievedAt),
     retrievedAt:fact.observedAt??(fact.fallback?bundledFrames.generatedAt:retrievedAt),
-    currency: 'USD',
+    currency: fact.currency??(fact.unit&&/^[A-Z]{3}$/.test(fact.unit)?fact.unit:'USD'),
     tag: fact.tag,
     confidence: fact.fallback ? 'low' : fact.kind === 'companyfacts' ? 'high' : 'medium',
   };
@@ -341,6 +358,7 @@ export function preliminarySnapshot(company: Company, facts: BulkFundamentals | 
   if (company.high52w != null) snapshot.provenance.high52w = quote
   if (!facts) { snapshot.dataIssues?.push('لا توجد تغطية SEC Frames أو Company Facts لهذه الشركة في الفترة الجماعية.'); snapshot.dataIssues?.push('وسيط السيولة لـ20 يومًا لا يُستنتج من متوسط 10 أيام؛ يحتاج تاريخًا فعليًا قبل PASS.'); return snapshot }
   if (facts.conflicts?.length) { snapshot.sourceConflicts = [...facts.conflicts]; snapshot.dataIssues?.push('يوجد تعارض موثق بين مصدرين أو قيمتين لنفس الفترة؛ لم يُخفَ التعارض.'); }
+  if(facts.warnings?.length)snapshot.dataIssues?.push(...facts.warnings.map(item=>`[source-comparison] ${item}`));
   snapshot.dataIssues?.push('وسيط السيولة لـ20 يومًا لا يُستنتج من متوسط 10 أيام؛ يحتاج تاريخًا فعليًا قبل PASS.');
 
   const cleanFacts: BulkFundamentals = { conflicts: facts.conflicts };

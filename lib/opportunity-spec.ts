@@ -1,7 +1,7 @@
 /** Single shared contract for the unified opportunity category. */
 export const OPPORTUNITY_SPEC = {
   id: 'UNIFIED_OPPORTUNITY',
-  version: '1.2.6-stable-import-identities',
+  version: '1.3.0-evidence-consistent-opportunity',
   defaultHorizonMonths: 6,
   inventoryPolicy:'complete-official-files-plus-unconfirmed-tracked-listings',
   supportedExchanges:['Nasdaq','NYSE','NYSE American','NYSE Arca','Cboe BZX','IEX','Texas Stock Exchange'],

@@ -1,6 +1,6 @@
 import type { Snapshot, Provenance, Status } from './engine';
 import { proxyOpportunityEvidence } from './opportunity-proxies';
-import { usableEvidence } from './evidence';
+import { usableEvidence, evidenceTimestamp, validEvidenceConversion } from './evidence';
 import { OPPORTUNITY_SPEC, opportunitySpecHash, type OpportunityFactorId, type OpportunityRiskTolerance } from './opportunity-spec';
 import { financialIntegrityFindings, operatingIssuerMetricsApplicable, commonPerShareMetricsApplicable } from './financial-integrity';
 import {buildOpportunityThesis,type OpportunityThesis} from './opportunity-thesis';
@@ -83,34 +83,21 @@ function marketWeekdayAge(availableAt: string, asOf: string) {
   return age;
 }
 
-export function isOpportunityProvenanceValid(provenance: Provenance, asOf: string) {
+export function isOpportunityProvenanceValid(provenance: Provenance, asOf: string): boolean {
+  return validProvenanceTree(provenance, asOf, new Set(), 0);
+}
+
+function validProvenanceTree(provenance: Provenance, asOf: string, ancestors: Set<Provenance>, depth: number): boolean {
   if (!provenance || typeof provenance !== 'object') return false;
+  if (depth > 12 || ancestors.has(provenance)) return false;
+  const lineage = new Set(ancestors).add(provenance);
+  if (provenance.dependencies && (!Array.isArray(provenance.dependencies)
+    || provenance.dependencies.some(source => !validProvenanceTree(source, asOf, lineage, depth + 1)
+      || Date.parse(source.availableAt) > Date.parse(provenance.availableAt)
+      || Date.parse(source.retrievedAt) > Date.parse(provenance.retrievedAt)))) return false;
   let hasAuditableUrl = false;
   try { hasAuditableUrl = !!provenance.url && new URL(provenance.url).protocol === 'https:'; } catch { /* not a canonical source URL */ }
-  const conversion = provenance.conversion;
-  const conversionValid = !conversion || (() => {
-    try {
-      const rateUrl = new URL(conversion.sourceUrl);
-      const directEcbSource = conversion.rateProvider === 'European Central Bank (ECB) Data Portal'
-        && rateUrl.hostname === 'data-api.ecb.europa.eu' && rateUrl.pathname.startsWith('/service/data/EXR/');
-      const frankfurterEcbSource = conversion.rateProvider === 'European Central Bank (ECB) via Frankfurter API'
-        && rateUrl.hostname === 'api.frankfurter.dev' && rateUrl.pathname === '/v2/providers/ecb/rates'
-        && rateUrl.searchParams.get('base') === 'EUR'
-        && (rateUrl.searchParams.get('quotes') ?? '').split(',').includes('USD')
-        && (conversion.sourceCurrency === 'EUR' || (rateUrl.searchParams.get('quotes') ?? '').split(',').includes(conversion.sourceCurrency));
-      return Number.isFinite(conversion.rate) && conversion.rate > 0
-        && /^[A-Z]{3}$/.test(conversion.sourceCurrency) && conversion.targetCurrency === 'USD'
-        && provenance.currency === conversion.targetCurrency
-        && Number.isInteger(conversion.observationCount) && conversion.observationCount >= 0
-        && Number.isFinite(Date.parse(conversion.inputAvailableAt)) && Date.parse(conversion.inputAvailableAt) <= Date.parse(asOf)
-        && Number.isFinite(Date.parse(conversion.inputRetrievedAt)) && Date.parse(conversion.inputRetrievedAt) <= Date.parse(asOf)
-        && Number.isFinite(Date.parse(`${conversion.ratePeriodStart}T00:00:00Z`))
-        && Number.isFinite(Date.parse(`${conversion.ratePeriodEnd}T00:00:00Z`))
-        && conversion.ratePeriodStart <= conversion.ratePeriodEnd
-        && rateUrl.protocol === 'https:' && (directEcbSource || frankfurterEcbSource)
-        && (conversion.method === 'period-average-daily-reference-cross-rate' || conversion.method === 'period-end-prior-daily-reference-cross-rate');
-    } catch { return false; }
-  })();
+  const conversionValid = validEvidenceConversion(provenance, asOf);
   const reusePermitted = provenance.rightsStatus === 'public-domain'
     || provenance.rightsStatus === 'redistribution-permitted'
     || provenance.rightsStatus === 'licensed';
@@ -118,8 +105,8 @@ export function isOpportunityProvenanceValid(provenance: Provenance, asOf: strin
     && hasAuditableUrl
     && conversionValid
     && reusePermitted
-    && Number.isFinite(Date.parse(provenance.retrievedAt))
-    && Date.parse(provenance.retrievedAt) <= Date.parse(asOf);
+    && Number.isFinite(evidenceTimestamp(provenance.retrievedAt))
+    && evidenceTimestamp(provenance.retrievedAt) <= evidenceTimestamp(asOf);
 }
 
 /** Issuer/listing facts can establish identity even when a market-data vendor's
@@ -129,7 +116,7 @@ export function isOpportunityIdentityEvidenceValid(provenance:Provenance,asOf:st
   let auditable=false;
   try{auditable=!!provenance.url&&new URL(provenance.url).protocol==='https:';}catch{/* no canonical URL */}
   return usableEvidence(provenance,asOf)&&auditable
-    &&Number.isFinite(Date.parse(provenance.retrievedAt))
+    &&Number.isFinite(evidenceTimestamp(provenance.retrievedAt))
     &&Date.parse(provenance.retrievedAt)<=Date.parse(asOf);
 }
 
@@ -186,11 +173,15 @@ export function evaluateOpportunity(
   const integrityFindings = financialIntegrityFindings(snapshot);
   if (integrityFindings.length) add('financial-integrity', 'UNKNOWN', integrityFindings.join('; '), 'evidence');
 
-  const models = proxyOpportunityEvidence(snapshot);
+  const models = proxyOpportunityEvidence(snapshot, horizonMonths);
   let evidencedWeight = 0;
   const factors = OPPORTUNITY_SPEC.factors.map(spec => {
-    const candidate = evidence[spec.id];
-    const conflicts = [...(candidate?.conflicts ?? [])];
+    const supplied = evidence[spec.id];
+    const model = models[spec.id]!;
+    // Model scores and coverage are reconstructed from the snapshot. A supplied
+    // proxy cannot replace the fixed component calculation or its source trace.
+    const candidate = supplied?.proxy ? { ...model, rationale: supplied.rationale || model.rationale } : supplied;
+    const conflicts = [...new Set([...(snapshot.sourceConflicts ?? []), ...(supplied?.conflicts ?? [])])];
     const sources = (candidate?.sources ?? []).filter(source => isOpportunityProvenanceValid(source, snapshot.asOf));
     const calculationValid = !!candidate?.calculation?.rubricId?.trim()
       && candidate.calculation.inputs.length > 0
@@ -207,16 +198,15 @@ export function evaluateOpportunity(
       && candidate!.rationale.trim().length > 0
       && calculationValid
       && sources.length > 0
-      && (!proxy || sources.length === (candidate?.sources ?? []).length);
+      && sources.length === (candidate?.sources ?? []).length;
     // A reviewed partial assessment is normalized to the full factor once.
     // Model grades already use their complete fixed component denominator.
-    const model = models[spec.id]!;
     const applicable = snapshot.listingStatus!=='not-confirmed-current' && (spec.id === 'technicalTiming' || (operatingIssuerMetricsApplicable(snapshot)
       && (spec.id !== 'valuation' || commonPerShareMetricsApplicable(snapshot))));
     const useReviewed = applicable && evidenced && !proxy;
     const score = !applicable ? 0 : useReviewed
       ? Math.round(Math.round(candidate!.score! * 100) * Math.round(rawCoverage * 100) / 10000) / 100
-      : Math.round((proxy && conflicts.length === 0 ? candidate!.score! : conflicts.length ? 0 : model.score!) * 100) / 100;
+      : Math.round((conflicts.length ? 0 : model.score!) * 100) / 100;
     const algorithmicCoveragePct = 100;
     const coveragePct = applicable && evidenced ? rawCoverage : 0;
     const points = Math.round(score * 100) * spec.weight / 1000;
@@ -237,8 +227,8 @@ export function evaluateOpportunity(
       // confidence, but it may support medium confidence for a complete rank.
       confidence: applicable && evidenced ? candidate!.confidence ?? 'medium' : 'low',
       rationale: !applicable ? 'Instrument payoff or ADR conversion is unverified; operating-company points are withheld. This listing retains its final numeric grade and ranking.' : useReviewed ? `${candidate!.rationale} Final factor grade includes ${rawCoverage}% reviewed coverage; missing dimensions earn zero.` : conflicts.length ? `Source conflict: ${conflicts.join('; ')}; final factor grade is zero until reconciled.` : proxy ? candidate!.rationale : `${candidate?.rationale ?? ''} ${model.rationale}`,
-      sources,
-      calculation: !applicable ? model.calculation : useReviewed ? { ...candidate!.calculation!, inputs: [...candidate!.calculation!.inputs, { name: 'reviewed-grade', value: candidate!.score! }, { name: 'reviewed-coverage-pct', value: rawCoverage }] } : proxy && calculationValid ? candidate!.calculation : model.calculation,
+      sources: useReviewed ? sources : model.sources,
+      calculation: !applicable ? model.calculation : useReviewed ? { ...candidate!.calculation!, inputs: [...candidate!.calculation!.inputs, { name: 'reviewed-grade', value: candidate!.score! }, { name: 'reviewed-coverage-pct', value: rawCoverage }] } : model.calculation,
       conflicts,
       ...(!useReviewed ? { proxy: true } : {}),
     };
@@ -312,15 +302,19 @@ function evaluationFingerprint(value: unknown) {
 export function isCurrentOpportunityEvaluation(value: unknown): value is OpportunityEvaluation {
   if (!value || typeof value !== 'object') return false;
   const evaluation = value as OpportunityEvaluation;
-  return evaluation.hash === opportunitySpecHash() && !!evaluation.evaluationHash
+  return evaluation.version === OPPORTUNITY_SPEC.version && evaluation.hash === opportunitySpecHash()
+    && typeof evaluation.evaluationHash === 'string' && evaluation.evaluationHash.startsWith(evaluation.hash + ':')
+    && typeof evaluation.snapshotHash === 'string' && evaluation.snapshotHash.startsWith(evaluation.hash + ':')
     && evaluation.state === 'ranked' && evaluation.rankingEligible === true
     && finite(evaluation.score) && evaluation.score >= 0 && evaluation.score <= 100
+    && Math.abs(evaluation.score * 100 - Math.round(evaluation.score * 100)) < 1e-8
     && Array.isArray(evaluation.factors) && evaluation.factors.length === 8
-    && OPPORTUNITY_SPEC.factors.every(spec => {
+    && OPPORTUNITY_SPEC.factors.every((spec, index) => {
       const matches = evaluation.factors.filter(factor => factor.id === spec.id);
       const factor = matches[0];
-      return matches.length === 1 && factor.weight === spec.weight && finite(factor.score)
+      return matches.length === 1 && evaluation.factors[index].id === spec.id && factor.weight === spec.weight && finite(factor.score)
         && factor.score >= 0 && factor.score <= 10 && finite(factor.points)
+        && Math.abs(factor.score * 100 - Math.round(factor.score * 100)) < 1e-8
         && Math.abs(factor.points - Math.round(factor.score * 100) * spec.weight / 1000) < 1e-8
         && !!factor.calculation?.rubricId && factor.calculation.inputs.length > 0;
     }) && Math.abs(evaluation.score - opportunityWeightedScore(evaluation.factors)) < 1e-8;

@@ -1,5 +1,5 @@
 import type { Snapshot } from './engine';
-import { isCurrentOpportunityEvaluation, evaluateOpportunity, type OpportunityEvaluation, type OpportunityEvidence, type OpportunityEvidenceSet } from './opportunity-engine';
+import { isCurrentOpportunityEvaluation, opportunitySnapshotHash, evaluateOpportunity, type OpportunityEvaluation, type OpportunityEvidence, type OpportunityEvidenceSet } from './opportunity-engine';
 import {
   scoreCatalysts,
   scoreDownsideRisk,
@@ -242,7 +242,7 @@ export function evaluateOpportunityDossier(
     };
   }
   const dossierEvidence = scoreOpportunityDossier(dossier, options.horizonMonths);
-  const proxyEvidence = proxyOpportunityEvidence(snapshot);
+  const proxyEvidence = proxyOpportunityEvidence(snapshot, requestedHorizon(options.horizonMonths));
   const evidence = { ...dossierEvidence };
   for (const [factor, candidate] of Object.entries(proxyEvidence) as Array<[OpportunityFactorId, OpportunityEvidence]>) {
     const existing = evidence[factor];
@@ -297,7 +297,8 @@ export function currentOpportunityEvaluation(
   saved: unknown,
   dossier?: OpportunityDossier,
 ): OpportunityEvaluation {
-  if (isCurrentOpportunityEvaluation(saved) && saved.asOf === snapshot.asOf) {
+  if (!dossier && isCurrentOpportunityEvaluation(saved) && saved.asOf === snapshot.asOf
+    && saved.snapshotHash === opportunitySnapshotHash(snapshot)) {
     return saved as OpportunityEvaluation;
   }
   return evaluateOpportunityDossier(snapshot, dossier ?? opportunityDossierFromSnapshot(snapshot));

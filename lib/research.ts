@@ -27,13 +27,39 @@ export function reviewShareSplits(snapshot:Snapshot,events:{date:string;factor:n
 }
 export type OutcomeBar={date:string;close:number};
 export type CompletedSessionQuote={price:number;dailyChange:number;periodEnd:string};
+function dailyDate(value:string):number {
+ if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(value))return NaN;
+ const stamp=Date.parse(`${value}T00:00:00Z`);
+ return Number.isFinite(stamp)&&new Date(stamp).toISOString().slice(0,10)===value?stamp:NaN;
+}
+function disclosureDate(value:string):number {
+ if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))?$/.test(value)||!Number.isFinite(dailyDate(value.slice(0,10))))return NaN;
+ return Date.parse(value);
+}
+/** Conflicting duplicates invalidate a history rather than picking whichever
+ * provider row happened to arrive last. Identical duplicates count once. */
+function cleanHistory<T extends {date:string;close:number;low?:number|null}>(rows:T[],asOf?:string):T[] {
+ const cutoff=asOf===undefined?Infinity:disclosureDate(asOf);
+ if(Number.isNaN(cutoff))return [];
+ const unique=new Map<string,T>();
+ for(const row of rows){
+  const stamp=dailyDate(row.date);
+  // Match the provider's conservative completed-session availability (21:00
+  // UTC). A date-only cutoff cannot see that day's eventual closing price.
+  if(!Number.isFinite(stamp)||![1,2,3,4,5].includes(new Date(stamp).getUTCDay())||!Number.isFinite(row.close)||row.close<=0||stamp+21*60*60_000>cutoff)continue;
+  const prior=unique.get(row.date);
+  if(prior&&(prior.close!==row.close||(prior.low??null)!==(row.low??null)))return [];
+  unique.set(row.date,row);
+ }
+ return [...unique.values()].sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);
+}
 /**
  * Return the last fully observed close and its close-to-close change.
  * Radar cards call this value "last session", so it must never be derived
  * from a live/intraday quote. Providers may return bars in either order.
  */
-export function completedSessionQuote(rows:{date:string;close:number}[]):CompletedSessionQuote|null{
- const valid=rows.filter(row=>typeof row.date==='string'&&Number.isFinite(Date.parse(row.date))&&Number.isFinite(row.close)&&row.close>0).sort((a,b)=>a.date.localeCompare(b.date));
+export function completedSessionQuote(rows:{date:string;close:number}[],asOf?:string):CompletedSessionQuote|null{
+ const valid=cleanHistory(rows,asOf);
  const current=valid.at(-1),previous=valid.at(-2);
  if(!current||!previous||!(previous.close>0))return null;
  return {price:current.close,dailyChange:current.close/previous.close-1,periodEnd:current.date};
@@ -65,14 +91,14 @@ export function simulateForwardReturn(entry:number,entryDate:string,bars:Outcome
  const slip=cost.slippageBps/1e4,paid=entry*(1+slip)*cost.shares+cost.commission,received=exit.close*(1-slip)*cost.shares-cost.commission;
  return {status:'OBSERVED' as const,reason:'horizon_close',targetDate,months,entryDate,exitDate:exit.date,entry,exit:exit.close,lagDays,priceReturnOnly:true,netReturn:received/paid-1,convention:'first observed completed close on or after horizon; price return only; no target or stop'};
 }
-export function pointInTime<T extends {availableAt?:string;periodEnd:string}>(rows:T[],at:string){const cutoff=Date.parse(at);if(!Number.isFinite(cutoff))throw Error('Invalid cutoff');return rows.filter(r=>{const t=r.availableAt?Date.parse(r.availableAt):Date.parse(r.periodEnd)+60*864e5;return Number.isFinite(t)&&t<=cutoff}).map(r=>({...r,availabilityEstimated:!r.availableAt}));}
+export function pointInTime<T extends {availableAt?:string;periodEnd:string}>(rows:T[],at:string){const cutoff=disclosureDate(at);if(!Number.isFinite(cutoff))throw Error('Invalid cutoff');return rows.filter(r=>{const period=disclosureDate(r.periodEnd),t=r.availableAt?disclosureDate(r.availableAt):period+60*864e5;return Number.isFinite(period)&&period<=cutoff&&Number.isFinite(t)&&period<=t&&t<=cutoff}).map(r=>({...r,availabilityEstimated:!r.availableAt}));}
 export function firmHoldout(firmId:string,salt:string){if(!salt)throw Error('Permanent salt required');let n=2166136261;for(const c of `${salt}:${firmId}`){n^=c.charCodeAt(0);n=Math.imul(n,16777619)}const bucket=(n>>>0)%100;return bucket<60?'train':bucket<80?'validation':bucket<90?'locked':'final';}
 export function bonferroni(p:number,experiments:number){if(p<0||p>1||!Number.isInteger(experiments)||experiments<1)throw Error('Invalid experiment');return Math.min(1,p*experiments)}
 export function firmBootstrap(rows:{firm:string;value:number}[],iterations=1000,seed=42){if(!rows.length||iterations<1)throw Error('No observations');const firms=[...new Set(rows.map(r=>r.firm))].sort(),groups=firms.map(f=>rows.filter(r=>r.firm===f).map(r=>r.value));const rand=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296};const estimates=[];for(let i=0;i<iterations;i++){const sample=[];for(let j=0;j<firms.length;j++)sample.push(...groups[Math.floor(rand()*firms.length)]);estimates.push(sample.reduce((a,b)=>a+b,0)/sample.length)}estimates.sort((a,b)=>a-b);return {unit:'firm',firms:firms.length,low:estimates[Math.floor(iterations*.025)],high:estimates[Math.min(iterations-1,Math.floor(iterations*.975))]};}
 export function splitAdjustedDilution(current:number,previous:number,splitFactor:number){return current>0&&previous>0&&splitFactor>0?current/(previous*splitFactor)-1:null;}
-export function ma30Weeks(rows:{date:string;close:number}[],asOf:string){const cutoff=new Date(asOf);const day=cutoff.getUTCDay();const monday=new Date(cutoff);monday.setUTCDate(cutoff.getUTCDate()-((day+6)%7));monday.setUTCHours(0,0,0,0);const weeks=new Map<string,{date:string;close:number}>();for(const r of rows){const d=new Date(r.date+'T00:00:00Z');if(d>=monday||!(r.close>0))continue;d.setUTCDate(d.getUTCDate()-((d.getUTCDay()+6)%7));const key=d.toISOString().slice(0,10);if(!weeks.has(key)||weeks.get(key)!.date<r.date)weeks.set(key,r)}const last=[...weeks.entries()].sort((a,b)=>a[0].localeCompare(b[0])).slice(-30);if(last.length<30)return null;for(let i=1;i<last.length;i++)if(Date.parse(last[i][0])-Date.parse(last[i-1][0])!==7*864e5)return null;return last.reduce((n,[,r])=>n+r.close,0)/30;}
+export function ma30Weeks(rows:{date:string;close:number}[],asOf:string){const cutoff=new Date(asOf);if(!Number.isFinite(cutoff.getTime()))return null;const day=cutoff.getUTCDay();const monday=new Date(cutoff);monday.setUTCDate(cutoff.getUTCDate()-((day+6)%7));monday.setUTCHours(0,0,0,0);const weeks=new Map<string,{date:string;close:number}>();for(const r of cleanHistory(rows,asOf)){const d=new Date(r.date+'T00:00:00Z');if(d>=monday)continue;d.setUTCDate(d.getUTCDate()-((d.getUTCDay()+6)%7));const key=d.toISOString().slice(0,10);if(!weeks.has(key)||weeks.get(key)!.date<r.date)weeks.set(key,r)}const last=[...weeks.entries()].sort((a,b)=>a[0].localeCompare(b[0])).slice(-30);if(last.length<30)return null;for(let i=1;i<last.length;i++)if(Date.parse(last[i][0])-Date.parse(last[i-1][0])!==7*864e5)return null;return last.reduce((n,[,r])=>n+r.close,0)/30;}
 export function opportunityHistoryMetrics(rows:{date:string;close:number;low?:number|null}[],asOf:string){
- const valid=rows.filter((r)=>r.date&&Number.isFinite(r.close)&&r.close>0).sort((a,b)=>a.date.localeCompare(b.date));
+ const valid=cleanHistory(rows,asOf);
  const last=valid.at(-1); if(!last)return {return12m:null,low52w:null,ma30w:null};
  const cutoff=Date.parse(last.date)-365*86_400_000;
  const year=valid.filter((r)=>Date.parse(r.date)>=cutoff);

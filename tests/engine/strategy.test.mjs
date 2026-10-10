@@ -46,7 +46,7 @@ test('Core liquidity and EV/S boundaries',()=>{assert.equal(gate({...base,median
 test('profitability OR and missing data semantics',()=>{assert.equal(gate({...base,netIncome:-1,fcf:1},'profitability'),'PASS');assert.equal(gate({...base,netIncome:null,fcf:-1},'profitability'),'UNKNOWN');assert.equal(gate({...base,netIncome:0,fcf:0},'profitability'),'FAIL');const fcfOnly={...base,netIncome:5,fcf:1,provenance:{...base.provenance,netIncome:undefined}};assert.equal(gate(fcfOnly,'profitability'),'PASS')});
 test('unresolved death spiral never passes without evidence',()=>{assert.equal(gate({...base,deathSpiral:'unknown'},'deathSpiral'),'UNKNOWN');assert.equal(gate({...base,riskEvidence:undefined},'deathSpiral'),'UNKNOWN');assert.equal(gate({...base,deathSpiral:'severe'},'deathSpiral'),'FAIL')});
 test('financing risk review turns complete SEC solvency evidence into a usable Core gate',()=>{
- const p={source:'SEC test',currency:'USD',periodEnd:'2026-06-30',availableAt:'2026-08-01T00:00:00Z',retrievedAt:base.asOf,confidence:'high'};
+ const p={source:'SEC test',url:'https://example.test/financing',currency:'USD',periodEnd:'2026-06-30',availableAt:'2026-08-01T00:00:00Z',retrievedAt:base.asOf,confidence:'high'};
  const reviewed=applyFinancingRisk({...base,cash:20e6,debt:5e6,provenance:{...base.provenance,cash:p,debt:p,revenue:{...p,periodStart:'2025-07-01'},netIncome:{...p,periodStart:'2025-07-01'},fcf:{...p,periodStart:'2025-07-01'}}});
  assert.equal(reviewed.deathSpiral,'clean');assert.match(reviewed.riskEvidence,/لا توجد إشارة/);assert.equal(gate(reviewed,'deathSpiral'),'PASS');
  const distressed=applyFinancingRisk({...reviewed,cash:1e6,debt:10e6,fcf:-2e6,provenance:{...reviewed.provenance,fcf:{...p,periodStart:'2025-07-01'}}});
@@ -92,8 +92,8 @@ test('daily history keeps a valid close but rejects impossible or zero OHLC fiel
  assert.deepEqual(bar,{date:'2026-08-28',close:10,open:undefined,high:undefined,low:undefined,volume:100});
 });
 test('last session is always the same completed close pair',()=>{
- const result=completedSessionQuote([{date:'2026-01-05',close:12},{date:'2026-01-03',close:10},{date:'2026-01-04',close:11}]);
- assert.deepEqual(result,{price:12,dailyChange:12/11-1,periodEnd:'2026-01-05'});
+ const result=completedSessionQuote([{date:'2026-01-07',close:12},{date:'2026-01-05',close:10},{date:'2026-01-06',close:11}]);
+ assert.deepEqual(result,{price:12,dailyChange:12/11-1,periodEnd:'2026-01-07'});
  assert.equal(completedSessionQuote([{date:'2026-01-05',close:12}]),null);
 });
 test('split review is evidence-based, interval-bound and idempotent',()=>{
@@ -160,7 +160,7 @@ test('bulk quote provenance uses the provider market date, not the later scan da
  const s=preliminarySnapshot({cik:1,ticker:'DATE',name:'Date Corp',exchange:'Nasdaq',price:10,marketCap:100e6,quoteSource:'dated test',quoteAvailableAt:'2026-02-27T21:00:00Z'},undefined,'2026-03-01T12:00:00Z');
  assert.equal(s.provenance.price.periodEnd,'2026-02-27');assert.equal(s.provenance.price.retrievedAt,'2026-03-01T12:00:00Z');
 });
-test('IFRS cash and borrowings remain usable for EV/S',()=>{const fact=(val,tag)=>({cik:3,start:'2025-01-01',end:'2025-12-31',val,filed:'2026-02-15',form:'20-F',tag,priority:1,url:'https://data.sec.gov/test'});const s=preliminarySnapshot({cik:3,ticker:'IFRS',name:'Foreign Corp',exchange:'NYSE',price:4,marketCap:100e6,averageVolume10d:100000},{revenue:fact(50e6,'RevenueFromContractWithCustomerExcludingAssessedTax'),netIncome:fact(2e6,'ProfitLoss'),cash:{...fact(10e6,'CashAndCashEquivalents'),end:'2026-06-30',start:undefined},debtCurrent:{...fact(5e6,'BorrowingsCurrent'),end:'2026-06-30',start:undefined},debtNoncurrent:{...fact(20e6,'BorrowingsNoncurrent'),end:'2026-06-30',start:undefined}},'2026-07-01T00:00:00.000Z');assert.equal(s.evSales,2.3);});
+test('IFRS cash and borrowings remain usable for EV/S',()=>{const fact=(val,tag)=>({cik:3,start:'2025-01-01',end:'2025-12-31',val,filed:'2026-02-15',form:'20-F',tag,priority:1,url:'https://data.sec.gov/test'});const s=preliminarySnapshot({cik:3,ticker:'IFRS',name:'Foreign Corp',exchange:'NYSE',price:4,marketCap:100e6,averageVolume10d:100000},{revenue:fact(50e6,'RevenueFromContractWithCustomerExcludingAssessedTax'),netIncome:fact(2e6,'ProfitLoss'),cash:{...fact(10e6,'CashAndCashEquivalents'),end:'2026-06-30',filed:'2026-06-30',start:undefined},debtCurrent:{...fact(5e6,'BorrowingsCurrent'),end:'2026-06-30',filed:'2026-06-30',start:undefined},debtNoncurrent:{...fact(20e6,'BorrowingsNoncurrent'),end:'2026-06-30',filed:'2026-06-30',start:undefined}},'2026-07-01T00:00:00.000Z');assert.equal(s.evSales,2.3);});
 test('bulk snapshot never treats missing SEC coverage as zero',()=>{const s=preliminarySnapshot({cik:2,ticker:'MISS',name:'Missing Corp',exchange:'NYSE',price:5,marketCap:50e6},undefined,'2026-03-01T00:00:00.000Z');assert.equal(s.revenue,undefined);assert.equal(evaluateStrategy('core',s).status,'UNKNOWN');assert.match(s.dataIssues[0],/لا توجد تغطية/)});
 test('Yahoo percentage points are normalized exactly once',()=>{assert.equal(yahooPercentAsRatio(25.4),.254);assert(Math.abs(yahooPercentAsRatio(-93.6)+.936)<1e-12);assert.equal(yahooPercentAsRatio(null),undefined)});
 test('Yahoo share-class symbols use the provider punctuation convention',()=>{assert.equal(yahooSymbol('brk.b'),'BRK-B');assert.equal(yahooSymbol('ACME'),'ACME')});
@@ -198,7 +198,7 @@ test('missing or future score inputs receive no points or score coverage',()=>{
  const partial=evaluateStrategy('core',{...base,fcf:null});assert.equal(partial.factors.find(f=>f.id==='quality').availableWeight,SPECS.core.weights.Quality/2);assert.equal(partial.scoreCoverage,77-SPECS.core.weights.Quality/2);
 });
 test('derived evidence uses the latest dependency and refuses future dependencies',()=>{
- const a={...base.provenance.revenue,availableAt:'2026-01-01'},b={...a,availableAt:'2026-08-31'};
+ const a={...base.provenance.revenue,periodEnd:'2025-12-31',availableAt:'2026-01-01'},b={...a,availableAt:'2026-08-31'};
  assert.equal(derivedEvidence('test',[a,b],base.asOf,'formula').availableAt,b.availableAt);
  assert.equal(derivedEvidence('test',[a,{...b,availableAt:'2028-01-01'}],base.asOf,'formula'),undefined);
 });
@@ -471,27 +471,29 @@ test('fair-value rubric caps or withholds scores for unresolved inputs, unsuitab
  assert.equal(scoreFairValue(fairValueInput({methods:[fairMethod('normalized-dcf',16,true),{...fairMethod('peer-multiples',15),assumptions:[...fairMethod('peer-multiples',15).assumptions,{name:'equity value',value:9,unit:'EUR',source:opportunityProvenance}]}]})).score,null,'ambiguous duplicate calculation assumptions cannot be used');
  assert.match(scoreFairValue(fairValueInput({optimisticValue:{value:14,unit:'USD/share',source:opportunityProvenance}})).rationale,/not ordered/);
 });
-const financialInput=(overrides={})=>({industryModel:'industrial-operating-company',asOf:opportunityAsOf,unrestrictedCash:{value:1_000_000_000,unit:'USD',source:opportunityProvenance},totalDebt:{value:200_000_000,unit:'USD',source:opportunityProvenance},freeCashFlowTtm:{value:120_000_000,unit:'USD',source:opportunityProvenance},operatingIncomeTtm:{value:160_000_000,unit:'USD',source:opportunityProvenance},interestExpenseTtm:{value:20_000_000,unit:'USD',source:opportunityProvenance},debtDueWithin24Months:{value:50_000_000,unit:'USD',source:opportunityProvenance},...overrides});
+const instantFinancialEvidence={...opportunityProvenance,periodStart:undefined};
+const annualFinancialEvidence={...opportunityProvenance,periodStart:'2025-07-01'};
+const financialInput=(overrides={})=>({industryModel:'industrial-operating-company',asOf:opportunityAsOf,unrestrictedCash:{value:1_000_000_000,unit:'USD',source:instantFinancialEvidence},totalDebt:{value:200_000_000,unit:'USD',source:instantFinancialEvidence},freeCashFlowTtm:{value:120_000_000,unit:'USD',source:annualFinancialEvidence},operatingIncomeTtm:{value:160_000_000,unit:'USD',source:annualFinancialEvidence},interestExpenseTtm:{value:20_000_000,unit:'USD',source:annualFinancialEvidence},debtDueWithin24Months:{value:50_000_000,unit:'USD',source:instantFinancialEvidence},...overrides});
 test('industrial financial-strength rubric calculates sourced cash runway, interest and maturity coverage',()=>{
  const result=scoreFinancialStrength(financialInput());
  assert.equal(result.score,10);assert.deepEqual(result.subScores,{cashRunway:10,interestCoverage:10,maturityCoverage:10});
- assert.equal(result.calculation.rubricId,'financial-strength-industrial-v1');assert.equal(result.sources.length,6);
+ assert.equal(result.calculation.rubricId,'financial-strength-industrial-v2-aligned');assert.equal(result.sources.length,6);
 });
 test('industrial financial-strength rubric scores stressed solvency conservatively and treats zero debt explicitly',()=>{
- const weak=financialInput({unrestrictedCash:{value:90_000_000,unit:'USD',source:opportunityProvenance},totalDebt:{value:500_000_000,unit:'USD',source:opportunityProvenance},freeCashFlowTtm:{value:-120_000_000,unit:'USD',source:opportunityProvenance},operatingIncomeTtm:{value:10_000_000,unit:'USD',source:opportunityProvenance},interestExpenseTtm:{value:20_000_000,unit:'USD',source:opportunityProvenance},debtDueWithin24Months:{value:180_000_000,unit:'USD',source:opportunityProvenance}});
+ const weak=financialInput({unrestrictedCash:{value:90_000_000,unit:'USD',source:instantFinancialEvidence},totalDebt:{value:500_000_000,unit:'USD',source:instantFinancialEvidence},freeCashFlowTtm:{value:-120_000_000,unit:'USD',source:annualFinancialEvidence},operatingIncomeTtm:{value:10_000_000,unit:'USD',source:annualFinancialEvidence},interestExpenseTtm:{value:20_000_000,unit:'USD',source:annualFinancialEvidence},debtDueWithin24Months:{value:180_000_000,unit:'USD',source:instantFinancialEvidence}});
  const weakResult=scoreFinancialStrength(weak);assert.deepEqual(weakResult.subScores,{cashRunway:3,interestCoverage:0,maturityCoverage:3});assert.equal(weakResult.score,2.1);
- const noDebt=scoreFinancialStrength(financialInput({totalDebt:{value:0,unit:'USD',source:opportunityProvenance},interestExpenseTtm:{value:0,unit:'USD',source:opportunityProvenance},debtDueWithin24Months:{value:0,unit:'USD',source:opportunityProvenance}}));assert.equal(noDebt.subScores.interestCoverage,10);assert.equal(noDebt.subScores.maturityCoverage,10);
+ const noDebt=scoreFinancialStrength(financialInput({totalDebt:{value:0,unit:'USD',source:instantFinancialEvidence},interestExpenseTtm:{value:0,unit:'USD',source:annualFinancialEvidence},debtDueWithin24Months:{value:0,unit:'USD',source:instantFinancialEvidence}}));assert.equal(noDebt.subScores.interestCoverage,10);assert.equal(noDebt.subScores.maturityCoverage,10);
 });
 test('financial-strength rubric returns unscored for unsupported industry, stale, missing or conflicting units',()=>{
  assert.equal(scoreFinancialStrength(financialInput({industryModel:'bank-capital'})).score,null);
  assert.equal(scoreFinancialStrength(financialInput({interestExpenseTtm:undefined})).score,null);
- assert.equal(scoreFinancialStrength(financialInput({totalDebt:{value:200_000_000,unit:'EUR',source:opportunityProvenance}})).conflicts.length,1);
+ assert.equal(scoreFinancialStrength(financialInput({totalDebt:{value:200_000_000,unit:'EUR',source:instantFinancialEvidence}})).conflicts.length,1);
  const stale={...opportunityProvenance,periodEnd:'2025-01-01'};
  assert.equal(scoreFinancialStrength(financialInput({unrestrictedCash:{value:1_000_000_000,unit:'USD',source:stale}})).score,null);
 });
-const catalystInput=(overrides={})=>({asOf:opportunityAsOf,horizonMonths:6,searchCompleted:true,searchSources:[opportunityProvenance],events:[{id:'contract-1',title:'Executed multi-year customer order',classification:'binding-contract',announcedAt:'2026-08-01T00:00:00Z',expectedAt:'2026-11-01T00:00:00Z',source:opportunityProvenance,impactAsPctTtmRevenue:{value:.2,unit:'percent-of-ttm-revenue',source:opportunityProvenance},conditions:[],progressVerified:true,marketPricing:'not-priced'}],...overrides});
+const catalystInput=(overrides={})=>({asOf:opportunityAsOf,horizonMonths:6,searchCompleted:true,searchSources:[opportunityProvenance],events:[{id:'contract-1',title:'Executed multi-year customer order',classification:'binding-contract',announcedAt:'2026-08-01T00:00:00Z',expectedAt:'2026-11-01T00:00:00Z',source:opportunityProvenance,impactAsPctTtmRevenue:{value:20,unit:'percent-of-ttm-revenue',source:opportunityProvenance},conditions:[],progressVerified:true,marketPricing:'not-priced'}],...overrides});
 test('catalyst rubric scores sourced binding events and preserves status, materiality, timing and pricing trace',()=>{
- const result=scoreCatalysts(catalystInput());assert.equal(result.score,7.8);assert.equal(result.eventScores.length,1);assert.equal(result.confidence,'high');assert.equal(result.calculation.rubricId,'catalysts-v1');assert.ok(result.sources.length>=2);
+ const result=scoreCatalysts(catalystInput());assert.equal(result.score,7.8);assert.equal(result.eventScores.length,1);assert.equal(result.confidence,'high');assert.equal(result.calculation.rubricId,'catalysts-v2-explicit-units');assert.ok(result.sources.length>=2);
  const evidence=opportunityEvidence();evidence.catalysts=result;const evaluated=evaluateOpportunity(opportunitySnapshot,evidence);assert.equal(evaluated.factors.find(factor=>factor.id==='catalysts').score,7.8);
 });
 test('catalyst rubric distinguishes a documented empty search from missing search and handles nonbinding and priced events conservatively',()=>{
@@ -590,7 +592,7 @@ test('technical research builds completed multi-timeframe bars and preserves the
  while(cursor.toISOString().slice(0,10)<='2026-09-29'){if(![0,6].includes(cursor.getUTCDay()))dates.push(cursor.toISOString().slice(0,10));cursor.setUTCDate(cursor.getUTCDate()+1)}
  const history=dates.map((date,index)=>({date,close:50*(1.001)**index,volume:100_000}));
  const benchmarkHistory=dates.map((date,index)=>({date,close:100*(1.0003)**index,volume:1_000_000}));
- const source=(periodEnd,rightsStatus='unknown')=>({...freshMarketEvidence,source:'Market history fixture',url:'https://market.example/history',periodEnd,availableAt:`${periodEnd}T21:00:00.000Z`,retrievedAt:'2026-09-30T22:00:00.000Z',rightsStatus});
+ const source=(periodEnd,rightsStatus='unknown')=>({...freshMarketEvidence,source:'Market history fixture',url:'https://market.example/history',periodStart:dates[0],periodEnd,availableAt:`${periodEnd}T21:00:00.000Z`,retrievedAt:'2026-09-30T22:00:00.000Z',rightsStatus});
  const args={history,benchmarkHistory,historySource:source(dates.at(-1)),benchmarkSource:source(dates.at(-1)),splitAdjusted:true,asOf};
  const restricted=buildTechnicalTimingResearch(args);
  assert.equal(restricted.providerStatus,'retrieved');assert.ok(restricted.dailyBars>=200);assert.ok(restricted.weeklyBars>=30);assert.ok(restricted.monthlyBars>=12);assert.ok(restricted.benchmarkBars>=64);
@@ -759,7 +761,7 @@ test('conflicts hold affected evidence for review without fabricating points',()
  const result=evaluateOpportunity(opportunitySnapshot,evidence);
  assert.equal(result.researchState,'needs-research');assert.equal(result.factors.find(factor=>factor.id==='valuation').score,0);
  const conflicted=evaluateOpportunity({...opportunitySnapshot,sourceConflicts:['market cap conflict']},opportunityEvidence());
- assert.equal(conflicted.researchState,'needs-research');assert.equal(conflicted.coveragePct,100);assert.equal(conflicted.score,100,'retained evidence remains visible even while the final ranking is held');
+ assert.equal(conflicted.researchState,'needs-research');assert.equal(conflicted.coveragePct,0);assert.equal(conflicted.score,0,'unresolved snapshot contradictions cannot earn reviewed or model credit');
 });
 test('risk tolerance and investment horizon are report context, not score-weight changes',()=>{
  const evidence=opportunityEvidence();
@@ -786,7 +788,8 @@ test('stale scan-report scores are rebuilt from the saved dossier instead of dro
  const recalculated=currentOpportunityEvaluation(snapshot,stale,dossier);
  const expected=evaluateOpportunityDossier(snapshot,dossier);
  assert.equal(recalculated.state,'ranked');assert.equal(recalculated.score,expected.score);assert.ok(recalculated.score>0);assert.equal(recalculated.coveragePct,100);
- assert.equal(currentOpportunityEvaluation(snapshot,recalculated,dossier),recalculated,'current-rubric stored evaluations are reused');
+ assert.deepEqual(currentOpportunityEvaluation(snapshot,recalculated,dossier),recalculated,'an explicit unchanged dossier is reassessed reproducibly');
+ assert.equal(currentOpportunityEvaluation(snapshot,recalculated),recalculated,'matching current-rubric stored evaluations without a replacement dossier are reused');
 });
 test('dossier evaluation always produces a complete algorithmic 100-point grade',()=>{
  const evaluation=evaluateOpportunityDossier(opportunitySnapshot,{asOf:opportunitySnapshot.asOf});
@@ -835,7 +838,7 @@ test('SEC financial-strength adapter derives only aligned debt, maturity, intere
  const instant=(val)=>({end:'2026-06-30',filed:'2026-08-01',form:'10-Q',accn:'0000000000-26-000001',val});
  const duration=(end,start,val,index)=>({start,end,val,filed:'2026-08-01',form:'10-Q',accn:`0000000000-26-00000${index+1}`});
  const payload={cik,facts:{'us-gaap':{
-  CashAndCashEquivalentsAtCarryingValue:{units:{USD:[instant(500)]}},LongTermDebtCurrent:{units:{USD:[instant(100)]}},LongTermDebtNoncurrent:{units:{USD:[instant(300)]}},LongTermDebtMaturitiesRepaymentsOfPrincipalInYearTwo:{units:{USD:[instant(80)]}},
+  CashAndCashEquivalentsAtCarryingValue:{units:{USD:[instant(500)]}},ShortTermBorrowings:{units:{USD:[instant(0)]}},LongTermDebtCurrent:{units:{USD:[instant(100)]}},LongTermDebtNoncurrent:{units:{USD:[instant(300)]}},LongTermDebtMaturitiesRepaymentsOfPrincipalInYearTwo:{units:{USD:[instant(80)]}},
   InterestExpenseNonoperating:{units:{USD:ends.map((end,index)=>duration(end,starts[index],12,index))}},
  }}};
  const result=buildSecFinancialStrengthInputs(cik,payload,asOf,'2026-09-30T11:00:00.000Z',earnings,'industrial-operating-company');
@@ -1058,6 +1061,7 @@ test('IFRS financial-strength recognizes the separate current-borrowings concept
  const duration=(tag,val,start,end,index)=>({start,end,val,filed:'2026-08-15',form:'6-K',accn:`ifrs-issuer-${index}`,tag});
  const concepts={
   CashAndCashEquivalents:{USD:[instant('CashAndCashEquivalents',700)]},
+  ShortTermBorrowings:{USD:[instant('ShortTermBorrowings',0)]},
   CurrentPortionOfLongtermBorrowings:{USD:[instant('CurrentPortionOfLongtermBorrowings',120)]},
   LongtermBorrowings:{USD:[instant('LongtermBorrowings',280)]},
   LongTermDebtMaturitiesRepaymentsOfPrincipalInYearTwo:{USD:[instant('LongTermDebtMaturitiesRepaymentsOfPrincipalInYearTwo',40)]},
@@ -1065,7 +1069,7 @@ test('IFRS financial-strength recognizes the separate current-borrowings concept
   FinanceCosts:{USD:ends.map((end,index)=>duration('FinanceCosts',10,starts[index],end,index))},
  };
  const payload={cik,facts:{'ifrs-full':Object.fromEntries(Object.entries(concepts).map(([tag,units])=>[tag,{units}]))}};
- const result=buildSecFinancialStrengthInputs(cik,payload,asOf,retrievedAt,{coverage:{selectedUnit:'USD'},periods:{quarterly:[]}},'industrial-operating-company');
+ const result=buildSecFinancialStrengthInputs(cik,payload,asOf,retrievedAt,{coverage:{selectedUnit:'USD'},periods:{quarterly:ends.map((end,index)=>({start:starts[index],end,metrics:Object.fromEntries(['operatingCashFlow','capitalExpenditure','operatingIncome'].map(id=>[id,{value:10,unit:'USD',source:{...opportunityProvenance,periodStart:starts[index],periodEnd:end}}]))}))}},'industrial-operating-company');
  assert.equal(result.metrics.totalDebt.value,400);
  assert.match(result.metrics.totalDebt.source.tag,/CurrentPortionOfLongtermBorrowings/);
  assert.equal(result.metrics.interestExpenseTtm.value,8);
@@ -1215,7 +1219,7 @@ test('valuation uses fresh market availability with fiscal-period ratio provenan
 });
 test('growth model derives comparable observed revenue growth with source values and blocks source conflicts',()=>{
  const asOf='2026-10-03T12:00:00Z';
- const period=(end,value)=>({metrics:{revenue:{value,unit:'USD',source:{...opportunityProvenance,periodEnd:end,availableAt:'2026-08-01T00:00:00Z',retrievedAt:asOf}}}});
+ const period=(end,value)=>{const start=end.slice(0,4)+'-01-01';return {start,end,metrics:{revenue:{value,unit:'USD',source:{...opportunityProvenance,periodStart:start,periodEnd:end,availableAt:'2026-08-01T00:00:00Z',retrievedAt:asOf}}}};};
  const snapshot={symbol:'GROWTH',securityType:'common',name:'Observed growth fixture',asOf,provenance:{},opportunityResearch:{earnings:{annual:[period('2024-12-31',100),period('2025-12-31',140)],quarterly:[],conflicts:[]}}};
  const result=evaluateOpportunity(snapshot),factor=result.factors.find(item=>item.id==='catalysts');assert.ok(factor.score>0);assert.equal(factor.calculation.inputs.find(input=>input.name==='derived-observed-revenue-growth').value,140/100-1);
  const conflicted={...snapshot,opportunityResearch:{earnings:{...snapshot.opportunityResearch.earnings,conflicts:['revenue concepts disagree']}}};assert.equal(evaluateOpportunity(conflicted).factors.find(item=>item.id==='catalysts').score,0);

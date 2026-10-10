@@ -1,22 +1,97 @@
-# Verified production release — October 7, 2026
+# Project memory — Small-Cap Radar
 
-Deployment `7a9f861a-4b77-41aa-a09f-dbc4f9fcbf2e` is SUCCESS. Application archive: `6c452e5545b4c78ea25f09374794219f45f81afd`; rubric `1.2.6-stable-import-identities` / `d21f9710`; exact-archive CI `37568804637` PASS. Subsequent documentation commits record this deployed application and do not change its runtime.
+## Product objective and evidence status
 
-Complete mathematical ranking acceptance passes: **7,506 saved, API, report, profile, export and rendered ranking records; 60,048 numeric factor grades; zero missing factors, final grades, stable hashes or rank positions.** All 7,506 are sorted by the actual saved final grade, including 985 zero grades. Independent live official inventory has 7,494 listings; all 6,954 originally tracked listings are retained, with 12 explicitly unconfirmed listings receiving zero credit. No scan is required to finish basic scoring.
+One Opportunity category ranks the complete stock universe. The intended research outcome is low current price versus defensible value plus funded, evidenced catalysts for substantial upside. The six-month/at-least-50% upside horizon is a planning assumption. Technical notes are English and the interface is Arabic. Current mathematical scoring is complete; investment-success validation and comprehensive research coverage remain incomplete.
 
-Fixed weights remain 25/20/15/12/10/10/5/3. Missing factual components earn zero without reweighting. Source eligibility, safety and research findings remain separate from `state=ranked`; their 6,041 needs-research / 1,465 excluded diagnostics do not filter the ranking. Strict imports preserve official names and SEC identifiers; canonical nested object-key hashing preserves imported/raw evaluation identity. The saved release is `ca402eb1-9ba3-424d-a153-ce827c0498db:ratings-v5`, revision 22,518, hash `d21f9710`.
+Read [handoff](../HANDOFF.md), [operations memory](OPERATIONS_MEMORY.md), [final audit](SYSTEM_IMPROVEMENT_FINAL_AUDIT_2026_10_07.md), [public proof](SYSTEM_IMPROVEMENT_PRODUCTION_VERIFICATION_2026_10_07.json), [model contract](COMPLETE_RANKING_MODEL_2026_10_06.md), [test ledger](SYSTEM_IMPROVEMENT_TEST_LEDGER_2026_10_07.md) and [campaign file manifest](SYSTEM_IMPROVEMENT_CHANGED_FILES_2026_10_07.md). Older design/zero-ranking notes below are historical.
 
-The full-volume outage on the superseded 1.2.5 deployment was recovered before acceptance. All 117,756 saved source/evaluation records and private values passed exact preservation checks; all 102,744 live archives passed restoration, identity and factor parity. The compacted database is 3,040,825,344 bytes; physical headroom was 1,779,519,488 bytes at installation. Every scanner path pauses without changing checkpoints on missing/stale capacity or below 256 MiB physical free space; new scans require 512 MiB. Re-fetchable SEC response cache is capped at 64 MiB, and only the latest published full run remains inline. Detailed history is restored losslessly from archive summary version 2.
+## October 9 algorithm candidate
 
-Final checks: engine 196/196, runtime/API 91/91, verified build/root/UI 57/57, research 9/9, SQLite 4/4, typecheck and lint PASS. Full-universe persistence/API/component arithmetic/replay/strict import/export/rendering, mobile reload/pagination, positive and zero profiles, reports, background refresh and cached-subset offline checks PASS. Suite counts overlap and must not be summed as unique tests.
+The [improvement plan](ALGORITHM_IMPROVEMENT_PLAN_2026_10_08.md), [implementation report](ALGORITHM_IMPROVEMENT_REPORT_2026_10_08.md), [all-universe comparison](ALGORITHM_COMPARISON_2026_10_08.json) and [validation evidence](ALGORITHM_VALIDATION_2026_10_08.json) record the new local rubric `1.3.0-evidence-consistent-opportunity` / `6ccccbc7`. All eight main weights remain 25/20/15/12/10/10/5/3; component weights also remain fixed. The candidate requires coherent source dates, periods, scope, currency and reviewed provenance, independently checks adverse financing signals, handles explicit catalyst units/materiality, removes issuer-label-sensitive peer ties and rejects invalid outcome histories. The frozen 7,506-listing replay kept all 60,048 factor grades and changed 1,310 factor sets. A streaming replay also preserved all 7,506 strict-import source records exactly; the HTTP-export-to-JSONL converter reproduced all 7,506 payloads, evaluations and ranks. Local tests passed, including 255 engine, 91 runtime, 67 root/build, 19 research and 4 SQLite checks. This establishes scoring/data integrity on the frozen inputs; no realized return improvement or success probability has been demonstrated. The historical predictive gate is BLOCKED with zero usable observations and probability null.
 
-Native acquisition continues independently of complete grades: at 04:02:36 UTC the root scan was at stage 11, issuer offset 3,304/5,929, with 9,064 SEC successes, 333 recorded SEC failures and 481 historical-bar failures. It advanced after restart with browser resume blocked. Factual gaps, reviewed catalyst/governance/risk diligence, specialized/fully diluted valuation, market-data use rights and point-in-time outcome calibration remain unresolved. Buying-success probabilities and six-month price targets remain null/unvalidated. **The broader predictive research objective is not certified complete.**
+This candidate has not passed source delivery or direct live adoption checks. The local `.git` directory rejects writes, and connected GitHub app writes require approval that this session cannot grant. A verified local patch and Git bundle are preserved under ignored `.verification/`. The last verified production rubric and deployment remain the dated 1.2.6 records below until Railway deployment, saved-row repair and browser/API acceptance are verified.
 
-Read the [final audit](SYSTEM_IMPROVEMENT_FINAL_AUDIT_2026_10_07.md), [machine-readable proof](SYSTEM_IMPROVEMENT_PRODUCTION_VERIFICATION_2026_10_07.json), [test ledger](SYSTEM_IMPROVEMENT_TEST_LEDGER_2026_10_07.md) and [changed-file manifest](SYSTEM_IMPROVEMENT_CHANGED_FILES_2026_10_07.md).
+## Last verified release and repository state
 
-Earlier dated entries below are historical and superseded where they conflict with this verified release.
+Documentation updated **2026-10-08**. Production evidence below was collected on **2026-10-07**, with the final direct recheck at `2026-10-07T04:22:25.089Z`; this documentation update does not constitute a new live verification.
 
----
+| Identity | Recorded value |
+|---|---|
+| Production deployment | `7a9f861a-4b77-41aa-a09f-dbc4f9fcbf2e` — SUCCESS at last check |
+| Deployed application commit | `6c452e5545b4c78ea25f09374794219f45f81afd` |
+| Rubric / hash | `1.2.6-stable-import-identities` / `d21f9710` |
+| Canonical saved run | `ca402eb1-9ba3-424d-a153-ce827c0498db:ratings-v5` |
+| Materialized revision | 22,518 |
+| Release token | `ca402eb1-9ba3-424d-a153-ce827c0498db:ratings-v5:22518:d21f9710` |
+| Final audit/documentation commit | `3b17bb88655f8bb97dd183cbf346b89fddc39017` — pushed to `origin/master` at the previous completed handoff |
+| Application CI | `37568804637` — PASS |
+| Final audit/documentation CI | `37571210269` — PASS |
+
+The audit commit follows the deployed application archive. It records the verified runtime; it is not a separate application deployment. The old acquisition hash in terminal run metadata is historical; current evaluations, rank manifests and API/UI release tokens use `d21f9710`.
+
+## Verified result and limits
+
+All **7,506** production listings have saved evaluations, eight numeric factor grades (**60,048** total), one final 0–100 grade, a stable hash and a deterministic rank. Missing factors, final grades, hashes and ranks: **zero**. All records agree across persistence, radar, scan reports, company profiles, complete HTTP export and real browser ranking rows. There are **6,521 positive** and **985 zero** grades, all displayed and sorted. Basic scoring is complete without starting or finishing another scan.
+
+Independent current official inventory contained **7,494** non-ETF/non-test listings; all original **6,954** tracked stocks were retained. The additional **12** unconfirmed listings retain explicit uncertainty and zero credit. All nine security types are graded. Actual primary summary counters are ranked 7,506 / needs-research 0 / excluded 0. Secondary source-review findings of 6,041 needs-research / 1,465 excluded remain evidence/safety diagnostics and never remove records from ranking.
+
+Final release checks passed: engine **196/196**, runtime/API **91/91**, verified build/root/UI **57/57**, research **9/9**, SQLite **4/4**, typecheck, lint, verifier syntax and whitespace. Both recorded CI runs passed. Suite counts overlap. Exhaustive API/export/replay/import/arithmetic/rendering checks, mobile 390×844 reload/pagination, positive and zero profiles, report pagination and background-refresh retention passed. Offline proof covers an explicit **40-row cached subset**, not the entire universe.
+
+**Complete mathematical ranking is verified; comprehensive factual research and validated high-probability buying outcomes are not complete.** Missing facts earn no component credit. Buying-success probabilities and six-month price targets remain null/unvalidated. No model grade establishes reviewed catalysts, governance, a moat, trading safety or a guaranteed return.
+
+## Final fixed scoring contract
+
+| Factor ID | Investment dimension | Weight |
+|---|---|---:|
+| `valuation` | Price attractiveness versus fair value | 25% |
+| `catalysts` | Growth catalysts within the target period | 20% |
+| `financialStrength` | Financial strength and liquidity | 15% |
+| `earningsQuality` | Earnings and cash-flow quality | 12% |
+| `competitivePosition` | Competitive position and business quality | 10% |
+| `downsideRisk` | Downside risks and investor protection | 10% |
+| `management` | Management, governance and alignment | 5% |
+| `technicalTiming` | Chart and entry timing | 3% |
+
+Each grade is numeric 0–10 to two decimals. Exact final arithmetic is `Math.round(sum(Math.round(grade * 100) * weight) / 10) / 100`. Contributions retain three decimals; final score displays two. Weight total is 100%. Grades are never issuer-specific or reweighted to compensate for missing facts. Sort final grade descending, then symbol ascending under SQLite BINARY ordering; displayed grade and sorting grade are identical.
+
+Valid reviewed dossier calculations take precedence; deterministic model components provide complete remaining factor grades. Missing/unsupported/conflicting component evidence earns zero without fabricated facts. Observed/model/reviewed inputs stay distinguishable in saved traces. Source/evidence/safety/research state cannot hide a listing, null a mathematical grade or label the final sorting grade a temporary placeholder.
+
+## Current models and financial integrity
+
+- Normalize only compatible currency, periods, scope and issuer inputs. Debt totals replace overlapping components; missing debt is not zero debt. Contract liabilities are not interchangeable with backlog/RPO. Current pricing rebuilds valuation ratios from compatible financial inputs and current sourced capitalization. Stale clean financing findings cannot survive an incomplete recomputation.
+- Fixed valuation components are intrinsic sensitivities 60%, sales multiple 25%, FCF yield 15%. Owner cash flow subtracts capex and SBC from OCF. Intrinsic models require three compatible consecutive USD years, supported industrial classification, reviewed splits and one common class. Fixed five-year bear/base/bull assumptions use the lower normalized-earnings cross-check. These are conditional model outputs, not six-month targets or comprehensive diluted/senior-claim valuations.
+- Peer context requires distinct CIKs, identical SEC SIC, USD annual observations, fiscal ends within 45 days, revenue within 0.25–4×, at least five and at most twenty peers selected by revenue distance. Sources and percentile traces are persisted; a SIC peer set does not establish direct competitors or a moat.
+- Original bounded 8-K/Form 4 documents preserve compressed bytes, SHA-256 and parser identity. Unreviewed event economics receive zero impact credit. Form 4 issuer, transaction/security, dates, monetary amounts and amendments are checked conservatively. Missing purchase evidence does not establish no purchases.
+- Exact models/bands and provenance are in `lib/opportunity-proxies.ts`; [model contract](COMPLETE_RANKING_MODEL_2026_10_06.md) records every factor component. Integer-power calculations and modeled currency rounding preserve Mac/Linux identities. Canonical nested object-key hashing preserves import identity; array order remains significant.
+
+## Canonical persistence, publication and UI
+
+- Canonical evaluation: `fundamental_snapshots.evaluation.opportunity`, containing eight grades, final score, rubric identity, snapshot/evaluation hashes and traces. Historical original payload/evaluation bytes live in lossless `snapshot_archives`; readers restore them before historical evaluation/API use.
+- `opportunity_rankings` materializes the same final score, evaluation identity and whole-universe position. `opportunity_rating_versions` tracks raw snapshot mutations through revision triggers; `opportunity_rank_versions` records the materialized revision. Bounded readers repair older evaluations and publish complete ranks atomically. A scan is not required for this repair.
+- Immutable directory publication produces `<scanId>:ratings-v5` before slow source enrichment finishes. It carries forward observations only for compatible issuer/security identity, preserving factual dates. Missing CIKs and unsupported instruments still get complete grades. Acquisition runs independently; a later completed full acquisition can supersede the directory release.
+- Default selection uses terminal update time then creation time among usable full publications. Release tokens pin run/revision/rubric across radar, profiles, reports and exports; concurrent mutation rejects stale publication/pins. Indexed pages and compact cards preserve exact grade/hash; streaming export includes the whole selected universe.
+- Arabic UI shows actual final/factor grades and separate evidence/safety findings. Zero grades remain visible. Timer refresh retains loaded pages; profiles reuse canonical saved evaluations. Offline mode labels its cached subset and preserves saved grades, ranks and token.
+
+## Universe and source coverage at the verified release
+
+Both complete official Nasdaq Trader files are required, with valid headers/footers, all exchange codes and valid alternate symbols. Partial/HTML downloads cannot overwrite the last complete durable inventory. Checksum-verified dated raw downloads and the generated fallback preserve actual retrieval dates. Source failure never silently removes a stock.
+
+There were **7,494 official** plus **12 unconfirmed retained** listings, totaling **7,506**. All 6,954 original tracked listings survived. Unconfirmed listings receive `listingStatus=not-confirmed-current`, explicit uncertainty and zero credit; directory absence alone does not prove delisting. Non-ETF fund-labelled legacy listings remain represented; ETFs/test issues are not newly admitted.
+
+The verified saved release has **394 intrinsic** and **535 peer** model contexts. Missing factual observations: price 533; market cap 1,121; revenue 2,833; FCF 4,044; net income 1,928; cash 1,904; debt 5,942; verified insider-purchase value 7,506. Numeric facts require separate applicability/freshness/source review. Complete factor grades do not represent complete factual coverage.
+
+## Outstanding research and continuation
+
+At the last **October 7, 04:22:25 UTC** check, root acquisition was stage 11, issuer offset 4,488/5,929, with 10,233 SEC successes, 348 SEC failures and 481 carried historical-bar failures. This is dated progress, not current completion. The published complete ranking remains independent of refresh.
+
+Reviewed catalyst economics, comprehensive management/governance/risk diligence, specialized and fully diluted/senior-claim valuation, market-data product-use rights and true point-in-time/delisted total-return calibration remain incomplete. Validation protocol/tests include availability, dividends, delisting proceeds, actions/costs, censoring, gaps, purged chronology and issuer holdout. A passed protocol test is not a completed historical experiment. Keep probabilities and six-month targets null until real validation passes.
+
+For future changes, preserve all-universe numerical acceptance and saved/private state, bump the rubric when semantics change, recalculate/persist complete ratings, verify every API/UI surface and document actual deployment and remaining failures. Storage and native acquisition safeguards are in [operations memory](OPERATIONS_MEMORY.md).
+
+## Historical record
+
+The following dated entries are preserved for diagnosis and recovery history. Their old deployment identities, zero-ranking policies, cache limits, pending statuses and next-work instructions are superseded by the current sections above. Use the current contract and dated verification artifacts when continuing work.
 
 # Historical opportunity system checkpoint — 2026-10-06
 

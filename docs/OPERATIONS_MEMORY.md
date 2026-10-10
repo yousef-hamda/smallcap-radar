@@ -1,22 +1,93 @@
-# Verified production release — October 7, 2026
+# Operations memory — Railway
 
-Deployment `7a9f861a-4b77-41aa-a09f-dbc4f9fcbf2e` is SUCCESS. Application archive: `6c452e5545b4c78ea25f09374794219f45f81afd`; rubric `1.2.6-stable-import-identities` / `d21f9710`; exact-archive CI `37568804637` PASS. Subsequent documentation commits record this deployed application and do not change its runtime.
+## Scope and evidence date
 
-Complete mathematical ranking acceptance passes: **7,506 saved, API, report, profile, export and rendered ranking records; 60,048 numeric factor grades; zero missing factors, final grades, stable hashes or rank positions.** All 7,506 are sorted by the actual saved final grade, including 985 zero grades. Independent live official inventory has 7,494 listings; all 6,954 originally tracked listings are retained, with 12 explicitly unconfirmed listings receiving zero credit. No scan is required to finish basic scoring.
+Keep this file free of credentials, contact values, private recovery links and user data. Operational dates are explicit: the current documentation was updated October 9; the last direct production observations were made October 8. Recheck live state before carrying out further operations. [Handoff](../HANDOFF.md) lists continuation work; [project memory](PROJECT_MEMORY.md) owns product/data/scoring rules.
 
-Fixed weights remain 25/20/15/12/10/10/5/3. Missing factual components earn zero without reweighting. Source eligibility, safety and research findings remain separate from `state=ranked`; their 6,041 needs-research / 1,465 excluded diagnostics do not filter the ranking. Strict imports preserve official names and SEC identifiers; canonical nested object-key hashing preserves imported/raw evaluation identity. The saved release is `ca402eb1-9ba3-424d-a153-ce827c0498db:ratings-v5`, revision 22,518, hash `d21f9710`.
+## October 9 candidate release status
 
-The full-volume outage on the superseded 1.2.5 deployment was recovered before acceptance. All 117,756 saved source/evaluation records and private values passed exact preservation checks; all 102,744 live archives passed restoration, identity and factor parity. The compacted database is 3,040,825,344 bytes; physical headroom was 1,779,519,488 bytes at installation. Every scanner path pauses without changing checkpoints on missing/stale capacity or below 256 MiB physical free space; new scans require 512 MiB. Re-fetchable SEC response cache is capped at 64 MiB, and only the latest published full run remains inline. Detailed history is restored losslessly from archive summary version 2.
+The [algorithm implementation report](ALGORITHM_IMPROVEMENT_REPORT_2026_10_08.md) and [validation evidence](ALGORITHM_VALIDATION_2026_10_08.json) cover the tested local rubric `1.3.0-evidence-consistent-opportunity` / `6ccccbc7`. Local engine 255, runtime 91, root/build 67, research 19, SQLite 4, typecheck and lint passed; the frozen 7,506-row comparison retained all ranks/grades, and a separate streaming replay preserved all strict-import source fields. The bounded-memory export converter matched all 7,506 old payloads, evaluations and ranks exactly; use it before the post-deployment `--stored` replay. No new production deployment or saved-row adoption has been verified. On October 9, Railway and public app hostnames failed DNS resolution from the restricted terminal; the old Playwright session had closed. The `gh` CLI token was invalid. The connected GitHub app could read the repository, but its tree-write call was rejected because the session approval policy is `never`; local `.git` writes are also denied. A verified patch and Git bundle are preserved under ignored `.verification/`. Do not infer application delivery from a source commit or CI run.
 
-Final checks: engine 196/196, runtime/API 91/91, verified build/root/UI 57/57, research 9/9, SQLite 4/4, typecheck and lint PASS. Full-universe persistence/API/component arithmetic/replay/strict import/export/rendering, mobile reload/pagination, positive and zero profiles, reports, background refresh and cached-subset offline checks PASS. Suite counts overlap and must not be summed as unique tests.
+The latest read-only production observation before this restriction was **2026-10-08 01:41 UTC**: root acquisition `ca402eb1-9ba3-424d-a153-ce827c0498db` had reached terminal **partial**, stage 13, issuer offset 5,929/5,929; root snapshots numbered 7,506. SEC requests were 17,951, with 11,662 successes and 360 failures; historical-bar failures were 481. Physical free space was 1,494,773,760 bytes and reusable SQLite space 403,992,576 bytes. The then-current live release was revision 30,465 with rubric hash `d21f9710`. These are dated baseline observations, not confirmation of the new candidate or present capacity. Preserve the existing 5,000 MB volume, checkpoints and private state while deploying and repairing saved grades.
 
-Native acquisition continues independently of complete grades: at 04:02:36 UTC the root scan was at stage 11, issuer offset 3,304/5,929, with 9,064 SEC successes, 333 recorded SEC failures and 481 historical-bar failures. It advanced after restart with browser resume blocked. Factual gaps, reviewed catalyst/governance/risk diligence, specialized/fully diluted valuation, market-data use rights and point-in-time outcome calibration remain unresolved. Buying-success probabilities and six-month price targets remain null/unvalidated. **The broader predictive research objective is not certified complete.**
+## Last verified release and repository state
 
-Read the [final audit](SYSTEM_IMPROVEMENT_FINAL_AUDIT_2026_10_07.md), [machine-readable proof](SYSTEM_IMPROVEMENT_PRODUCTION_VERIFICATION_2026_10_07.json), [test ledger](SYSTEM_IMPROVEMENT_TEST_LEDGER_2026_10_07.md) and [changed-file manifest](SYSTEM_IMPROVEMENT_CHANGED_FILES_2026_10_07.md).
+Documentation updated **2026-10-08**. Production evidence below was collected on **2026-10-07**, with the final direct recheck at `2026-10-07T04:22:25.089Z`; this documentation update does not constitute a new live verification.
 
-Earlier dated entries below are historical and superseded where they conflict with this verified release.
+| Identity | Recorded value |
+|---|---|
+| Production deployment | `7a9f861a-4b77-41aa-a09f-dbc4f9fcbf2e` — SUCCESS at last check |
+| Deployed application commit | `6c452e5545b4c78ea25f09374794219f45f81afd` |
+| Rubric / hash | `1.2.6-stable-import-identities` / `d21f9710` |
+| Canonical saved run | `ca402eb1-9ba3-424d-a153-ce827c0498db:ratings-v5` |
+| Materialized revision | 22,518 |
+| Release token | `ca402eb1-9ba3-424d-a153-ce827c0498db:ratings-v5:22518:d21f9710` |
+| Final audit/documentation commit | `3b17bb88655f8bb97dd183cbf346b89fddc39017` — pushed to `origin/master` at the previous completed handoff |
+| Application CI | `37568804637` — PASS |
+| Final audit/documentation CI | `37571210269` — PASS |
 
----
+The audit commit follows the deployed application archive. It records the verified runtime; it is not a separate application deployment. The old acquisition hash in terminal run metadata is historical; current evaluations, rank manifests and API/UI release tokens use `d21f9710`.
+
+## Verified result and limits
+
+All **7,506** production listings have saved evaluations, eight numeric factor grades (**60,048** total), one final 0–100 grade, a stable hash and a deterministic rank. Missing factors, final grades, hashes and ranks: **zero**. All records agree across persistence, radar, scan reports, company profiles, complete HTTP export and real browser ranking rows. There are **6,521 positive** and **985 zero** grades, all displayed and sorted. Basic scoring is complete without starting or finishing another scan.
+
+Independent current official inventory contained **7,494** non-ETF/non-test listings; all original **6,954** tracked stocks were retained. The additional **12** unconfirmed listings retain explicit uncertainty and zero credit. All nine security types are graded. Actual primary summary counters are ranked 7,506 / needs-research 0 / excluded 0. Secondary source-review findings of 6,041 needs-research / 1,465 excluded remain evidence/safety diagnostics and never remove records from ranking.
+
+Final release checks passed: engine **196/196**, runtime/API **91/91**, verified build/root/UI **57/57**, research **9/9**, SQLite **4/4**, typecheck, lint, verifier syntax and whitespace. Both recorded CI runs passed. Suite counts overlap. Exhaustive API/export/replay/import/arithmetic/rendering checks, mobile 390×844 reload/pagination, positive and zero profiles, report pagination and background-refresh retention passed. Offline proof covers an explicit **40-row cached subset**, not the entire universe.
+
+**Complete mathematical ranking is verified; comprehensive factual research and validated high-probability buying outcomes are not complete.** Missing facts earn no component credit. Buying-success probabilities and six-month price targets remain null/unvalidated. No model grade establishes reviewed catalysts, governance, a moat, trading safety or a guaranteed return.
+
+## Deployment configuration and source-job state
+
+- GitHub repository `yousef-hamda/smallcap-radar`, branch `master`; public app `https://smallcap-radar-production.up.railway.app/`.
+- Railway project `5ebf07e7-7efe-4538-a4b2-b63b30daad9b`; application service `69f028ad-2bd4-4e69-b5c1-277603fa5615`. At last verification there was one active application replica and the existing **5,000 MB** persistent volume at `/app/data`. The separate Postgres service is not the application store.
+- Production D1-compatible local SQLite lives under `/app/data/state/v3/d1/miniflare-D1DatabaseObject/`. The verified primary application file is `faaf2b0445ab934c3aac48ddf0cdfade8f9bac050be98993748742cdd2cb05fb.sqlite`; `metadata.sqlite` is separate. Confirm actual file ownership/path before maintenance. Preserve WAL/SHM with a consistent backup strategy.
+- `npm start` invokes `scripts/start-production.mjs` and Vite preview. The native supervisor runs secret-protected `POST /__radar-scheduled` ticks, refreshes complete official inventory, samples actual filesystem capacity and resumes durable work. It does not require an open browser. SQLite leases and a global SEC quota coordinate requests. Secrets remain in environment/protected headers, never URLs, process arguments or documentation.
+- `BACKGROUND_SCAN_SECRET` is required for the scheduler; `SEC_USER_AGENT` must contain the configured reachable contact. Never print values. Local scheduling requires explicit `RADAR_SCHEDULER_ENABLED=1` unless the production volume environment is present. No outbound message was sent as part of these verification checks.
+- Git push alone did not deploy Railway in this campaign. The verified application was deployed explicitly and checked directly. Do not present the later `3b17bb8` audit commit as a new runtime deployment.
+
+At `2026-10-07T04:22:25.089Z`, root scan `ca402eb1-9ba3-424d-a153-ce827c0498db` was **running, stage 11, issuer offset 4,488/5,929**, SEC successes **10,233**, SEC failures **348**, historical-bar failures **481**. It had resumed after restart with browser resume blocked. These counters are acquisition diagnostics; the `:ratings-v5` run already supplies all 7,506 grades. A terminal partial publication describes source gaps, not missing rankings. Do not restart a valid source cursor merely to recompute grades.
+
+## Storage incident, backup and exact recovery proof
+
+The superseded 1.2.5 deployment exhausted actual filesystem space during unattended acquisition, causing `SQLITE_IOERR_SHMSIZE` and public HTTP 503 after ranking tests had passed. It was rejected as final acceptance. Reusable SQLite pages did not reserve physical WAL/SHM space. Hole punching recovered zero bytes; checkpoint/cache eviction on the original full file failed, and long SSH recovery checks were interrupted. Those attempts were not counted as recovery success.
+
+A private durable off-host backup was downloaded before replacement: **1,514,277,608 gzip bytes**, restored **4,815,323,136 bytes**, SQLite integrity `ok`, SHA-256 `8103eb52f91f4ec0a6838dbd6d947e5ae0bc5778aff4c43c4db765ead26dfcac`. Five bounded ranges proved byte parity for **all 117,756 saved source/evaluation records** and exact private-value parity. The **3,040,825,344-byte** compacted copy was installed only after six copy blocks passed byte parity, with writers stopped and the backup durable. Run IDs/checkpoints and metadata storage survived.
+
+All **102,744** live archives then passed decompression, identity and every-factor grade parity on the final deployment. Private counts remained 14 watchlist entries, 6 transactions, 1 account, 3 sessions and 1 recovery bundle; values remain private. Private backups and restore proofs are ignored under `.verification` and must not be committed. A persistent volume is not a backup; retain the durable off-host restoration evidence.
+
+## Current volume protection contract
+
+- Actual filesystem free space was **1,779,519,488 bytes** at installation and **1,626,980,352 bytes** at the final 04:22:25 UTC recheck. These are dated measurements; inspect current headroom before new work.
+- `scripts/storage-capacity.mjs` inspects native filesystem and reusable pages read-only. D1 forbids the native capacity PRAGMAs; do not move those calls into Worker database handlers.
+- The protected scheduler persists samples under `raw_cache` key `runtime:storage-capacity`. `lib/scan-capacity.ts` pauses every scanner path when the sample is missing, malformed, future-dated, older than five minutes or physical headroom is below **256 MiB**. A pause preserves checkpoints/cursors. **New scans need 512 MiB physical headroom**, plus the scheduler's available-capacity gate. Reusable pages cannot substitute for physical reserves.
+- Scheduler capacity below **64 MiB** pauses before archive maintenance; maintenance above that threshold remains bounded. Low-capacity pauses require verified reclamation or an explicitly approved capacity change, not relaxed reserve guards. The finite 5,000 MB volume was not increased.
+- Re-fetchable SEC response caching is capped at **64 MiB**, separate from preserved source evaluations and original filing documents. Only the latest published full run stays inline. Older detailed source/evaluation bytes restore losslessly from `snapshot_archives` before historical APIs/evaluation.
+- Archive summary **version 2** preserves queryable identity/coverage/scalars/check states and exact numeric grades, removing duplicated inline source trees/prose. Its bounded keyset maintenance marker is `maintenance:archive-summary-v2`; full payload/evaluation archive bytes remain unchanged.
+- Recent recoverable failed source checkpoints remain available for 24 hours. The historical 1.2.4 failed-run cleanup did lose old quote/fundamental checkpoints; do not rewrite that failed incident as preserved progress. The final recovery did preserve the new active run and saved/private data.
+
+## Complete inventory and canonical publication
+
+Complete official directories require headers/creation-time footers, all exchange codes and valid alternate symbols. The native/Worker paths use the checked-in parser and checksum-verified durable complete cache. Intermittent HTML/403 failures cannot overwrite membership. `lib/listing-directory.generated.json` and `lib/listing-directory-sources.generated.json` preserve the exact dated fallback/raw downloads; `scripts/generate-listing-directory.mjs` regenerates them reproducibly. Reuse never advances a factual retrieval date. Directory-only initialization failures can resume after a verified complete cache becomes available.
+
+Directory ratings publish all stocks before enrichment; later completed acquisition can replace them coherently. Default selection uses terminal update time then creation time. Release-pinned radar/profile/report/export pages share a materialized revision; old imports are strictly preserved and re-evaluated under canonical hashes. Source review, provider failure, missing facts and capacity pauses cannot erase the last complete scored release.
+
+## Checks to repeat for the next behavioral release
+
+1. Confirm current Railway deployment/status, actual filesystem reserve, native scheduler health, active cursor/retries and canonical release identity. October 7 counters are a checkpoint, not a current-state claim.
+2. Verify direct radar summary includes the complete current universe, zero missing factor/final scores and all sorted ranks. Compare official/prior membership independently; verify all records, not one company or a coverage percentage.
+3. Run relevant gates: `npm run typecheck`, `npm run lint`, `npm run test:runtime`, `npm run test:research`, `python3 tests/test_database.py`, `npm test`, verifier syntax and `git diff --check`. Engine tests also run through runtime; research tests overlap root suite.
+4. Use `scripts/verify-production-ranking.mjs` inside the deployed service for saved/radar/report/profile/inventory/arithmetic/sorting/reload checks. Prepare `.test-build` with the runtime suite, convert the streamed private JSON export using `python3 scripts/convert-ranking-export.py <private-export.json> <private-export.jsonl>`, then run `node scripts/verify-complete-ranking.mjs <private-export.jsonl> --stored` for every raw/imported/persisted evaluation and component identity. Keep exported raw/private material ignored.
+5. Verify full streaming export and complete rendered ranking, timer retention, mobile reload/pagination, positive/zero profiles, report pagination and explicit offline subset identity. Browser verification in this campaign blocked `/api/background-scan/resume` to establish independent native progress.
+6. Before storage/schema recovery, preserve a consistent full backup, verify actual restoration/integrity, every saved source/evaluation and private-value parity. Use bounded operations; long SSH sessions in this environment may terminate after approximately five minutes. Replace only the confirmed primary file family after backup and writer coordination, preserving metadata and checkpoints.
+7. Commit/push authorized code, deploy explicitly, confirm adoption and direct all-universe parity, then update these three current records with actual timestamps, deployment/version and unresolved failures. Do not delete/recreate the volume, switch databases, reduce reserves or promote probabilities to bypass a failure.
+
+Current evidence: [final audit](SYSTEM_IMPROVEMENT_FINAL_AUDIT_2026_10_07.md), [production proof](SYSTEM_IMPROVEMENT_PRODUCTION_VERIFICATION_2026_10_07.json), [test ledger](SYSTEM_IMPROVEMENT_TEST_LEDGER_2026_10_07.md), [execution history](SYSTEM_IMPROVEMENT_EXECUTION_2026_10_06.md). The broader factual-source, specialized valuation, rights and point-in-time prediction requirements remain incomplete.
+
+## Historical record
+
+The following dated entries are preserved for diagnosis and recovery history. Their old deployment identities, zero-ranking policies, cache limits, pending statuses and next-work instructions are superseded by the current sections above. Use the current contract and dated verification artifacts when continuing work.
 
 # Historical opportunity system checkpoint — 2026-10-06
 

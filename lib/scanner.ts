@@ -290,7 +290,7 @@ export async function processScanBatch(runId: string) {
         snapshot.asOf = now;
         const last = history.at(-1);
         const historyEvidence={source:historical.source,url:historical.url,retrievedAt:historical.retrievedAt,availableAt:historical.availableAt,periodEnd:last?.date??now.slice(0,10),...(historical.meta?.currency?{currency:String(historical.meta.currency)}:{}),confidence:'medium' as const,rightsStatus:'unknown' as const};
-        const session=completedSessionQuote(history);
+        const session=completedSessionQuote(history,now);
         if(session){
           snapshot.price=session.price;
           snapshot.dailyChange=session.dailyChange;
