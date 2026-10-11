@@ -16,6 +16,7 @@ interface Env {
   VAPID_PUBLIC_KEY?: string;
   VAPID_PRIVATE_KEY?: string;
   BACKGROUND_SCAN_SECRET?: string;
+  RAILWAY_VOLUME_MOUNT_PATH?: string;
   IMAGES: {
     input(stream: ReadableStream): {
       transform(options: Record<string, unknown>): {
@@ -118,6 +119,11 @@ async function continueAfterBatonFailure(request: Request, runId: string, env: E
 async function runBackgroundBatch(request: Request, runId: string, env: Env, directHops = 0) {
   try {
     const result = await processScanBatch(runId);
+    // Railway's native supervisor resumes full scans. A browser baton must
+    // stop when capacity pauses the scan, or failed self-requests can keep
+    // writing diagnostics until the volume fills completely.
+    if ('pausedForCapacity' in result && result.pausedForCapacity) return;
+    if (env.RAILWAY_VOLUME_MOUNT_PATH && !result.done && String(result.run.source).includes('· full')) return;
     if ('busy' in result && result.busy) {
       // A duplicate or restarted worker must not abandon the only live baton.
       await delay(Math.min(10_000,Math.max(500,Number(result.run.lease_until)-Date.now())));

@@ -914,14 +914,24 @@ test('stable-identity migration retains active v14 acquisition progress and date
 
 
 test('low or stale filesystem capacity pauses active scans and batons without changing source checkpoints',async()=>{
- const {recordScanCapacity}=await import('../../.test-build/scan-capacity.mjs');const id='capacity-paused-active',now=Date.now();
+ const {recordScanCapacity}=await import('../../.test-build/scan-capacity.mjs');const id=crypto.randomUUID(),now=Date.now();
  await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,offset,strategy_hash,retry_queue) VALUES(?,?,?,'running','Bulk Quotes/SEC Frames + Opportunity SEC v14 · full',7506,5,1104,?,'[]')").bind(id,new Date(now).toISOString(),new Date(now).toISOString(),currentHash()).run();
  const before=await db().prepare('SELECT * FROM strategy_runs WHERE id=?').bind(id).first();runtimeEnv.RAILWAY_VOLUME_MOUNT_PATH='/synthetic';
  try{
   await recordScanCapacity({reusableBytes:2*1024**3,filesystemFreeBytes:128*1024**2},now);
   const result=await processScanBatch(id);assert.equal(result.pausedForCapacity,true);assert.equal(result.done,false);assert.deepEqual(await db().prepare('SELECT * FROM strategy_runs WHERE id=?').bind(id).first(),before);
+  const pending=[];const originalFetch=globalThis.fetch;let forwarded=0;
+  globalThis.fetch=async()=>{forwarded++;throw Error('A paused scan must not schedule another baton');};
+  try{
+   const response=await worker.fetch(new Request('https://radar.test/__radar-background',{method:'POST',headers:{'X-Radar-Background':'capacity-secret','Content-Type':'application/json'},body:JSON.stringify({runId:id})}),{BACKGROUND_SCAN_SECRET:'capacity-secret',RAILWAY_VOLUME_MOUNT_PATH:'/app/data'},{waitUntil:promise=>pending.push(promise)});
+   assert.equal(response.status,202);await Promise.all(pending);assert.equal(forwarded,0);
+   assert.equal((await db().prepare('SELECT COUNT(*) AS n FROM diag WHERE run_id=? AND stage=?').bind(id,'background').first()).n,0);
+  }finally{globalThis.fetch=originalFetch;}
   await recordScanCapacity({reusableBytes:2*1024**3,filesystemFreeBytes:1024**3},now-6*60_000);assert.equal((await processScanBatch(id)).pausedForCapacity,true);
   await recordScanCapacity({reusableBytes:2*1024**3,filesystemFreeBytes:1024**3},now);const {scanCapacityPaused}=await import('../../.test-build/scan-capacity.mjs');assert.equal(await scanCapacityPaused(now),false);
+  await db().prepare('UPDATE strategy_runs SET lease_until=? WHERE id=?').bind(now+60_000,id).run();
+  const nativePending=[];const nativeResponse=await worker.fetch(new Request('https://radar.test/__radar-background',{method:'POST',headers:{'X-Radar-Background':'capacity-secret','Content-Type':'application/json'},body:JSON.stringify({runId:id})}),{BACKGROUND_SCAN_SECRET:'capacity-secret',RAILWAY_VOLUME_MOUNT_PATH:'/app/data'},{waitUntil:promise=>nativePending.push(promise)});
+  assert.equal(nativeResponse.status,202);await Promise.all(nativePending);assert.equal((await db().prepare('SELECT COUNT(*) AS n FROM diag WHERE run_id=? AND stage=?').bind(id,'background').first()).n,0);
  }finally{delete runtimeEnv.RAILWAY_VOLUME_MOUNT_PATH;await db().prepare('DELETE FROM strategy_runs WHERE id=?').bind(id).run();}
 });
 
