@@ -1,6 +1,12 @@
 # Handoff — Small-Cap Radar
 
-## October 12 production storage recovery (current)
+## October 12 blank-screen hotfix (current)
+
+After the storage recovery, the user reported an intermittent fully black page while navigating to the wallet. Fresh anonymous production sessions did not reproduce the exact failure: live page, radar, account and portfolio requests returned 200, and repeated tab switching had no console errors. The populated wallet chart did contain a render-crash path: a background history refresh could shorten the series while its previous hover index remained selected. Production hotfix `19c1ff6` clamps that index and adds Arabic page/root error boundaries with retry and reload controls so another render error is visible instead of blanking the whole app. The same code is on local `master` as `6030973`; `master` was not pushed because it includes the separate undeployed 1.4 ranking candidate.
+
+Railway deployment `7841668f-8e9c-49b7-82d9-0dcea52083ea` is SUCCESS on the existing 1.2.6 model. Typecheck, lint, production build, 31 UI tests, a populated-wallet history-shrink browser simulation and a forced render-error browser check passed. Post-deploy browser navigation reached the wallet without console errors. `/app/data` had 579,125,248 bytes free at the 2026-10-12 00:32 UTC check. The user's original browser session and private signed-in portfolio were not reproduced, so keep the exact triggering condition open if another screenshot or console trace arrives.
+
+## October 12 production storage recovery
 
 The screenshot's ranking/portfolio errors were a full Railway `/app/data` volume, confirmed by `SQLITE_IOERR_SHMSIZE` and public HTTP 503. A stalled browser background baton had persisted 1,061,346 repeated `background` diagnostics; 7,821 `scan-history` cache rows were also re-fetchable. A consistent SQLite backup was verified (`integrity_check=ok`), transferred to ignored off-host storage, and checked against its compressed and restored SHA-256 hashes. The compacted recovery removed only those diagnostic/cache rows. Exact comparison preserved all 162,836 saved snapshots, 147,802 archives, 80,808 rankings, run checkpoints and private account/portfolio values. The installed file passed an on-volume SHA-256 and integrity check; `/app/data` had 667,303,936 bytes free at the 2026-10-12 00:13 UTC read-only check.
 
