@@ -1,10 +1,16 @@
 # Handoff — Small-Cap Radar
 
-## October 12 blank-screen hotfix (current)
+## October 12 signed-in wallet crash root fix (current)
+
+The user confirmed that the new error boundary replaced the black screen with its Arabic recovery card. A local preview using the verified private production backup reproduced the actual browser exception: `canonicalRating` threw `التقييم النهائي المحفوظ غير متاح أو غير متطابق؛ حدّث النتائج.` when switching a signed-in account with 14 favorites into the wallet. The portfolio view still fetched stock-list rows but did not set their corresponding rating map, while an unconditional render pass tried to rate those rows. Hotfix `8a495be` stores each stock row and its validated rating together, and keeps stock-list rows out of the portfolio view entirely. No grade is recomputed or fabricated.
+
+Railway deployment `89d64a06-5203-4fe0-acf2-a457347064ba` is SUCCESS on the existing 1.2.6 ranking model. Typecheck, lint, build and all 31 UI checks passed. The private database-copy browser test rendered 14 favorites, 40 opportunity cards and the populated wallet through repeated tab switches without a page error. Live anonymous browser navigation and radar/portfolio APIs passed after deploy. The signed-in production browser session itself was not accessed. `/app/data` had 409,346,048 bytes free at the final check; the active source scan remains subject to its 256 MiB reserve. The same code was cherry-picked onto local `master` as `d521b87`, which remains unpushed to avoid deploying its separate 1.4 ranking candidate.
+
+## October 12 blank-screen recovery boundary
 
 After the storage recovery, the user reported an intermittent fully black page while navigating to the wallet. Fresh anonymous production sessions did not reproduce the exact failure: live page, radar, account and portfolio requests returned 200, and repeated tab switching had no console errors. The populated wallet chart did contain a render-crash path: a background history refresh could shorten the series while its previous hover index remained selected. Production hotfix `19c1ff6` clamps that index and adds Arabic page/root error boundaries with retry and reload controls so another render error is visible instead of blanking the whole app. The same code is on local `master` as `6030973`; `master` was not pushed because it includes the separate undeployed 1.4 ranking candidate.
 
-Railway deployment `7841668f-8e9c-49b7-82d9-0dcea52083ea` is SUCCESS on the existing 1.2.6 model. Typecheck, lint, production build, 31 UI tests, a populated-wallet history-shrink browser simulation and a forced render-error browser check passed. Post-deploy browser navigation reached the wallet without console errors. `/app/data` had 579,125,248 bytes free at the 2026-10-12 00:32 UTC check. The user's original browser session and private signed-in portfolio were not reproduced, so keep the exact triggering condition open if another screenshot or console trace arrives.
+Railway deployment `7841668f-8e9c-49b7-82d9-0dcea52083ea` added the recovery boundary on the existing 1.2.6 model. Typecheck, lint, production build, 31 UI tests, a populated-wallet history-shrink browser simulation and a forced render-error browser check passed. Post-deploy browser navigation reached the wallet without console errors. `/app/data` had 579,125,248 bytes free at the 2026-10-12 00:32 UTC check. The later signed-in reproduction above identified and fixed the remaining crash.
 
 ## October 12 production storage recovery
 
