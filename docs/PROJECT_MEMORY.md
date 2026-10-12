@@ -1,6 +1,10 @@
 # Project memory — Small-Cap Radar
 
-## October 10 algorithm update (current)
+## October 12 availability recovery (current)
+
+The public ranking and portfolio errors were caused by a full Railway SQLite volume, not missing saved evaluations or portfolio transactions. A verified backup and compacted restore preserved all 162,836 saved snapshots, 147,802 source archives, 80,808 rankings, run checkpoints and exact private values. Production hotfix deployment `6c17eb9e-7e58-49b1-b6d9-dda9bb45a863` stops paused/full-scan browser batons from filling diagnostics while the Railway native supervisor owns full-scan progress. Ranking and portfolio APIs return HTTP 200; the canonical 7,517-row 1.2.6 release is unchanged. The 1.4 algorithm candidate remains undeployed. See [operations memory](OPERATIONS_MEMORY.md) and [handoff](../HANDOFF.md) for recovery proof and current capacity.
+
+## October 10 algorithm update (historical checkpoint)
 
 The [new plan](ALGORITHM_IMPROVEMENT_PLAN_2026_10_10.md), [implementation and limits](ALGORITHM_IMPROVEMENT_REPORT_2026_10_10.md) and [full-universe comparison](ALGORITHM_COMPARISON_2026_10_10.json) cover rubric `1.4.0-scoped-conflicts-thesis-gates` / `55dd2e8a`, pushed as commit `95700e4` with passing CI `38028284917` but not deployed. It preserves all eight main weights, every component denominator and complete score/BINARY-symbol sorting. Trusted field-identified source disagreements withhold only dependent model components; ambiguous disagreements fail closed and all unresolved source conflicts still block source eligibility. Candidate-review now needs reviewed material future catalyst economics and clean/mild financing alongside the existing source, valuation and downside checks. The Arabic thesis panel shows those prerequisites.
 
