@@ -79,7 +79,11 @@ export function PerformanceChart({ history }: { history: HistoryData | null }) {
   const x = (index: number) => 18 + index / Math.max(1, validRows.length - 1) * 684;
   const y = (value: number) => 210 - (value - low + padding) / Math.max(.0001, high - low + padding * 2) * 180;
   const path = validRows.map((point, index) => `${index ? 'L' : 'M'}${x(index).toFixed(2)},${y(point.returnPct).toFixed(2)}`).join(' ');
-  const last = validRows.at(-1), selected = hovered == null ? last : validRows[hovered];
+  const last = validRows.at(-1);
+  // A refreshed history can contain fewer points while the pointer is still
+  // over the chart. Keep the selected index inside the new series.
+  const selectedIndex = hovered == null ? validRows.length - 1 : Math.max(0, Math.min(hovered, validRows.length - 1));
+  const selected = validRows[selectedIndex];
   const color = (last?.returnPct ?? 0) < 0 ? '#fb7185' : '#14d9a4';
   const gradientId = useId().replaceAll(':', '');
   return <section className="portfolio-panel performance-panel">
@@ -92,7 +96,7 @@ export function PerformanceChart({ history }: { history: HistoryData | null }) {
           <defs><linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity=".28"/><stop offset="100%" stopColor={color} stopOpacity="0"/></linearGradient></defs>
           <line x1="18" x2="702" y1={y(0)} y2={y(0)} stroke="#6b7280" strokeDasharray="5 5"/>
           <path d={`${path} L702,220 L18,220 Z`} fill={`url(#${gradientId})`}/><path d={path} fill="none" stroke={color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
-          <line x1={x(hovered ?? validRows.length - 1)} x2={x(hovered ?? validRows.length - 1)} y1="15" y2="220" stroke="#818cf8" strokeDasharray="3 4"/><circle cx={x(hovered ?? validRows.length - 1)} cy={y(selected!.returnPct)} r="5" fill={color}/>
+          <line x1={x(selectedIndex)} x2={x(selectedIndex)} y1="15" y2="220" stroke="#818cf8" strokeDasharray="3 4"/><circle cx={x(selectedIndex)} cy={y(selected.returnPct)} r="5" fill={color}/>
         </svg>
         <div className="chart-dates" dir="ltr"><span>{validRows[0].date}</span><span dir="rtl">أدنى {pct(low)} · أعلى {pct(high)}</span><span>{last!.date}</span></div>
       </>}
