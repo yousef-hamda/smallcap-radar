@@ -21,13 +21,27 @@ function timestamp(value) {
 }
 
 export function validateObservation(row, cutoff = Date.now()) {
-  const errors = [], asOf = timestamp(row?.asOf);
+  const errors = [], asOf = timestamp(row?.asOf), factorCoverage = {};
   if (!nonempty(row?.symbol) || !nonempty(String(row?.issuerId ?? '')) || !Number.isFinite(asOf) || !finite(cutoff) || asOf > cutoff) errors.push('Missing or invalid security/issuer/as-of identity');
   for (const id of Object.keys(WEIGHTS)) {
     const factor = row?.factors?.[id];
-    if (!factor || !finite(factor.score) || factor.score < 0 || factor.score > 10 || !Array.isArray(factor.sources) || !factor.sources.length) {
+    if (!factor || !finite(factor.score) || factor.score < 0 || factor.score > 10 || !Array.isArray(factor.sources)) {
       errors.push('Missing bounded grade or point-in-time lineage: ' + id);
-    } else for (const source of factor.sources) {
+      continue;
+    }
+    // A complete numerical rank includes zero-credit factors with no usable
+    // evidence. Preserve those observations in the historical cohort only when
+    // the absence is explicit; silently empty lineage cannot validate credit.
+    if (factor.coverageState === 'missing' && factor.score === 0 && factor.sources.length === 0) {
+      factorCoverage[id] = 'missing';
+      continue;
+    }
+    if (!factor.sources.length || (factor.coverageState !== undefined && factor.coverageState !== 'sourced')) {
+      errors.push('Missing bounded grade or point-in-time lineage: ' + id);
+      continue;
+    }
+    factorCoverage[id] = 'sourced';
+    for (const source of factor.sources) {
       const availableAt = timestamp(source?.availableAt), periodEnd = timestamp(source?.periodEnd);
       if (!nonempty(source?.id) || !Number.isFinite(availableAt) || availableAt > asOf || !Number.isFinite(periodEnd) || periodEnd > asOf || periodEnd > availableAt) errors.push('Future or invalid point-in-time source: ' + id);
     }
@@ -80,11 +94,11 @@ export function validateObservation(row, cutoff = Date.now()) {
   if (terminal) observe(delisting.proceedsPerShare + dividends);
   const cost = row.costs.roundTripBps / 10000;
   const score = Math.round(Object.entries(WEIGHTS).reduce((sum, [id, weight]) => sum + Math.round(row.factors[id].score * 100) * weight, 0) / 10) / 100;
-  return { valid: true, errors: [], censored, issuerId: String(row.issuerId), symbol: row.symbol, asOf, entryAt, end, exitAt: endpoint, observedUntil, score, totalReturn: lastValue / entry.price - 1 - cost, maxReturn: maxReturn - cost, maxDrawdown, majorUpside: maxReturn - cost >= PROTOCOL.majorUpside, benchmarkReturn: benchmark.totalReturn };
+  return { valid: true, errors: [], censored, issuerId: String(row.issuerId), symbol: row.symbol, asOf, entryAt, end, exitAt: endpoint, observedUntil, score, factorCoverage, totalReturn: lastValue / entry.price - 1 - cost, maxReturn: maxReturn - cost, maxDrawdown, majorUpside: maxReturn - cost >= PROTOCOL.majorUpside, benchmarkReturn: benchmark.totalReturn };
 }
 
 function summaries(rows) {
-  return { rows: rows.length, issuers: new Set(rows.map(row => row.issuerId)).size, majorUpsideRate: average(rows.map(row => Number(row.majorUpside))), meanReturn: average(rows.map(row => row.totalReturn)), meanDrawdown: average(rows.map(row => row.maxDrawdown)), benchmarkMeanReturn: average(rows.map(row => row.benchmarkReturn)) };
+  return { rows: rows.length, issuers: new Set(rows.map(row => row.issuerId)).size, missingFactorGrades: rows.reduce((total, row) => total + Object.values(row.factorCoverage).filter(state => state === 'missing').length, 0), rowsWithMissingFactors: rows.filter(row => Object.values(row.factorCoverage).includes('missing')).length, majorUpsideRate: average(rows.map(row => Number(row.majorUpside))), meanReturn: average(rows.map(row => row.totalReturn)), meanDrawdown: average(rows.map(row => row.maxDrawdown)), benchmarkMeanReturn: average(rows.map(row => row.benchmarkReturn)) };
 }
 function cohort(rows) {
   const dates = new Map();

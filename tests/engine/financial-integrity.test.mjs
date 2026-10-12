@@ -77,8 +77,8 @@ test('a profitable mismatched quarter cannot create a TTM margin or cash-convers
 test('contract liabilities are identified separately and cannot create positive catalyst points',()=>{
  const s={...base(),backlog:{amount:10000,expectedRecognitionBy:'2026-12-31'},provenance:{...base().provenance,backlog:{...source(undefined),tag:'ContractWithCustomerLiabilityCurrent'}}};
  assert.equal(commercialObservationKind(s),'contract-liability');assert.equal(factor(s,'catalysts').score,0);
- s.provenance.backlog.tag='RevenueRemainingPerformanceObligation';assert.ok(factor(s,'catalysts').score>0);
- delete s.backlog.expectedRecognitionBy;assert.equal(factor(s,'catalysts').score,0,'RPO without a conversion window is not a six-month catalyst');
+ s.provenance.backlog.tag='RevenueRemainingPerformanceObligation';assert.equal(factor(s,'catalysts').score,0);assert.equal(factor(s,'catalysts').modelInputCoveragePct,30,'RPO is a discovery input, not a reviewed future catalyst');
+ delete s.backlog.expectedRecognitionBy;assert.equal(factor(s,'catalysts').modelInputCoveragePct,0,'RPO without a conversion window is not a six-month discovery input');
 });
 
 test('unreviewed splits cannot earn alignment or dilution-protection points',()=>{
@@ -188,12 +188,12 @@ test('typed source conflicts withhold only dependent model components while unkn
  s.ma30w=9;s.low52w=8;s.high52w=12;s.return12m=.2;
  for(const key of ['price','ma30w','low52w','high52w','return12m'])s.provenance[key]={...source(),periodStart:undefined,periodEnd:'2026-10-02',availableAt:'2026-10-02T21:00:00Z'};
  const clean=proxyOpportunityEvidence(s);
- assert(clean.catalysts.score>0);assert(clean.financialStrength.score>0);assert(clean.technicalTiming.score>0);
+ assert.equal(clean.catalysts.score,0);assert.equal(clean.catalysts.coveragePct,30);assert(clean.financialStrength.score>0);assert(clean.technicalTiming.score>0);
  const backlogConflict='backlog: 1 (frames) مقابل 2 (Company Facts) في 2026-06-30; same fiscal window/unit/scope; symmetric difference 50.000000% > 1%';
  const backlog={...s,sourceConflicts:[backlogConflict]};
  const scoped=proxyOpportunityEvidence(backlog);
  const backlogGrade=clean.catalysts.calculation.inputs.find(item=>item.name==='backlog:grade').value;
- assert.equal(scoped.catalysts.score,clean.catalysts.score-backlogGrade*.3,'only the backlog component loses its fixed-denominator points');
+ assert.equal(scoped.catalysts.score,0);assert.equal(backlogGrade,0);assert.equal(scoped.catalysts.coveragePct,clean.catalysts.coveragePct-30,'only the backlog discovery component loses input coverage');
  assert.equal(scoped.catalysts.calculation.inputs.find(item=>item.name==='backlog:grade').value,'withheld-conflict');
  assert.equal(scoped.financialStrength.score,clean.financialStrength.score);
  assert.equal(scoped.technicalTiming.score,clean.technicalTiming.score);

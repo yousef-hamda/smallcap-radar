@@ -25,7 +25,7 @@ export async function GET(req:Request){
   // send core/bounce are routed to the unified result set during migration;
   // favorites remains a separate saved-items view.
   const activeStrategy=strategy==='favorites'?'favorites':'opportunity';
-  const response=json(await readState({strategy:activeStrategy,opportunityState,owner:identity.owner,query:url.searchParams.get('q')||'',limit:Number.isFinite(limit)?limit:40,offset:Number.isFinite(offset)?offset:0,...requestedRankRelease(url.searchParams),...(url.searchParams.get('view')==='compact'?{view:'compact' as const}:{})}));
+  const response=json(await readState({strategy:activeStrategy,opportunityState,researchFit:activeStrategy==='opportunity'&&url.searchParams.get('fit')==='research',owner:identity.owner,query:url.searchParams.get('q')||'',limit:Number.isFinite(limit)?limit:40,offset:Number.isFinite(offset)?offset:0,...requestedRankRelease(url.searchParams),...(url.searchParams.get('view')==='compact'?{view:'compact' as const}:{})}));
   if(identity.cookie)response.headers.set('Set-Cookie',identity.cookie);
   return response;
  }catch(error){

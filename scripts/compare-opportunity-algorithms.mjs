@@ -1,7 +1,9 @@
 /** Frozen-input acceptance comparison. Prepare .test-build with test:runtime.
  * Baseline directory is an independently preserved prior compiled evaluator.
  * Raw inputs stay private/ignored; output contains public aggregate diagnostics.
- * Usage: node scripts/compare-opportunity-algorithms.mjs DATA BASELINE_DIR [REPORT]
+ * Usage: node scripts/compare-opportunity-algorithms.mjs DATA BASELINE_DIR [REPORT] [--unsaved-reference]
+ * The optional mode compares two evaluator builds on identical normalized
+ * snapshots; it still checks the saved production identity via the default run.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -16,8 +18,10 @@ import {peerObservation,peerContext,uniqueIssuerPeers} from '../.test-build/oppo
 import {isCurrentOpportunityEvaluation} from '../.test-build/opportunity-engine.mjs';
 import {OPPORTUNITY_SPEC,opportunitySpecHash} from '../.test-build/opportunity-spec.mjs';
 
-const [file,baselineDirectory,output]=process.argv.slice(2);
+const [file,baselineDirectory,output,mode]=process.argv.slice(2);
 if(!file||!baselineDirectory)throw Error('Usage: compare-opportunity-algorithms.mjs DATA BASELINE_DIR [REPORT]');
+const unsavedReference=mode==='--unsaved-reference';
+if(mode&& !unsavedReference)throw Error('Unknown comparison mode: '+mode);
 const baseline=await import(pathToFileURL(path.resolve(baselineDirectory,'opportunity-dossier.mjs')));
 const baselineFinancing=await import(pathToFileURL(path.resolve(baselineDirectory,'financing-risk.mjs')));
 const digest=createHash('sha256');for await(const chunk of fs.createReadStream(file))digest.update(chunk);
@@ -33,6 +37,7 @@ async function* frozenRows(){
 assert.deepEqual(OPPORTUNITY_SPEC.factors.map(f=>f.weight),weights);
 assert.ok(lineFormat?input.rowCount:input.rows?.length,'No frozen input rows');
 const rows=[],factorChanges=Object.fromEntries(OPPORTUNITY_SPEC.factors.map(f=>[f.id,{weight:f.weight,increased:0,decreased:0,unchanged:0,totalDelta:0,beforePositive:0,afterPositive:0}]));
+const inputCoverage=Object.fromEntries(OPPORTUNITY_SPEC.factors.map(f=>[f.id,{zero:0,partial:0,full:0,totalPct:0}]));
 let savedBaselineParity=0,changed=0,reviewedBefore=0,reviewedAfter=0,traceChecks=0,normalizationIdempotence=0;
 const evaluate=s=>evaluateOpportunityDossier(s,opportunityDossierFromSnapshot(s));
 const classCounts=new Map(),peerRows=[];
@@ -42,14 +47,15 @@ let index=0,baselineVersion=null;const asOfDates=new Set();
 for await(const row of frozenRows()){
  const raw=typeof row.payload==='string'?JSON.parse(row.payload):row.payload;
  assert.equal(raw.symbol,row.symbol);
- const priorSnapshot=baselineFinancing.applyFinancingRisk(structuredClone(raw));
- const prior=baseline.evaluateOpportunityDossier(priorSnapshot,baseline.opportunityDossierFromSnapshot(priorSnapshot));
  const stored=typeof row.evaluation==='string'?JSON.parse(row.evaluation):row.evaluation;
- baselineVersion??=stored?.opportunity?.version;asOfDates.add(raw.asOf);
- if(stored?.opportunity){assert.deepEqual(prior,stored.opportunity,`${row.symbol}: frozen baseline mismatch`);savedBaselineParity++;}
+ asOfDates.add(raw.asOf);
  const snapshot=applyFinancingRisk(alignSnapshotFinancials(structuredClone(raw)));
  if(Number.isSafeInteger(snapshot.cik)&&snapshot.cik>0)snapshot.issuerCommonListingCount=classCounts.get(snapshot.cik)??0;
  snapshot.peerContext=peerContext(snapshot,peers);
+ const priorSnapshot=unsavedReference?snapshot:baselineFinancing.applyFinancingRisk(structuredClone(raw));
+ const prior=baseline.evaluateOpportunityDossier(priorSnapshot,baseline.opportunityDossierFromSnapshot(priorSnapshot));
+ baselineVersion??=prior.version;
+ if(!unsavedReference&&stored?.opportunity){assert.deepEqual(prior,stored.opportunity,`${row.symbol}: frozen baseline mismatch`);savedBaselineParity++;}
  const next=evaluate(snapshot);
  assert.ok(isCurrentOpportunityEvaluation(next),`${row.symbol}: invalid candidate`);
  assert.equal(next.asOf,prior.asOf,`${row.symbol}: changed factual cutoff`);
@@ -62,6 +68,11 @@ for await(const row of frozenRows()){
   assert.equal(factor.id,old.id);assert.ok(factor.score>=0&&factor.score<=10);
   detail[delta>0?'increased':delta<0?'decreased':'unchanged']++;detail.totalDelta+=delta;
   detail.beforePositive+=old.score>0;detail.afterPositive+=factor.score>0;
+  const inputPct=factor.modelInputCoveragePct;
+  assert.ok(Number.isFinite(inputPct)&&inputPct>=0&&inputPct<=100,`${row.symbol}/${factor.id}: invalid model input coverage`);
+  const coverageDetail=inputCoverage[factor.id];
+  coverageDetail[inputPct===0?'zero':inputPct===100?'full':'partial']++;
+  coverageDetail.totalPct+=inputPct;
   reviewedBefore+=old.evidenced&&!old.proxy;reviewedAfter+=factor.evidenced&&!factor.proxy;
   if(delta)causes.push({factor:factor.id,before:old.score,after:factor.score});
   if(factor.proxy&&!factor.conflicts.length){
@@ -79,6 +90,7 @@ for await(const row of frozenRows()){
   assert.deepEqual(renamed.factors.map(f=>[f.score,f.weight,f.points]),next.factors.map(f=>[f.score,f.weight,f.points]),`${row.symbol}: identifier independence`);
  }
  const catalyst=next.factors.find(f=>f.id==='catalysts');
+ assert.ok(!catalyst.proxy||catalyst.score===0,`${row.symbol}: unreviewed catalyst earned positive score`);
  const conflictFactors=next.factors.filter(f=>f.conflicts.length).map(f=>f.id);
  const financingRisk=snapshot.deathSpiral??'unknown';
  const catalystReviewed=!!catalyst?.evidenced&&!catalyst.proxy&&catalyst.conflicts.length===0;
@@ -86,13 +98,13 @@ for await(const row of frozenRows()){
  // This is a stricter evidence audit, not another score or a predicted return.
  const thesisQualified=candidateReview&&next.sourceEligible&&next.thesis.valuation.status==='available'
   &&catalystReviewed&&!['elevated','severe','unknown'].includes(financingRisk)&&conflictFactors.length===0;
- rows.push({symbol:row.symbol,before:prior.score,after:next.score,delta:Number((next.score-prior.score).toFixed(2)),causes,type:raw.securityType??'unknown',sector:raw.sector??'unknown',cap:raw.marketCap??null,valuation:next.thesis.valuation.status==='available',beforeValuation:prior.thesis.valuation.status==='available',sourceEligible:next.sourceEligible,catalystReviewed,candidateReview,thesisQualified,financingRisk,thesisAction:next.thesis.action,sourceConflict:!!raw.sourceConflicts?.length,earningsConflict:!!raw.opportunityResearch?.earnings?.conflicts?.length,conflictFactors});
+ rows.push({symbol:row.symbol,before:prior.score,after:next.score,delta:Number((next.score-prior.score).toFixed(2)),causes,type:raw.securityType??'unknown',sector:raw.sector??'unknown',cap:raw.marketCap??null,valuation:next.thesis.valuation.status==='available',beforeValuation:prior.thesis.valuation.status==='available',sourceEligible:next.sourceEligible,catalystReviewed,candidateReview,thesisQualified,financingRisk,thesisAction:next.thesis.action,modelInputCoveragePct:next.modelInputCoveragePct,sourceConflict:!!raw.sourceConflicts?.length,earningsConflict:!!raw.opportunityResearch?.earnings?.conflicts?.length,conflictFactors});
  if((index+1)%1000===0)process.stderr.write(`Compared ${index+1}/${lineFormat?input.rowCount:input.rows.length}\n`);
  index++;
 }
 assert.equal(new Set(rows.map(r=>r.symbol)).size,rows.length,'Duplicate symbols');
 assert.equal(rows.length,lineFormat?input.rowCount:input.rows.length,'Frozen universe is truncated');
-assert.equal(savedBaselineParity,rows.length,'Every frozen row must have a verified saved baseline');
+if(!unsavedReference)assert.equal(savedBaselineParity,rows.length,'Every frozen row must have a verified saved baseline');
 const binary=(a,b)=>a.symbol<b.symbol?-1:a.symbol>b.symbol?1:0;
 const before=[...rows].sort((a,b)=>b.before-a.before||binary(a,b)),after=[...rows].sort((a,b)=>b.after-a.after||binary(a,b));
 const rankBefore=new Map(before.map((r,i)=>[r.symbol,i+1]));
@@ -108,7 +120,8 @@ const conflictSlices={all:conflictSummary(rows),changed:conflictSummary(rows.fil
 const thesisReview={definition:'Thesis-qualified requires candidate-review action, source eligibility, available intrinsic model, reviewed catalyst, clean or mild financing-risk state, and no factor conflict. It is an evidence audit, not a return probability or trade recommendation.',all:evidenceSummary(rows),top20:evidenceSummary(after.slice(0,20)),top100:evidenceSummary(after.slice(0,100))};
 const topRankAudit={top20:after.slice(0,20).map(auditFlags),top100Counts:evidenceSummary(after.slice(0,100))};
 const cutoffs=[...asOfDates].sort();
-const report={status:'PASS',cutoffDate:cutoffs.at(-1)?.slice(0,10),input:{sha256:inputHash,runId:input.runId,rows:rows.length,asOf:{distinct:cutoffs.length,first:cutoffs[0],last:cutoffs.at(-1)}},baseline:{version:baselineVersion,savedParity:savedBaselineParity},candidate:{version:OPPORTUNITY_SPEC.version,rubricHash:opportunitySpecHash()},weights,acceptance:{numericFactors:rows.length*8,missingFactors:0,missingFinalGrades:0,retainedListings:rows.length,sortedListings:rows.length,independentComponentChecks:traceChecks,normalizationAndIdentifierControls:normalizationIdempotence,scoreSort:'descending, symbol BINARY ascending',predictiveClaim:false},changes:{changed,unchanged:rows.length-changed,increased:rows.filter(r=>r.delta>0).length,decreased:rows.filter(r=>r.delta<0).length,beforeZero:rows.filter(r=>r.before===0).length,afterZero:rows.filter(r=>r.after===0).length,factors:factorChanges,reviewedFactorCountBefore:reviewedBefore,reviewedFactorCountAfter:reviewedAfter},topSets,conflictSlices,thesisReview,topRankAudit,largestIncreases:[...rows].sort((a,b)=>b.delta-a.delta||binary(a,b)).slice(0,20).map(publicChange),largestDecreases:[...rows].sort((a,b)=>a.delta-b.delta||binary(a,b)).slice(0,20).map(publicChange),top20:after.slice(0,20).map(publicChange),limitations:['A single contemporary acquisition release cannot establish six-month realized outcomes or predictive improvement.','Source acquisition fixes are validated separately; this replay never invents newly acquired facts.','Complete numeric grades do not imply reviewed catalysts, fully diluted value, governance diligence or trading safety.','Composition by capitalization and sector is descriptive; no size or sector quota changes the ranking.']};
+const coverageSummary={weightedMeanPct:Number((rows.reduce((sum,row)=>sum+row.modelInputCoveragePct,0)/rows.length).toFixed(2)),byFactor:Object.fromEntries(Object.entries(inputCoverage).map(([id,value])=>[id,{...value,meanPct:Number((value.totalPct/rows.length).toFixed(2))}]))};
+const report={status:'PASS',cutoffDate:cutoffs.at(-1)?.slice(0,10),input:{sha256:inputHash,runId:input.runId,rows:rows.length,asOf:{distinct:cutoffs.length,first:cutoffs[0],last:cutoffs.at(-1)}},baseline:{version:baselineVersion,savedParity:unsavedReference?null:savedBaselineParity,comparisonMode:unsavedReference?'same-input-unsaved-reference':'saved-production-parity'},candidate:{version:OPPORTUNITY_SPEC.version,rubricHash:opportunitySpecHash()},weights,acceptance:{numericFactors:rows.length*8,missingFactors:0,missingFinalGrades:0,retainedListings:rows.length,sortedListings:rows.length,independentComponentChecks:traceChecks,normalizationAndIdentifierControls:normalizationIdempotence,scoreSort:'descending, symbol BINARY ascending',predictiveClaim:false},changes:{changed,unchanged:rows.length-changed,increased:rows.filter(r=>r.delta>0).length,decreased:rows.filter(r=>r.delta<0).length,beforeZero:rows.filter(r=>r.before===0).length,afterZero:rows.filter(r=>r.after===0).length,factors:factorChanges,reviewedFactorCountBefore:reviewedBefore,reviewedFactorCountAfter:reviewedAfter},inputCoverage:coverageSummary,topSets,conflictSlices,thesisReview,topRankAudit,largestIncreases:[...rows].sort((a,b)=>b.delta-a.delta||binary(a,b)).slice(0,20).map(publicChange),largestDecreases:[...rows].sort((a,b)=>a.delta-b.delta||binary(a,b)).slice(0,20).map(publicChange),top20:after.slice(0,20).map(publicChange),limitations:['A single contemporary acquisition release cannot establish six-month realized outcomes or predictive improvement.','Source acquisition fixes are validated separately; this replay never invents newly acquired facts.','Complete numeric grades do not imply reviewed catalysts, fully diluted value, governance diligence or trading safety.','Composition by capitalization and sector is descriptive; no size or sector quota changes the ranking.']};
 for(const detail of Object.values(factorChanges))detail.totalDelta=Number(detail.totalDelta.toFixed(2));
 if(output)fs.writeFileSync(output,JSON.stringify(report,null,2)+'\n');
 console.log(JSON.stringify(report,null,2));

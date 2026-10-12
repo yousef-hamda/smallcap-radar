@@ -1,5 +1,9 @@
 # Operations memory — Railway
 
+## October 12 candidate release hold (current)
+
+Rubric 1.5 / `4e4b7cc4` is implemented locally and compared against the frozen 7,517-row 1.2.6 production export and local 1.4 model. It is not deployed. A changed rubric causes saved evaluation/rank repair writes. The latest direct read-only `/app/data` observation showed **409,227,264** physical bytes free, with a 256 MiB scanner reserve; this does not establish safe headroom for rewriting 7,517 rows. The consistent private off-host backup is preserved under ignored `.verification/`. Production remains on 1.2.6, and the signed-in wallet hotfix remains the latest live application change. Before rollout, verify current volume capacity and backup restoration, arrange safe headroom without weakening reserves or deleting saved/private state, then deploy and check every saved grade/rank plus API/UI/export parity. A paid capacity increase requires user authorization. See the [candidate report](ALGORITHM_IMPROVEMENT_REPORT_2026_10_12.md).
+
 ## October 12 full-volume recovery (current)
 
 Production reached zero available bytes and emitted `SQLITE_IOERR_SHMSIZE`; both ranking and portfolio failed. The primary SQLite file was 4,812,001,280 bytes, with no useful disposable files on the volume. The repeating browser baton had written 1,061,346 `background` diagnostics. Recovery used a verified online copy outside `/app/data`, a private off-host compressed backup with matching compressed/decompressed hashes, then a compacted copy that deleted only those diagnostics and 7,821 re-fetchable `scan-history` cache entries. `integrity_check=ok` and exact source/archive/ranking/run/private-value comparisons passed before the swap. The on-volume copy's SHA-256 matched the compacted source. The original database family was replaced only after the backup was durable; metadata remained in place. Do not publish the private backup or its restored contents.

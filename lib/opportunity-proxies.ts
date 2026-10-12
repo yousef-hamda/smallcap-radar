@@ -121,10 +121,10 @@ export function proxyOpportunityEvidence(snapshot: Snapshot,horizonMonths:number
     &&(snapshot.provenance.backlog.scope??'consolidated')==='consolidated'
     &&(snapshot.provenance.revenue?.scope??'consolidated')==='consolidated'
     &&auditableUrl(snapshot.provenance.backlog.url);
-  set('catalysts', 'Observed growth and disclosed backlog approximate business momentum; a scheduled earnings event earns only limited timing credit, not positive impact.', [
-    component('growth-momentum', 50, ['revenueGrowth'], value => clamp(value * 25)),
-    { name: 'backlog', weight: 30, grade: backlogEligible ? clamp(backlog!.amount! / revenue! * 5) : null, keys: ['backlog','revenue'], values: [backlog?.amount ?? 'missing', revenue ?? 'missing'] },
-    { name: 'earnings-window', weight: 20, grade: inHorizon ? 2 : null, keys: ['nextEarnings'], values: [snapshot.nextEarnings ?? 'missing'] },
+  set('catalysts', 'Historical growth, disclosed backlog and an earnings date are discovery signals only. Their 50/30/20 input coverage is traced, but none establishes a source-reviewed material future event or earns catalyst points.', [
+    component('growth-momentum', 50, ['revenueGrowth'], () => 0),
+    { name: 'backlog', weight: 30, grade: backlogEligible ? 0 : null, keys: ['backlog','revenue'], values: [backlog?.amount ?? 'missing', revenue ?? 'missing'] },
+    { name: 'earnings-window', weight: 20, grade: inHorizon ? 0 : null, keys: ['nextEarnings'], values: [snapshot.nextEarnings ?? 'missing'] },
   ]);
   set('competitivePosition', 'Margins and growth approximate business quality; they do not establish a durable competitive moat.', [
     component('gross-margin', 30, ['grossMargin'], value => value * 15),

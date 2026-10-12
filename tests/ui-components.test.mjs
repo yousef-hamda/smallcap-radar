@@ -120,6 +120,18 @@ test('radar displays numeric final grades, source coverage and stable database r
  assert.match(storage,/ensureRunEvaluations/);
 });
 
+test('research-fit control keeps the full rank and names the evidence-limited view',async()=>{
+ const [page,route,storage]=await Promise.all(['app/page.tsx','app/api/radar/route.ts','lib/storage.ts'].map(file=>readFile(path.join(root,file),'utf8')));
+ assert.match(page,/fit=research/);
+ assert.match(page,/aria-pressed=\{researchFit\}/);
+ assert.match(page,/قائمة بحث أولية وليست فرص شراء مؤكدة/);
+ assert.match(page,/بيانات السوق قد تكون حقوق استخدامها غير محسومة/);
+ assert.match(page,/rank:payload\.rankPositions\?\.\[index\]/);
+ assert.match(route,/researchFit:activeStrategy==='opportunity'&&url\.searchParams\.get\('fit'\)==='research'/);
+ assert.match(storage,/INDEXED BY opportunity_rank_position_idx JOIN fundamental_snapshots/);
+ assert.match(storage,/ORDER BY CASE WHEN \$\{researchFitFinancingPassSql\} THEN 0 ELSE 1 END,r\.rank_position LIMIT \? OFFSET \?/);
+});
+
 test('profile renders sourced financial-strength gaps without filling missing figures with zero',async()=>{
  const {FinancialStrengthEvidence}=await vite.ssrLoadModule('/app/company-sheet.tsx');
  const research={providerStatus:'retrieved',metrics:{unrestrictedCash:{value:1250000,unit:'USD',source:{source:'SEC fixture',url:'https://www.sec.gov/Archives/edgar/data/1/',periodEnd:'2026-06-30',availableAt:'2026-08-01T00:00:00.000Z',retrievedAt:'2026-09-30T12:00:00.000Z',currency:'USD',rightsStatus:'redistribution-permitted',confidence:'high'} }},missing:['rolling year-two debt maturity unavailable'],conflicts:[],limitations:['Standard concepts only'],readyForScoring:false};

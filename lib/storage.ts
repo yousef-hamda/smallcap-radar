@@ -111,7 +111,52 @@ export async function readRankReleaseIdentity(runId:string,expectedToken?:string
  if(expectedToken&&(expectedToken!==token||Number(row.revision)!==Number(row.current_revision)||row.rubric_hash!==opportunitySpecHash()))throw Object.assign(Error('تغيّرت نسخة التقييم؛ حدّث القائمة قبل تحميل المزيد أو فتح الملف.'),{status:409});
  return {runId,revision:Number(row.revision),rubricHash:String(row.rubric_hash),token};
 }
-export async function readState(options:{strategy?:'opportunity'|'favorites';opportunityState?:'ranked'|'needs-research'|'excluded'|'all';limit?:number;offset?:number;owner?:string;query?:string;runId?:string;releaseToken?:string;view?:'compact'}={}){await ensureSchema();const d=db();const cacheKey=JSON.stringify([currentHash(),opportunitySpecHash(),options.strategy||'opportunity',options.opportunityState||'ranked',options.owner||'',options.query||'',options.limit??150,options.offset??0,options.runId,options.releaseToken,options.view]);
+/** A provisional research queue, never a second score or an eligibility gate.
+ * Market-data rights can be unknown here; the saved PASS/UNKNOWN safety checks
+ * remain visible and cannot be promoted by this filter. A current reviewed
+ * financing PASS comes first; canonical rank then breaks ties. */
+const RESEARCH_FIT_MAX_CAP=5_000_000_000;
+const researchFitFinancingPassSql=`EXISTS(SELECT 1 FROM json_each(s.evaluation,'$.opportunity.checks') c WHERE json_extract(c.value,'$.id')='thesis-financing' AND json_extract(c.value,'$.status')='PASS')`;
+const researchFitSql=`
+ json_extract(s.payload,'$.listingStatus')='current'
+ AND json_extract(s.payload,'$.securityType')='common'
+ AND json_extract(s.payload,'$.marketCap')>0
+ AND json_extract(s.payload,'$.marketCap')<=${RESEARCH_FIT_MAX_CAP}
+ AND json_extract(s.payload,'$.price')>0
+ AND json_extract(s.payload,'$.medianDollarVolume20d')>=150000
+ AND json_extract(s.payload,'$.opportunityResearch.financialStrength.industryModel')='industrial-operating-company'
+ AND CAST(json_extract(s.payload,'$.cik') AS INTEGER)>0
+ AND COALESCE(json_array_length(s.payload,'$.sourceConflicts'),0)=0
+ AND COALESCE(json_array_length(s.payload,'$.opportunityResearch.earnings.conflicts'),0)=0
+ AND COALESCE(json_extract(s.payload,'$.deathSpiral'),'unknown') NOT IN ('severe','elevated')
+ AND julianday(s.as_of)-julianday(json_extract(s.payload,'$.provenance.price.periodEnd')) BETWEEN 0 AND 7
+ AND julianday(s.as_of)-julianday(json_extract(s.payload,'$.provenance.marketCap.periodEnd')) BETWEEN 0 AND 7
+ AND julianday(s.as_of)-julianday(json_extract(s.payload,'$.provenance.medianDollarVolume20d.periodEnd')) BETWEEN 0 AND 7
+ AND json_extract(s.payload,'$.provenance.price.url') LIKE 'https://%'
+ AND json_extract(s.payload,'$.provenance.marketCap.url') LIKE 'https://%'
+ AND json_extract(s.payload,'$.provenance.medianDollarVolume20d.url') LIKE 'https://%'
+ AND julianday(json_extract(s.payload,'$.provenance.price.availableAt'))<=julianday(s.as_of)
+ AND julianday(json_extract(s.payload,'$.provenance.marketCap.availableAt'))<=julianday(s.as_of)
+ AND julianday(json_extract(s.payload,'$.provenance.medianDollarVolume20d.availableAt'))<=julianday(s.as_of)
+ AND julianday(json_extract(s.payload,'$.provenance.price.retrievedAt'))<=julianday(s.as_of)
+ AND julianday(json_extract(s.payload,'$.provenance.marketCap.retrievedAt'))<=julianday(s.as_of)
+ AND julianday(json_extract(s.payload,'$.provenance.medianDollarVolume20d.retrievedAt'))<=julianday(s.as_of)
+ AND json_extract(s.evaluation,'$.opportunity.factors[0].score')>0
+ AND json_array_length(s.evaluation,'$.opportunity.factors[0].sources')>0
+ AND json_extract(s.payload,'$.opportunityResearch.earnings.annual[#-1].metrics.revenue.value')>0
+ AND json_extract(s.payload,'$.opportunityResearch.earnings.annual[#-1].metrics.revenue.unit')='USD'
+ AND json_extract(s.payload,'$.opportunityResearch.earnings.annual[#-1].metrics.revenue.source.source') LIKE 'SEC Company Facts%'
+ AND json_extract(s.payload,'$.opportunityResearch.earnings.annual[#-1].metrics.revenue.source.url')='https://data.sec.gov/api/xbrl/companyfacts/CIK' || printf('%010d',CAST(json_extract(s.payload,'$.cik') AS INTEGER)) || '.json'
+ AND json_extract(s.payload,'$.opportunityResearch.earnings.annual[#-1].metrics.revenue.source.rightsStatus')='redistribution-permitted'
+ AND json_extract(s.payload,'$.opportunityResearch.earnings.annual[#-1].metrics.revenue.source.currency')='USD'
+ AND COALESCE(json_extract(s.payload,'$.opportunityResearch.earnings.annual[#-1].metrics.revenue.source.scope'),'consolidated')='consolidated'
+ AND julianday(json_extract(s.payload,'$.opportunityResearch.earnings.annual[#-1].metrics.revenue.source.availableAt'))<=julianday(s.as_of)
+ AND julianday(json_extract(s.payload,'$.opportunityResearch.earnings.annual[#-1].metrics.revenue.source.retrievedAt'))<=julianday(s.as_of)
+ AND julianday(s.as_of)-julianday(json_extract(s.payload,'$.opportunityResearch.earnings.annual[#-1].end')) BETWEEN 0 AND 450
+ AND EXISTS(SELECT 1 FROM json_each(s.evaluation,'$.opportunity.checks') c WHERE json_extract(c.value,'$.id')='security' AND json_extract(c.value,'$.status')='PASS')
+ AND NOT EXISTS(SELECT 1 FROM json_each(s.evaluation,'$.opportunity.checks') c WHERE json_extract(c.value,'$.id') IN ('market-cap','liquidity','price') AND json_extract(c.value,'$.status')='FAIL')`;
+
+export async function readState(options:{strategy?:'opportunity'|'favorites';opportunityState?:'ranked'|'needs-research'|'excluded'|'all';researchFit?:boolean;limit?:number;offset?:number;owner?:string;query?:string;runId?:string;releaseToken?:string;view?:'compact'}={}){await ensureSchema();const d=db();const cacheKey=JSON.stringify([currentHash(),opportunitySpecHash(),options.strategy||'opportunity',options.opportunityState||'ranked',options.researchFit===true,options.owner||'',options.query||'',options.limit??150,options.offset??0,options.runId,options.releaseToken,options.view]);
  if(options.runId&&options.releaseToken)await readRankReleaseIdentity(options.runId,options.releaseToken);
  const cached=stateCache.get(cacheKey);if(cached&&cached.expiresAt>Date.now())return cached.value;if(cached)stateCache.delete(cacheKey);const active=await d.prepare("SELECT * FROM strategy_runs WHERE strategy_hash=? ORDER BY CASE WHEN source LIKE 'Bulk Quotes/%' AND status IN ('running','partial') AND stage<13 THEN 0 ELSE 1 END,updated_at DESC,created_at DESC LIMIT 1").bind(currentHash()).first();
  // A quick sample may be newer than a full scan. It must not silently replace
@@ -179,7 +224,10 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
   queryForPage=`WITH ranked AS (SELECT s.payload,s.evaluation,s.symbol,r.rank_position FROM fundamental_snapshots s JOIN opportunity_rankings r ON r.run_id=s.run_id AND r.symbol=s.symbol WHERE s.run_id=?) SELECT payload,evaluation,rank_position FROM ranked WHERE (?='' OR instr(lower(symbol),?)>0 OR instr(lower(json_extract(payload,'$.name')),?)>0)`;
   queryForPage+=` AND (?='all' OR json_extract(evaluation,'$.opportunity.state')=? OR json_extract(evaluation,'$.opportunity.researchState')=?) ORDER BY rank_position LIMIT ? OFFSET ?`;
   queryParams=[...params,requested,requested,requested,limit+1,offset];
-  if (!search && (requested==='all'||requested==='ranked')) {
+  if(options.researchFit===true&&strategy==='opportunity'){
+   queryForPage=`SELECT s.payload,s.evaluation,r.rank_position FROM opportunity_rankings r INDEXED BY opportunity_rank_position_idx JOIN fundamental_snapshots s ON s.run_id=r.run_id AND s.symbol=r.symbol WHERE r.run_id=? AND ${researchFitSql} AND (?='' OR instr(lower(s.symbol),?)>0 OR instr(lower(json_extract(s.payload,'$.name')),?)>0) ORDER BY CASE WHEN ${researchFitFinancingPassSql} THEN 0 ELSE 1 END,r.rank_position LIMIT ? OFFSET ?`;
+   queryParams=[latest.id,search,search,search,limit+1,offset];
+  } else if (!search && (requested==='all'||requested==='ranked')) {
    // Rank keys drive the page. LIMIT is applied before any large JSON payload
    // is joined; the outer order sorts only the requested page, not the universe.
    queryForPage=`SELECT s.payload,s.evaluation,r.rank_position FROM (SELECT run_id,symbol,rank_position FROM opportunity_rankings INDEXED BY opportunity_rank_position_idx WHERE run_id=? ORDER BY rank_position LIMIT ? OFFSET ?) r JOIN fundamental_snapshots s ON s.run_id=r.run_id AND s.symbol=r.symbol ORDER BY r.rank_position`;

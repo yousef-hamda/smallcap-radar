@@ -606,6 +606,50 @@ test('unified opportunity pages keep incomplete companies in research and never 
  assert.deepEqual(all.rankPositions,[1,2,3,4,5,6,7]);
 });
 
+test('research-fit pages retain canonical scores and ranks while requiring current operating evidence',async()=>{
+ const runId='research-fit-pages',asOf='2026-10-10T20:00:00.000Z',marketDay='2026-10-09';
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES(?,?,?,'complete','Research fit · full',8,8,13,?)").bind(runId,'2100-01-01','2100-01-01',currentHash()).run();
+ const market={source:'Market fixture with unresolved reuse rights',url:'https://example.com/market',periodEnd:marketDay,availableAt:'2026-10-09T21:00:00.000Z',retrievedAt:'2026-10-10T18:00:00.000Z',rightsStatus:'unknown',confidence:'high',currency:'USD'};
+ const official={source:'Official listing fixture',url:'https://www.nasdaqtrader.com/symbol-directory',periodEnd:marketDay,availableAt:'2026-10-09T21:00:00.000Z',retrievedAt:'2026-10-10T18:00:00.000Z',rightsStatus:'public-domain',confidence:'high'};
+ const sec={source:'SEC Company Facts fixture',url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0000000001.json',periodStart:'2025-01-01',periodEnd:'2025-12-31',availableAt:'2026-02-01T00:00:00.000Z',retrievedAt:'2026-10-10T18:00:00.000Z',rightsStatus:'redistribution-permitted',confidence:'high',currency:'USD',scope:'consolidated'};
+ const balance={...sec,periodStart:undefined};
+ const annualMetric=value=>({value,unit:'USD',source:sec});
+ const researched={earnings:{providerStatus:'retrieved',coverage:{annualPeriodsFound:1,quarterlyPeriodsFound:0,selectedUnit:'USD'},annual:[{start:'2025-01-01',end:'2025-12-31',metrics:{revenue:annualMetric(100_000_000)}}],quarterly:[],missing:[],conflicts:[],limitations:[],readyForScoring:false},financialStrength:{providerStatus:'retrieved',industryModel:'industrial-operating-company',metrics:{},missing:[],conflicts:[],limitations:[],readyForScoring:false}};
+ const make=(symbol,overrides={})=>({...base,symbol,asOf,cik:1,listingStatus:'current',securityType:'common',exchange:'Nasdaq',price:10,marketCap:100_000_000,medianDollarVolume20d:250_000,revenue:100_000_000,netIncome:10_000_000,fcf:12_000_000,cash:30_000_000,debt:1_000_000,ps:1,evSales:1,dilution:0,splitAdjusted:true,opportunityResearch:researched,provenance:{...base.provenance,securityType:official,exchange:official,price:market,marketCap:market,medianDollarVolume20d:market,revenue:sec,netIncome:sec,fcf:sec,cash:balance,debt:balance,ps:market,evSales:market,dilution:market},...overrides});
+ const wrongIssuerResearch=structuredClone(researched);
+ wrongIssuerResearch.earnings.annual[0].metrics.revenue.source.url='https://data.sec.gov/api/xbrl/companyfacts/CIK0000000002.json';
+ const cases=[make('FIT-A'),make('FIT-MICRO',{marketCap:5_000_000}),make('FIT-B',{marketCap:4_500_000_000}),make('FIT-MEGA',{marketCap:5_000_000_001}),make('FIT-WARRANT',{securityType:'warrant'}),make('FIT-RISK',{debt:300_000_000}),make('FIT-LIQUIDITY',{medianDollarVolume20d:100_000}),make('FIT-ISSUER',{opportunityResearch:wrongIssuerResearch})];
+ for(const snapshot of cases)await insertSnapshot(runId,snapshot).run();
+ invalidateStateCache();
+ const full=await readState({runId,limit:20});
+ const fullBySymbol=new Map(full.snapshots.map((row,index)=>[row.symbol,{rank:full.rankPositions[index],score:full.storedEvaluations[index].opportunity.score}]));
+ const firstResponse=await GET(new Request('https://radar.test/api/radar?fit=research&limit=1'));
+ assert.equal(firstResponse.status,200);const first=await firstResponse.json();
+ assert.equal(first.page.hasMore,true);assert.equal(first.snapshots.length,1);
+ assert.equal(first.storedEvaluations[0].opportunity.checks.find(check=>check.id==='market-cap').status,'UNKNOWN','a provisional research result must retain the unresolved market-rights badge');
+ const pin=`runId=${encodeURIComponent(first.release.runId)}&release=${encodeURIComponent(first.release.token)}`;
+ const secondResponse=await GET(new Request(`https://radar.test/api/radar?fit=research&limit=1&offset=1&${pin}`));
+ assert.equal(secondResponse.status,200);const second=await secondResponse.json();
+ const third=await (await GET(new Request(`https://radar.test/api/radar?fit=research&limit=1&offset=2&${pin}`))).json();
+ const rows=[...first.snapshots,...second.snapshots,...third.snapshots];
+ assert.deepEqual(new Set(rows.map(row=>row.symbol)),new Set(['FIT-A','FIT-B','FIT-MICRO']));
+ assert.equal(third.page.hasMore,false);
+ for(const page of [first,second,third]){
+  assert.equal(page.summary.total,8);
+  const symbol=page.snapshots[0].symbol,original=fullBySymbol.get(symbol);
+  assert.equal(page.rankPositions[0],original.rank);
+  assert.equal(page.storedEvaluations[0].opportunity.score,original.score);
+  assert.equal(page.release.token,full.release.token);
+ }
+ const searched=await (await GET(new Request(`https://radar.test/api/radar?fit=research&q=FIT-MICRO&${pin}`))).json();
+ assert.deepEqual(searched.snapshots.map(row=>row.symbol),['FIT-MICRO']);
+ assert.equal(searched.rankPositions[0],fullBySymbol.get('FIT-MICRO').rank);
+ await db().prepare('DELETE FROM fundamental_snapshots WHERE run_id=?').bind(runId).run();
+ await db().prepare('DELETE FROM opportunity_rankings WHERE run_id=?').bind(runId).run();
+ await db().prepare('DELETE FROM opportunity_rank_versions WHERE run_id=?').bind(runId).run();
+ await db().prepare('DELETE FROM strategy_runs WHERE id=?').bind(runId).run();invalidateStateCache();
+});
+
 
 test('radar preserves canonical scored quotes when a deep cache is newer',async()=>{
  const now='2101-01-01T00:00:00.000Z',symbols=Array.from({length:20},(_,index)=>`PAGE${index}`);
@@ -630,12 +674,14 @@ test('latest scan report uses the same recomputed factor coverage as opportunity
  invalidateStateCache();
  const response=await reportGET(new Request('https://radar.test/api/scan-report?runId=report-current&strategy=opportunity'));
  assert.equal(response.status,200);const payload=await response.json();
- assert.equal(payload.run.id,'report-current');assert.equal(payload.counts.total,1);assert.equal(payload.counts.withEvidence,1);
+ assert.equal(payload.run.id,'report-current');assert.equal(payload.counts.total,1);assert.equal(payload.counts.withEvidence,0);
  assert.equal(payload.rows[0].symbol,'REPORT-CURRENT');assert.equal(payload.blockers.filter(blocker=>!blocker.id.startsWith('eligibility-')&&!blocker.id.startsWith('evidence-')).length,8);
  const eligibility=payload.blockers.filter(blocker=>blocker.id.startsWith('eligibility-'));
  assert.equal(eligibility.length,payload.rows[0].evaluation.checks.filter(check=>check.role==='eligibility'&&check.status!=='PASS').length);assert(eligibility.every(blocker=>blocker.count===1&&blocker.status==='UNKNOWN'));
  for(const factor of payload.rows[0].evaluation.factors)assert.equal(payload.blockers.find(blocker=>blocker.id===factor.id)?.count,factor.complete?0:1);
- assert.equal(payload.rows[0].evaluation.factors[0].evidenced,true);assert.equal(payload.rows[0].evaluation.factors[0].complete,false);
+ assert.equal(payload.rows[0].evaluation.factors[0].evidenced,false);assert.equal(payload.rows[0].evaluation.factors[0].complete,false);
+ assert.equal(payload.rows[0].evaluation.coveragePct,0);
+ assert(payload.rows[0].evaluation.modelInputCoveragePct>=0&&payload.rows[0].evaluation.modelInputCoveragePct<=100);
 });
 
 test('all listings retain canonical saved grades, full-universe ranks, reports and profiles across reloads',async()=>{
@@ -943,4 +989,8 @@ test('archive summaries bound duplicate trace storage while restoring exact evid
  const rowId=id+':'+snapshot.symbol,payload=JSON.stringify(snapshot),evaluation=JSON.stringify(value);await db().batch(await archivedWriteStatements(rowId,payload,evaluation));
  const row=await db().prepare('SELECT id,payload,evaluation FROM fundamental_snapshots WHERE id=?').bind(rowId).first();assert(Buffer.byteLength(row.payload)+Buffer.byteLength(row.evaluation)<7000);assert.equal(JSON.parse(row.payload).__archiveSummaryVersion,2);
  const restored=await restoreArchivedRow(row);assert.equal(restored.payload,payload);assert.equal(restored.evaluation,evaluation);assert.deepEqual(JSON.parse(row.evaluation).opportunity.factors.map(f=>f.score),value.opportunity.factors.map(f=>f.score));assert.equal(JSON.parse(row.evaluation).opportunity.evaluationHash,value.opportunity.evaluationHash);
+ const inlineGrade=JSON.parse(row.evaluation).opportunity;
+ assert.equal(inlineGrade.modelInputCoveragePct,value.opportunity.modelInputCoveragePct);
+ assert.deepEqual(inlineGrade.factors.map(f=>f.modelInputCoveragePct),value.opportunity.factors.map(f=>f.modelInputCoveragePct));
+ assert.equal((await import('../../.test-build/opportunity-engine.mjs')).isCurrentOpportunityEvaluation(inlineGrade),true);
 });

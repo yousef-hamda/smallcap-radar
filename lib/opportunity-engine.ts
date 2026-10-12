@@ -1,6 +1,6 @@
 import type { Snapshot, Provenance, Status } from './engine';
 import { proxyOpportunityEvidence } from './opportunity-proxies';
-import { modelFactorConflicts } from './opportunity-conflicts';
+import { conflictAffectsKeys, modelFactorConflicts } from './opportunity-conflicts';
 import { usableEvidence, evidenceTimestamp, validEvidenceConversion } from './evidence';
 import { OPPORTUNITY_SPEC, opportunitySpecHash, type OpportunityFactorId, type OpportunityRiskTolerance } from './opportunity-spec';
 import { financialIntegrityFindings, operatingIssuerMetricsApplicable, commonPerShareMetricsApplicable } from './financial-integrity';
@@ -41,6 +41,8 @@ export type OpportunityEvaluation = {
   evidencedWeight: number;
   coveragePct: number;
   algorithmicCoveragePct: number;
+  /** Fixed-weight share of proxy components with usable observed inputs. */
+  modelInputCoveragePct: number;
   confidence: 'low' | 'medium' | 'high';
   rankingEligible: boolean;
   thesis: OpportunityThesis;
@@ -54,6 +56,7 @@ export type OpportunityEvaluation = {
     complete: boolean;
     coveragePct: number;
     algorithmicCoveragePct: number;
+    modelInputCoveragePct: number;
     confidence: 'low' | 'medium' | 'high';
     rationale: string;
     sources: Provenance[];
@@ -70,28 +73,63 @@ const finite = (value: unknown): value is number => typeof value === 'number' &&
 /** A researched event must have auditable economics before it can support the
  * investment thesis. Proxy growth, backlog and an earnings date are discovery
  * signals; they cannot pass this separate decision gate. */
-function hasMaterialReviewedCatalyst(factor: OpportunityEvaluation['factors'][number] | undefined, asOf: string, horizonMonths: number) {
-  if (!factor?.complete || factor.proxy || factor.calculation?.rubricId !== 'catalysts-v2-explicit-units') return false;
+function materialReviewedCatalystScore(factor: OpportunityEvidence | undefined, asOf: string, horizonMonths: number): number | null {
+  if (!factor || factor.proxy || factor.calculation?.rubricId !== 'catalysts-v2-explicit-units'
+    || !finite(factor.score) || factor.score <= 0 || !factor.sources.length
+    || factor.sources.some(source => !isOpportunityProvenanceValid(source, asOf))) return null;
   const inputs = new Map(factor.calculation.inputs.map(input => [input.name, input]));
+  if (inputs.size !== factor.calculation.inputs.length || inputs.get('documented-search')?.value !== 1
+    || inputs.get('event-aggregation')?.value !== 'strongest independently scored event; no announcement-count bonus'
+    || inputs.get('horizon-months')?.value !== horizonMonths
+    || !Number.isInteger(inputs.get('in-horizon-events')?.value) || Number(inputs.get('in-horizon-events')?.value) < 1) return null;
   const horizonEnd = Date.parse(asOf) + horizonMonths * 30.4375 * 86_400_000;
-  return factor.calculation.inputs.some(input => {
-    if (!input.name.startsWith('event:') || !input.name.endsWith(':classification')) return false;
+  const qualified: number[] = [];
+  const eventScores: number[] = [];
+  const certaintyCeilings: Record<string, number> = {
+    'realized-revenue': 9, 'binding-contract': 8, 'funded-conditional': 6,
+    regulatory: 5, operational: 5, 'customer-expansion': 6, guidance: 4,
+    'non-binding': 2, unverified: 0,
+  };
+  for (const input of factor.calculation.inputs) {
+    if (!input.name.startsWith('event:') || !input.name.endsWith(':classification')) continue;
     const prefix = input.name.slice(0, -'classification'.length);
-    const classification = input.value;
+    const classification = String(input.value);
     const impact = inputs.get(`${prefix}impact`);
     const unit = impact?.unit?.trim().toLowerCase();
     const ratio = unit === 'ratio-of-ttm-revenue' || unit === 'fraction-of-ttm-revenue'
-      ? impact?.value : unit === 'percent-of-ttm-revenue' || unit === '%-of-ttm-revenue'
+      ? Number(impact?.value) : unit === 'percent-of-ttm-revenue' || unit === '%-of-ttm-revenue'
         ? Number(impact?.value) / 100 : null;
     const certainty = inputs.get(`${prefix}certainty`)?.value;
-    const expected = Date.parse(String(inputs.get(`${prefix}expected-at`)?.value ?? ''));
+    const expected = evidenceTimestamp(String(inputs.get(`${prefix}expected-at`)?.value ?? ''));
     const pricing = inputs.get(`${prefix}market-pricing`)?.value;
-    return ['binding-contract', 'funded-conditional', 'realized-revenue'].includes(String(classification))
-      && typeof ratio === 'number' && Number.isFinite(ratio) && ratio >= 0.05
-      && typeof certainty === 'number' && certainty >= 6
-      && Number.isFinite(expected) && expected >= Date.parse(asOf) && expected <= horizonEnd
-      && (pricing === 'not-priced' || pricing === 'partly-priced');
-  });
+    const eventScore = inputs.get(`${prefix}score`)?.value;
+    const materiality = inputs.get(`${prefix}materiality`)?.value;
+    const timing = inputs.get(`${prefix}timing`)?.value;
+    const pricingGrade = inputs.get(`${prefix}pricing`)?.value;
+    const validRatio = ratio === null || (typeof impact?.value === 'number' && finite(ratio) && ratio >= 0);
+    const expectedMateriality = ratio == null ? 0 : ratio === 0 ? 0 : ratio < .01 ? 1 : ratio < .05 ? 3 : ratio < .1 ? 5 : ratio < .25 ? 7 : ratio < .5 ? 8 : 9;
+    const daysToEvent = (expected - Date.parse(asOf)) / 86_400_000;
+    const expectedTiming = daysToEvent <= 30 ? 9 : daysToEvent <= 90 ? 8 : daysToEvent <= 180 ? 7 : 5;
+    const expectedPricing = pricing === 'not-priced' ? 9 : pricing === 'partly-priced' ? 6 : pricing === 'priced' ? 2 : pricing === 'unknown' ? 3 : null;
+    const ceiling = classification === 'non-binding' ? 3 : classification === 'unverified' ? 1 : classification === 'guidance' ? 5 : 10;
+    if (!(classification in certaintyCeilings) || !finite(certainty) || certainty < 0 || certainty > certaintyCeilings[classification]
+      || !Number.isFinite(expected) || expected < Date.parse(asOf) || expected > horizonEnd
+      || !validRatio || materiality !== expectedMateriality || timing !== expectedTiming
+      || expectedPricing === null || pricingGrade !== expectedPricing || !finite(eventScore)
+      || Math.abs(eventScore - Math.round(Math.min(certainty * .4 + expectedMateriality * .3 + expectedTiming * .2 + expectedPricing * .1, ceiling) * 100) / 100) > .011) return null;
+    eventScores.push(eventScore);
+    if (['binding-contract', 'funded-conditional', 'realized-revenue'].includes(classification)
+      && finite(ratio) && ratio >= .05 && certainty >= 6
+      && (pricing === 'not-priced' || pricing === 'partly-priced')) qualified.push(eventScore);
+  }
+  const originalGrade = inputs.get('reviewed-original-grade')?.value ?? factor.score;
+  if (eventScores.length !== inputs.get('in-horizon-events')!.value
+    || !finite(originalGrade) || Math.abs(Math.max(...eventScores) - originalGrade) > .011) return null;
+  return qualified.length ? Math.max(...qualified) : null;
+}
+
+function hasMaterialReviewedCatalyst(factor: OpportunityEvaluation['factors'][number] | undefined, asOf: string, horizonMonths: number) {
+  return !!factor?.complete && materialReviewedCatalystScore(factor, asOf, horizonMonths) !== null;
 }
 
 function marketWeekdayAge(availableAt: string, asOf: string) {
@@ -233,32 +271,38 @@ export function evaluateOpportunity(
     // Model grades already use their complete fixed component denominator.
     const applicable = snapshot.listingStatus!=='not-confirmed-current' && (spec.id === 'technicalTiming' || (operatingIssuerMetricsApplicable(snapshot)
       && (spec.id !== 'valuation' || commonPerShareMetricsApplicable(snapshot))));
-    const useReviewed = applicable && evidenced && !proxy;
+    // A generic grade or an unmaterial event cannot turn historical momentum,
+    // backlog, or a calendar date into the user's future-catalyst thesis.
+    const catalystScore = spec.id === 'catalysts' ? materialReviewedCatalystScore(candidate, snapshot.asOf, horizonMonths) : null;
+    const catalystQualified = spec.id !== 'catalysts' || catalystScore !== null;
+    const useReviewed = applicable && evidenced && !proxy && catalystQualified;
     const score = !applicable ? 0 : useReviewed
-      ? Math.round(Math.round(candidate!.score! * 100) * Math.round(rawCoverage * 100) / 10000) / 100
+      ? Math.round(Math.round((catalystScore ?? candidate!.score!) * 100) * Math.round(rawCoverage * 100) / 10000) / 100
       : Math.round((assessmentConflicts.length ? 0 : model.score!) * 100) / 100;
     const algorithmicCoveragePct = 100;
-    const coveragePct = applicable && evidenced ? rawCoverage : 0;
+    const modelInputCoveragePct = applicable ? Math.max(0, Math.min(100, model.coveragePct ?? 0)) : 0;
+    const coveragePct = useReviewed ? rawCoverage : 0;
     const points = Math.round(score * 100) * spec.weight / 1000;
-    const complete = applicable && evidenced && !proxy && coveragePct === 100;
-    if (applicable && evidenced) evidencedWeight += spec.weight * coveragePct / 100;
+    const complete = useReviewed && coveragePct === 100;
+    if (useReviewed) evidencedWeight += spec.weight * coveragePct / 100;
     return {
       id: spec.id,
       label: spec.label,
       weight: spec.weight,
       score,
       points,
-      evidenced: applicable && evidenced,
+      evidenced: useReviewed,
       complete,
       coveragePct,
       algorithmicCoveragePct,
+      modelInputCoveragePct,
       // Missing confidence on otherwise auditable evidence is uncertainty, not
       // proof of low-quality evidence. It can never contribute to high overall
       // confidence, but it may support medium confidence for a complete rank.
-      confidence: applicable && evidenced ? candidate!.confidence ?? 'medium' : 'low',
-      rationale: !applicable ? 'Instrument payoff or ADR conversion is unverified; operating-company points are withheld. This listing retains its final numeric grade and ranking.' : useReviewed ? `${candidate!.rationale} Final factor grade includes ${rawCoverage}% reviewed coverage; missing dimensions earn zero.` : assessmentConflicts.length ? `Factor assessment conflict: ${assessmentConflicts.join('; ')}; this factor is withheld until reconciled.` : conflicts.length ? `${model.rationale} Conflicted inputs are withheld; independent component points remain diagnostic only.` : proxy ? candidate!.rationale : `${candidate?.rationale ?? ''} ${model.rationale}`,
+      confidence: useReviewed ? candidate!.confidence ?? 'medium' : 'low',
+      rationale: !applicable ? 'Instrument payoff or ADR conversion is unverified; operating-company points are withheld. This listing retains its final numeric grade and ranking.' : useReviewed ? `${candidate!.rationale} ${catalystScore !== null ? `Only the strongest qualifying material event earns catalyst credit (${catalystScore}/10). ` : ''}Final factor grade includes ${rawCoverage}% reviewed coverage; missing dimensions earn zero.` : assessmentConflicts.length ? `Factor assessment conflict: ${assessmentConflicts.join('; ')}; this factor is withheld until reconciled.` : conflicts.length ? `${model.rationale} Conflicted inputs are withheld; independent component points remain diagnostic only.` : spec.id === 'catalysts' && candidate && !catalystQualified ? `${candidate.rationale} ${model.rationale} Supplied catalyst review does not establish a source-reviewed, quantified, material event within the horizon; no catalyst points are awarded.` : proxy ? candidate!.rationale : `${candidate?.rationale ?? ''} ${model.rationale}`,
       sources: useReviewed ? sources : model.sources,
-      calculation: !applicable ? model.calculation : useReviewed ? { ...candidate!.calculation!, inputs: [...candidate!.calculation!.inputs, { name: 'reviewed-grade', value: candidate!.score! }, { name: 'reviewed-coverage-pct', value: rawCoverage }] } : model.calculation,
+      calculation: !applicable ? model.calculation : useReviewed ? { ...candidate!.calculation!, inputs: [...candidate!.calculation!.inputs, ...(catalystScore !== null ? [{ name: 'reviewed-original-grade', value: candidate!.score! }, { name: 'qualified-material-event-score', value: catalystScore }] : []), { name: 'reviewed-grade', value: catalystScore ?? candidate!.score! }, { name: 'reviewed-coverage-pct', value: rawCoverage }] } : model.calculation,
       conflicts,
       ...(!useReviewed ? { proxy: true } : {}),
     };
@@ -266,6 +310,7 @@ export function evaluateOpportunity(
 
   const coveragePct = evidencedWeight;
   const algorithmicCoveragePct = Math.round(factors.reduce((total, factor) => total + (factor.algorithmicCoveragePct * factor.weight / 100), 0) * 100) / 100;
+  const modelInputCoveragePct = Math.round(factors.reduce((total, factor) => total + (factor.modelInputCoveragePct * factor.weight / 100), 0) * 100) / 100;
   const requiredFactorsPresent = OPPORTUNITY_SPEC.requiredRankedFactors.every(id => factors.find(factor => factor.id === id)?.complete);
   const sourceEligible = !hardFailure
     && !hardUnknown
@@ -293,7 +338,14 @@ export function evaluateOpportunity(
 
   const thesis=buildOpportunityThesis(snapshot,horizonMonths);
   const materialReviewedCatalyst = hasMaterialReviewedCatalyst(factors.find(factor => factor.id === 'catalysts'), snapshot.asOf, horizonMonths);
-  const financingReviewed = snapshot.deathSpiral === 'clean' || snapshot.deathSpiral === 'mild';
+  const financingSource = snapshot.provenance.deathSpiral;
+  const sourcedFinancingLevel = financingSource?.tag?.match(/(?:^|;)\s*financing-risk-v2;\s*(clean|mild|elevated|severe)(?:;|$)/)?.[1];
+  const financingReviewed = (snapshot.deathSpiral === 'clean' || snapshot.deathSpiral === 'mild')
+    && !!financingSource && isOpportunityProvenanceValid(financingSource, snapshot.asOf)
+    && sourcedFinancingLevel === snapshot.deathSpiral
+    && (Date.parse(snapshot.asOf) - Date.parse(financingSource.periodEnd)) / 86_400_000 <= 400
+    && !conflictAffectsKeys(snapshot.sourceConflicts, ['cash','debt','debtTotal','debtCurrent','debtNoncurrent','fcf','ocf','capex','netIncome','shares','priorShares','dilution','deathSpiral'])
+    && !(snapshot.opportunityResearch?.financialStrength?.conflicts?.length);
   add('thesis-catalyst', materialReviewedCatalyst ? 'PASS' : 'UNKNOWN', materialReviewedCatalyst
     ? 'A source-reviewed, quantified event within the horizon has material revenue impact, verified progress, and unresolved pricing upside.'
     : 'No source-reviewed material future catalyst qualifies. Historical growth, backlog and scheduled earnings are research signals only.', 'evidence');
@@ -319,6 +371,7 @@ export function evaluateOpportunity(
     evidencedWeight,
     coveragePct,
     algorithmicCoveragePct,
+    modelInputCoveragePct,
     confidence,
     rankingEligible,
     factors,
@@ -346,16 +399,19 @@ export function isCurrentOpportunityEvaluation(value: unknown): value is Opportu
     && evaluation.state === 'ranked' && evaluation.rankingEligible === true
     && finite(evaluation.score) && evaluation.score >= 0 && evaluation.score <= 100
     && Math.abs(evaluation.score * 100 - Math.round(evaluation.score * 100)) < 1e-8
+    && finite(evaluation.modelInputCoveragePct) && evaluation.modelInputCoveragePct >= 0 && evaluation.modelInputCoveragePct <= 100
     && Array.isArray(evaluation.factors) && evaluation.factors.length === 8
     && OPPORTUNITY_SPEC.factors.every((spec, index) => {
       const matches = evaluation.factors.filter(factor => factor.id === spec.id);
       const factor = matches[0];
       return matches.length === 1 && evaluation.factors[index].id === spec.id && factor.weight === spec.weight && finite(factor.score)
+        && finite(factor.modelInputCoveragePct) && factor.modelInputCoveragePct >= 0 && factor.modelInputCoveragePct <= 100
         && factor.score >= 0 && factor.score <= 10 && finite(factor.points)
         && Math.abs(factor.score * 100 - Math.round(factor.score * 100)) < 1e-8
         && Math.abs(factor.points - Math.round(factor.score * 100) * spec.weight / 1000) < 1e-8
         && !!factor.calculation?.rubricId && factor.calculation.inputs.length > 0;
-    }) && Math.abs(evaluation.score - opportunityWeightedScore(evaluation.factors)) < 1e-8;
+    }) && Math.abs(evaluation.score - opportunityWeightedScore(evaluation.factors)) < 1e-8
+    && Math.abs(evaluation.modelInputCoveragePct - Math.round(evaluation.factors.reduce((sum, factor) => sum + factor.modelInputCoveragePct * factor.weight / 100, 0) * 100) / 100) < 1e-8;
 }
 
 export function opportunitySnapshotHash(snapshot: Snapshot) { return evaluationFingerprint(snapshot); }
