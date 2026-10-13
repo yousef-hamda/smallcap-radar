@@ -1,5 +1,9 @@
 # Operations memory — Railway
 
+## October 13 capacity and rollout gate (current)
+
+Read-only `railway ssh -- df -B1 /app/data` reported **266,846,208 bytes available** of 4,838,498,304 on October 13, below the scanner's 256 MiB reserve of 268,435,456 bytes. The tested 1.5.1 candidate would repair/re-rank 7,517 saved rows on production; do not deploy the changed rubric or start a source scan at this capacity. The existing private off-host backup remains preserved. No live database, volume, subscription, deployment or scan state was changed in this wave. A recurring-cost volume resize requires explicit owner authorization. Once safe headroom is arranged, recheck the backup and volume, deploy, allow the bounded saved-row repair, then prove complete rank/API/export/profile parity and monitor volume. See [the new report](RATING_AND_STOCK_VIEW_REPORT_2026_10_13.md).
+
 ## October 12 candidate release hold (current)
 
 Rubric 1.5 / `4e4b7cc4` is implemented locally and compared against the frozen 7,517-row 1.2.6 production export and local 1.4 model. It is not deployed. A changed rubric causes saved evaluation/rank repair writes. The latest direct read-only `/app/data` observation showed **409,227,264** physical bytes free, with a 256 MiB scanner reserve; this does not establish safe headroom for rewriting 7,517 rows. The consistent private off-host backup is preserved under ignored `.verification/`. Production remains on 1.2.6, and the signed-in wallet hotfix remains the latest live application change. Before rollout, verify current volume capacity and backup restoration, arrange safe headroom without weakening reserves or deleting saved/private state, then deploy and check every saved grade/rank plus API/UI/export parity. A paid capacity increase requires user authorization. See the [candidate report](ALGORITHM_IMPROVEMENT_REPORT_2026_10_12.md).

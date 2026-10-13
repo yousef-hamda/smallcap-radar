@@ -2,6 +2,7 @@ import { INVESTABLE_EXCHANGES, SPECS, specHash } from './strategy-spec';
 import type { FilingObservation } from './filing-observations';
 import type { TechnicalResearchState } from './opportunity-market';
 import {usableEvidence} from './evidence';
+import {hasVerifiedShareRatio} from './research';
 export { SPECS, specHash } from './strategy-spec';
 export type { StrategyKey } from './strategy-spec';
 export type Provenance={dependencies?:Provenance[];scope?:string;metricScope?:string;accession?:string;parserVersion?:string;contentHash?:string;source:string;url?:string;periodStart?:string;periodEnd:string;availableAt:string;retrievedAt:string;currency?:string;tag?:string;conversion?:{rate:number;sourceCurrency:string;targetCurrency:string;method:'period-average-daily-reference-cross-rate'|'period-end-prior-daily-reference-cross-rate';ratePeriodStart:string;ratePeriodEnd:string;observationCount:number;sourceUrl:string;rateProvider:string;inputAvailableAt:string;inputRetrievedAt:string};rightsStatus?:'public-domain'|'redistribution-permitted'|'licensed'|'personal-use-only'|'restricted'|'unknown';confidence:'high'|'medium'|'low'};
@@ -40,7 +41,7 @@ function coreFactors(s:Snapshot):Factor[]{
  // A raw share-count change can be a split rather than issuance. Do not award
  // discipline points until corporate actions covering the interval were
  // actually reviewed.
- const dilution=s.splitAdjusted===true&&finite(s.dilution)?clamp(1-(Math.max(0,s.dilution)/SPECS.core.dilutionMax)):null;
+ const dilution=hasVerifiedShareRatio(s)&&finite(s.dilution)?clamp(1-(Math.max(0,s.dilution)/SPECS.core.dilutionMax)):null;
  const size=finite(s.marketCap)?clamp(1-(Math.log10(Math.max(s.marketCap,SPECS.core.marketCap.min))-Math.log10(SPECS.core.marketCap.min))/(Math.log10(SPECS.core.marketCap.max)-Math.log10(SPECS.core.marketCap.min))):null;
  const liquidity=finite(s.medianDollarVolume20d)&&s.medianDollarVolume20d>0?clamp(Math.log(s.medianDollarVolume20d/SPECS.core.liquidity)/Math.log(SPECS.core.score.liquidityCeiling/SPECS.core.liquidity)):null;
  const sizeCoverage=size!=null&&liquidity!=null?size*0.7+liquidity*0.3:null;
@@ -53,7 +54,7 @@ function coreFactors(s:Snapshot):Factor[]{
  return [
   make('valuation','التقييم',SPECS.core.weights['Valuation'],valuation,s.evSales??null,revenueValid&&finite(s.evSales)?`EV/S ${s.evSales.toFixed(2)} ضمن حد 10`:'EV/S موثق غير متاح؛ لا تُمنح نقاط التقييم'),
   make('quality','الجودة والربحية',SPECS.core.weights['Quality'],quality,s.netIncome??s.fcf??null,'Net Income أو FCF موجب بعد خصم مخاطر دوامة التمويل الموثقة'),
-  make('shareDiscipline','انضباط الأسهم',SPECS.core.weights['Share Discipline'],dilution,s.dilution,s.splitAdjusted===true&&finite(s.dilution)?`التخفيف المعدل للتجزئة ${(s.dilution*100).toFixed(1)}%`:'مراجعة التجزئة أو التخفيف غير متاحة'),
+  make('shareDiscipline','انضباط الأسهم',SPECS.core.weights['Share Discipline'],dilution,s.dilution,hasVerifiedShareRatio(s)&&finite(s.dilution)?`التخفيف المعدل للتجزئة ${(s.dilution*100).toFixed(1)}%`:'مراجعة التجزئة أو التخفيف غير متاحة'),
   make('sizeCoverage','الحجم وقابلية التنفيذ',SPECS.core.weights['Small Size + Execution Liquidity'],sizeCoverage,s.marketCap,`الحجم ووسيط قيمة التداول يساهمان معًا؛ لا تُستخدم تغطية المحللين غير الموثقة، والوسيط الأعلى من ${SPECS.core.score.liquidityCeiling} لا يمنح نقاطًا إضافية`),
   make('growth','النمو',SPECS.core.weights['Growth'],growth,s.revenueGrowth,'نمو الإيرادات ضمن نطاق محافظ'),
   make('insider','الشراء الداخلي',SPECS.core.weights['Insider Buying'],insider,s.insiderBuyValue,'يحسب Form 4 P فقط عند توفره'),
@@ -66,7 +67,7 @@ function legacyFactors(s:Snapshot):Factor[]{
  const valuation=finite(s.ps)?clamp(1-s.ps/SPECS.legacy.psMax):null;
  const profitability=finite(s.netIncome)||finite(s.fcf)?((finite(s.netIncome)&&s.netIncome>0?0.5:0)+(finite(s.fcf)&&s.fcf>0?0.5:0)):null;
  const momentum=finite(s.return12m)?scale(s.return12m,SPECS.legacy.momentum.min,SPECS.legacy.momentum.max):null;
- const dilution=finite(s.dilution)?clamp(1-s.dilution/SPECS.legacy.dilutionMax):null;
+ const dilution=hasVerifiedShareRatio(s)&&finite(s.dilution)?clamp(1-s.dilution/SPECS.legacy.dilutionMax):null;
  const size=finite(s.marketCap)?clamp(1-(Math.log10(Math.max(s.marketCap,SPECS.legacy.marketCap.min))-Math.log10(SPECS.legacy.marketCap.min))/(Math.log10(SPECS.legacy.marketCap.max)-Math.log10(SPECS.legacy.marketCap.min))):null;
  const insider=finite(s.insiderBuyValue)&&finite(s.marketCap)&&s.marketCap>0?clamp(s.insiderBuyValue/s.marketCap/SPECS.legacy.insiderScale):null;
  const make=(id:string,label:string,maxPoints:number,n:number|null,raw:number|null|undefined,explanation:string):Factor=>({id,label,maxPoints,points:n==null?0:n*maxPoints,available:n!=null,rawValue:raw??null,explanation});
@@ -84,7 +85,7 @@ function bounceFactors(s:Snapshot):Factor[]{
  const collapse=finite(s.return12m)?clamp((SPECS.bounce.returnMax-s.return12m)/(SPECS.bounce.returnMax-r.collapseFloor)):null;
  const reversal=finite(s.price)&&s.price>0&&finite(s.ma30w)&&s.ma30w>0?clamp((s.price/s.ma30w-SPECS.bounce.maMultiplier)/(r.reversalCeiling-(SPECS.bounce.maMultiplier-1))):null;
  const liquidity=finite(s.medianDollarVolume20d)&&s.medianDollarVolume20d>0?clamp(Math.log(s.medianDollarVolume20d/SPECS.bounce.liquidity)/Math.log(r.liquidityCeiling/SPECS.bounce.liquidity)):null;
- const dilution=s.splitAdjusted===true&&finite(s.dilution)?clamp(1-Math.max(0,s.dilution)/SPECS.bounce.dilutionMax):null;
+ const dilution=hasVerifiedShareRatio(s)&&finite(s.dilution)?clamp(1-Math.max(0,s.dilution)/SPECS.bounce.dilutionMax):null;
  const offLow=finite(s.price)&&s.price>0&&finite(s.low52w)&&s.low52w>0?clamp(1-Math.abs((s.price/s.low52w-1)-r.offLowAnchor)/r.offLowRange):null;
  const size=finite(s.marketCap)?clamp(1-(s.marketCap-SPECS.bounce.marketCap.min)/(SPECS.bounce.marketCap.max-SPECS.bounce.marketCap.min)):null;
  const make=(id:string,label:string,maxPoints:number,n:number|null,raw:number|null,explanation:string):Factor=>({id,label,maxPoints,points:n==null?0:n*maxPoints,available:n!=null,rawValue:raw,explanation});
@@ -117,7 +118,7 @@ export function evaluateStrategy(strategy:keyof typeof SPECS,s:Snapshot){
  numeric('liquidity','سيولة تداول قابلة للتنفيذ',s.medianDollarVolume20d,n=>n>=SPECS.bounce.liquidity,`20d median ≥ ${SPECS.bounce.liquidity} · حد تشغيلي قيد التحقق`);
  numeric('collapse','هبوط 12 شهرًا',s.return12m,n=>n<SPECS.bounce.returnMax,'Return < −35% · بوابة أهلية');
  add('low','ابتعاد 10% عن قاع السنة',finite(s.price)&&s.price>0&&finite(s.low52w)&&s.low52w>0?s.price>=s.low52w*(1+SPECS.bounce.lowDistanceMin):null,'Price ≥ 1.10 × low52w · عامل موزون');
- const sharesReviewed=s.splitAdjusted===true&&finite(s.shareCountRatio)&&s.shareCountRatio>SPECS.bounce.shareCountRatio.minExclusive&&s.shareCountRatio<SPECS.bounce.shareCountRatio.maxExclusive;
+ const sharesReviewed=hasVerifiedShareRatio(s)&&finite(s.shareCountRatio)&&s.shareCountRatio>SPECS.bounce.shareCountRatio.minExclusive&&s.shareCountRatio<SPECS.bounce.shareCountRatio.maxExclusive;
  add('dilution','تخفيف أقل من 25% بعد مراجعة التجزئة',sharesReviewed&&finite(s.dilution)?s.dilution<SPECS.bounce.dilutionMax:null,`Dilution < ${SPECS.bounce.dilutionMax*100}%; share ratio ${SPECS.bounce.shareCountRatio.minExclusive}–${SPECS.bounce.shareCountRatio.maxExclusive} · عامل موزون`);
   add('reversal','انعكاس مؤكد أعلى متوسط 30 أسبوعًا',finite(s.price)&&s.price>0&&finite(s.ma30w)&&s.ma30w>0?s.price>s.ma30w*SPECS.bounce.maMultiplier:null,`Price > ${SPECS.bounce.maMultiplier} × MA30W · عامل موزون`);
  }

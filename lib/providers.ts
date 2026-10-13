@@ -20,12 +20,13 @@ import { buildTechnicalTimingResearch } from './opportunity-market';
 import { secUserAgent } from './sec-user-agent';
 import {alignSnapshotFinancials} from './financial-integrity';
 import { convertEarningsPeriodsToUsd, convertFinancialMetricsToUsd, fetchEcbDailySeries, type EcbDailySeries } from './ecb-fx';
+import { nasdaqCompanyDescription } from './company-description';
 
 export type Company = { cik: number; name: string; ticker: string; exchange: string; securityType?:import('./directory').ListedSecurityType; securityName?:string; listingStatus?:'current'|'not-confirmed-current'; directoryUrl?:string; directoryAvailableAt?:string; price?: number; dailyChange?: number; intradayChange?: number; marketCap?: number; volume?: number; averageVolume10d?: number; return52w?: number; low52w?: number; high52w?: number; ma50d?: number; ma200d?: number; sector?: string; industry?: string; quoteSource?: string; quoteAvailableAt?: string; priceSource?:string; priceAvailableAt?:string; priceUrl?:string; marketCapSource?:string; marketCapAvailableAt?:string; marketCapUrl?:string };
 type NasdaqRow = { symbol: string; name?: string; lastsale?: string; marketCap?: string; volume?: string; sector?: string; industry?: string };
 type CachedQuick = { history: NonNullable<Snapshot['history']>; financials: Record<string, number>; provenance: Record<string, Provenance>; issues: string[] };
 type MarketBar = NonNullable<Snapshot['history']>[number];
-export type HistoricalResult = { url:string; history:MarketBar[]; splits:{date:string;factor:number}[]|null; source:string; retrievedAt:string; availableAt:string; meta?:any };
+export type HistoricalResult = { url:string; history:MarketBar[]; splits:{date:string;factor:number}[]|null; source:string; retrievedAt:string; availableAt:string; meta?:any; splitReviewCoverageStart?:string; requestedLookbackDays?:number };
 
 export const NASDAQ_SCREENER = 'https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=10000&download=true';
 const NASDAQ_LISTED='https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt';
@@ -300,30 +301,47 @@ async function yahooCompanyProfile(symbol: string) {
   }
 }
 
+/** Profile-only narrative enrichment. It never changes the dated rating
+ * snapshot or creates numeric scoring evidence. */
+export async function observedNasdaqCompanyDescription(symbol:string,now=new Date().toISOString()):Promise<{description:string;source:Provenance}|null> {
+  const url=`https://api.nasdaq.com/api/company/${encodeURIComponent(symbol)}/company-profile`;
+  try {
+    const description=nasdaqCompanyDescription(await fetchJson(url,5_000,6*60*60_000,1));
+    if(!description)return null;
+    return {description,source:{source:'Nasdaq company profile',url,periodEnd:now.slice(0,10),availableAt:now,retrievedAt:now,confidence:'medium',rightsStatus:'unknown',tag:'CompanyDescription.value'}};
+  }catch(error){recordProviderIssue(`Nasdaq company profile ${symbol}: ${error instanceof Error?error.message:'provider request failed'}`);return null;}
+}
+
 async function enrichWithYahooProfile(snapshot: Snapshot, symbol: string, now: string, profilePromise?:ReturnType<typeof yahooCompanyProfile>) {
   const profile = await (profilePromise??yahooCompanyProfile(symbol));
   const asset = profile?.assetProfile;
-  if (asset?.longBusinessSummary) snapshot.description = asset.longBusinessSummary;
-  if (typeof asset?.website === 'string' && /^https:\/\//i.test(asset.website)) snapshot.website = asset.website;
-  if (asset?.sector) snapshot.sector = asset.sector;
-  if (asset?.industry) snapshot.industry = asset.industry;
-  if (Number.isFinite(asset?.fullTimeEmployees)) snapshot.employees = asset.fullTimeEmployees;
+  const profileFields = new Set<string>();
+  if (asset?.longBusinessSummary) { snapshot.description = asset.longBusinessSummary; profileFields.add('description'); }
+  if (typeof asset?.website === 'string' && /^https:\/\//i.test(asset.website)) { snapshot.website = asset.website; profileFields.add('website'); }
+  if (asset?.sector) { snapshot.sector = asset.sector; profileFields.add('sector'); }
+  if (asset?.industry) { snapshot.industry = asset.industry; profileFields.add('industry'); }
+  if (Number.isFinite(asset?.fullTimeEmployees)) { snapshot.employees = asset.fullTimeEmployees; profileFields.add('employees'); }
   const financialData = profile?.financialData;
   const profileTarget = financialData?.targetMeanPrice?.raw;
-  if (Number.isFinite(profileTarget)) { snapshot.targetMean = profileTarget; snapshot.analystTarget = profileTarget; snapshot.provenance.analystTarget = { source: 'Yahoo Finance quoteSummary financialData', url: `https://finance.yahoo.com/quote/${encodeURIComponent(symbol)}/analysis`, periodEnd: now.slice(0, 10), availableAt: now, retrievedAt: now, currency: 'USD', confidence: 'medium' }; }
+  if (Number.isFinite(profileTarget)) { snapshot.targetMean = profileTarget; profileFields.add('targetMean'); snapshot.analystTarget = profileTarget; snapshot.provenance.analystTarget = { source: 'Yahoo Finance quoteSummary financialData', url: `https://finance.yahoo.com/quote/${encodeURIComponent(symbol)}/analysis`, periodEnd: now.slice(0, 10), availableAt: now, retrievedAt: now, currency: 'USD', confidence: 'medium' }; }
   for (const [field, key] of [['targetLow','targetLowPrice'],['targetHigh','targetHighPrice'],['analystCount','numberOfAnalystOpinions']] as const) {
     const value = profile?.financialData?.[key]?.raw;
-    if (Number.isFinite(value)) (snapshot as any)[field] = value;
+    if (Number.isFinite(value)) { (snapshot as any)[field] = value; profileFields.add(field); }
   }
   const earningsHistory = (profile?.earningsHistory?.history ?? []).filter((row:any) => row?.quarter?.fmt || row?.quarter?.raw).slice(-6);
   snapshot.surprises = earningsHistory.map((row:any) => ({ quarter: row.quarter?.fmt || String(row.quarter?.raw || '').slice(0,10), surprisePct: row.surprisePercent?.raw == null ? null : row.surprisePercent.raw * 100, actual: row.epsActual?.raw, estimate: row.epsEstimate?.raw }));
+  if(earningsHistory.length)profileFields.add('surprises');
   const next = profile?.calendarEvents?.earnings?.earningsDate?.[0]?.fmt;
-  if (next) snapshot.nextEarnings = next;
+  if (next) { snapshot.nextEarnings = next; profileFields.add('nextEarnings'); }
   const latestEarnings = earningsHistory.at(-1)?.quarter?.fmt;
-  if (latestEarnings) snapshot.lastEarnings = latestEarnings;
+  if (latestEarnings) { snapshot.lastEarnings = latestEarnings; profileFields.add('lastEarnings'); }
   if (snapshot.surprises?.length) { const latest = snapshot.surprises.at(-1)?.surprisePct; snapshot.lastEarningsStatus = latest == null ? 'غير معروف' : latest >= 0 ? 'إيجابي' : 'سلبي'; }
   const profileEvidence:Provenance={source:'Yahoo Finance quoteSummary',url:`https://finance.yahoo.com/quote/${encodeURIComponent(symbol)}/`,periodEnd:now.slice(0,10),availableAt:now,retrievedAt:now,confidence:'medium'};
-  for(const key of ['description','website','sector','industry','employees','targetMean','targetLow','targetHigh','analystCount','nextEarnings','lastEarnings','surprises'] as const)if(snapshot[key]!=null&&profile)snapshot.provenance[key]={...profileEvidence,tag:key};
+  for(const key of ['description','website','sector','industry','employees','targetMean','targetLow','targetHigh','analystCount','nextEarnings','lastEarnings','surprises'] as const)if(profileFields.has(key))snapshot.provenance[key]={...profileEvidence,tag:key};
+  if(!profileFields.has('description')){
+    const observed=await observedNasdaqCompanyDescription(symbol,now);
+    if(observed){snapshot.description=observed.description;snapshot.provenance.description=observed.source;}
+  }
   return snapshot;
 }
 
@@ -874,7 +892,7 @@ export function attachScanMarketResearch(snapshot: Snapshot, stock: HistoricalRe
   };
   // Split-adjusted price history does not reconcile the SEC share-count change.
   // Require the event response to cover both reported share observation dates.
-  if(stock.source.includes('Yahoo Finance chart API'))Object.assign(snapshot,reviewShareSplits(snapshot,stock.splits,stock.history[0]?.date??'',last,snapshot.provenance.history));
+  if(stock.source.includes('Yahoo Finance chart API'))Object.assign(snapshot,reviewShareSplits(snapshot,stock.splits,stock.splitReviewCoverageStart??stock.history[0]?.date??'',last,snapshot.provenance.history));
 }
 
 function compactTechnicalResearch(snapshot: Snapshot) {

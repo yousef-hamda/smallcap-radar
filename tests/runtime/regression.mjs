@@ -6,12 +6,13 @@ import {visitor} from '../../.test-build/visitor.mjs';
 import {body as parseBody} from '../../.test-build/http.mjs';
 import {numeric,parseNews,fetchJson} from '../../.test-build/providers.mjs';
 import {reconcile} from '../../.test-build/reconcile.mjs';
-import {setHistoryResult,setOpportunityResearchResult,setUniverse,setBulkQuoteTransform,universeCalls,setIntradayResult,opportunityCalls,resetOpportunityCalls} from './providers.mjs';
+import {setHistoryResult,setOpportunityResearchResult,setUniverse,setBulkQuoteTransform,universeCalls,setIntradayResult,opportunityCalls,resetOpportunityCalls,historyRequests} from './providers.mjs';
 import {evaluateStrategy} from '../../.test-build/engine.mjs';
 import {proxyOpportunityEvidence} from '../../.test-build/opportunity-proxies.mjs';
 import {fixtures} from '../../.test-build/fixtures.mjs';
 import {ensureSchema,db,currentHash,readState,insertSnapshot,invalidateStateCache,readResearchConflictCount,migrateCompatibleAcquisitionRuns} from '../../.test-build/storage.mjs';
 import {processScanBatch,startScan,historyCandidate,preliminaryCandidates} from '../../.test-build/scanner.mjs';
+import {hasVerifiedShareRatio} from '../../.test-build/research.mjs';
 import {GET,POST} from '../../.test-build/radar-api.mjs';
 import {GET as recoverGET} from '../../.test-build/recover-api.mjs';
 import {GET as reportGET} from '../../.test-build/scan-report-api.mjs';
@@ -394,17 +395,38 @@ test('full history stage can qualify marketable candidates while unverified fact
  for(let days=550;days>=1;days--){const day=date(days);const weekday=new Date(day).getUTCDay();if(weekday===0||weekday===6)continue;const close=days>250?26:days<5?12:8;history.push({date:day,close,open:close,high:close,low:close,volume:100000});}
  const latest=history.at(-1).date;
  const p={...base.provenance.price,availableAt:now,retrievedAt:now,periodEnd:latest};
- const shares={...p,periodStart:date(400),periodEnd:date(30)};
+ const shares={...p,source:'SEC reported share ratio; corporate actions unverified',url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0000000001.json',periodStart:date(400),periodEnd:date(30)};
  const snapshot={...base,symbol:'REBOUND',asOf:now,marketCap:100e6,price:12,return12m:-.5,low52w:8,ma30w:null,medianDollarVolume20d:null,splitAdjusted:false,shareCountRatio:1.05,dilution:.05,deathSpiral:'unknown',riskEvidence:undefined,provenance:{...base.provenance,price:p,marketCap:p,dilution:shares,shareCountRatio:shares}};
  await db().prepare('INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,strategy_hash) VALUES(?,?,?,?,?,?,?,?,?)').bind('rebound-evidence',now,now,'running','Bulk Quotes/SEC Frames v9 · full',1,JSON.stringify([{ticker:'REBOUND'}]),10,currentHash()).run();
  await insertSnapshot('rebound-evidence',snapshot).run();
- setHistoryResult({history,splits:[],source:'SYNTHETIC TEST ONLY',url:'https://example.test/splits',retrievedAt:now,availableAt:now});
+ setHistoryResult({history,splits:[],source:'Yahoo Finance chart API · split-adjusted daily history and split events',url:'https://query1.finance.yahoo.com/v8/finance/chart/REBOUND?events=div%2Csplits',retrievedAt:now,availableAt:now});
  try{
   const transition=await processScanBatch('rebound-evidence');assert.equal(transition.done,false);assert.equal(transition.run.stage,11);
   const result=await processScanBatch('rebound-evidence');assert.equal(result.done,true);
   const stored=sqlite.prepare("SELECT payload,evaluation FROM fundamental_snapshots WHERE run_id='rebound-evidence'").get();
   const e=JSON.parse(stored.evaluation);assert.equal(e.opportunity.researchState,'needs-research');assert(e.opportunity.factors.some(factor=>!factor.evidenced));
   assert.equal(JSON.parse(stored.payload).splitAdjusted,true);assert.equal(JSON.parse(stored.payload).history,undefined);
+ }finally{setHistoryResult(null);}
+});
+
+test('history stage extends only the needed share interval and caches recent bars with full split coverage',async()=>{
+ const now=new Date().toISOString(),date=days=>new Date(Date.parse(now)-days*864e5).toISOString().slice(0,10);
+ const history=[];
+ for(let days=710;days>=1;days--){const day=date(days),weekday=new Date(day).getUTCDay();if(weekday>0&&weekday<6)history.push({date:day,close:10,volume:100000});}
+ const raw={source:'SEC reported share ratio; corporate actions unverified',url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0001846832.json',periodStart:date(650),periodEnd:date(280),availableAt:now,retrievedAt:now,currency:'USD',confidence:'low'};
+ const snapshot={...base,symbol:'LONG-SHARES',cik:1846832,asOf:now,marketCap:100e6,price:10,splitAdjusted:true,shareCountRatio:1.03,dilution:.03,provenance:{...base.provenance,dilution:raw,shareCountRatio:raw}};
+ const company={ticker:snapshot.symbol,cik:snapshot.cik};
+ await db().prepare('INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,strategy_hash) VALUES(?,?,?,?,?,?,?,?,?)').bind('long-share-interval',now,now,'running','Bulk Quotes/SEC Frames · full',1,JSON.stringify([company]),10,currentHash()).run();
+ await insertSnapshot('long-share-interval',snapshot).run();
+ const before=historyRequests.length;
+ setHistoryResult({history,splits:[],source:'Yahoo Finance chart API · split-adjusted daily history and split events',url:'https://query1.finance.yahoo.com/v8/finance/chart/LONG-SHARES?events=div%2Csplits',retrievedAt:now,availableAt:now});
+ try{
+  const transition=await processScanBatch('long-share-interval');assert.equal(transition.run.stage,11);
+  const requested=historyRequests.slice(before).find(([symbol])=>symbol==='LONG-SHARES');assert(requested);assert(requested[2]>=664&&requested[2]<=1100);
+  const row=await db().prepare("SELECT payload FROM fundamental_snapshots WHERE run_id='long-share-interval' AND symbol='LONG-SHARES'").first();
+  assert.equal(hasVerifiedShareRatio(JSON.parse(row.payload)),true);
+  const cache=await db().prepare('SELECT payload FROM raw_cache WHERE key=?').bind(`scan-history:v3:LONG-SHARES:${now.slice(0,10)}`).first();
+  const saved=JSON.parse(cache.payload);assert.equal(saved.splitReviewCoverageStart,history[0].date);assert(saved.history.length<history.length);assert(saved.history.every(bar=>Date.parse(bar.date)>=Date.parse(now)-550*864e5));
  }finally{setHistoryResult(null);}
 });
 

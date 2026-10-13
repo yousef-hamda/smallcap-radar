@@ -1,5 +1,5 @@
 import { requestedRankRelease } from '@/lib/rank-release';
-import { resolveCompanyBySymbol, companySnapshot } from '@/lib/providers';
+import { resolveCompanyBySymbol, companySnapshot, observedNasdaqCompanyDescription } from '@/lib/providers';
 import { db, ensureSchema, readCanonicalCompany } from '@/lib/storage';
 import { json, statusOf } from '@/lib/http';
 
@@ -7,6 +7,7 @@ import { reconcile } from '@/lib/reconcile';
 import { secUserAgentCacheVersion } from '@/lib/sec-user-agent';
 import { evaluateOpportunityDossier, opportunityDossierFromSnapshot } from '@/lib/opportunity-dossier';
 import type {Snapshot} from '@/lib/engine';
+import {translateToArabic} from '@/lib/translation';
 const pending=new Map<string,Promise<Snapshot>>();
 
 export async function GET(request: Request) {
@@ -18,7 +19,14 @@ export async function GET(request: Request) {
     const pin=requestedRankRelease(params);
     const canonical=await readCanonicalCompany(symbol,pin.runId,pin.releaseToken);
     if(pin.runId&&!canonical)return json({error:'الشركة غير موجودة في إصدار الترتيب المطلوب'},404);
-    if(canonical)return json({...canonical,cached:true,ratingSource:'saved-production-universe'});
+    if(canonical){
+      // Keep the archived rating snapshot unchanged. A current issuer
+      // explanation is display-only and carries its own observation date.
+      const missingDescription=!canonical.snapshot.description||canonical.snapshot.description.startsWith('الوصف غير متاح');
+      const observed=missingDescription?await observedNasdaqCompanyDescription(symbol):null;
+      const translated=observed?await translateToArabic(observed.description,3_600):null;
+      return json({...canonical,cached:true,ratingSource:'saved-production-universe',profileDescription:observed?{description:observed.description,descriptionAr:translated?.text,source:observed.source}:null});
+    }
     // Version the deep cache whenever the enrichment contract changes so a
     // previous partial response cannot mask newly available fields.
     const cacheKey = `deep:${secUserAgentCacheVersion()}:${symbol}`;

@@ -111,11 +111,12 @@ test('company profile consumes only the canonical Opportunity evaluation',async(
  assert.match(route,/evaluateOpportunityDossier\(snapshot,opportunityDossierFromSnapshot\(snapshot\)\)/);
 });
 
-test('radar displays numeric final grades, source coverage and stable database ranks',async()=>{
+test('radar displays numeric research scores, original ranks and separate session and snapshot dates',async()=>{
  const source=await readFile(path.join(root,'app/page.tsx'),'utf8');
  const storage=await readFile(path.join(root,'lib/storage.ts'),'utf8');
- assert.match(source,/e\.score\.toFixed\(2\)/);assert.match(source,/f\.points\.toFixed\(3\)/);
- assert.match(source,/تغطية المصادر/);assert.match(source,/rank:payload\.rankPositions\?\.\[index\]/);
+ assert.match(source,/e\.score\.toFixed\(2\)/);
+ assert.match(source,/درجة بحث مرجّحة بالأدلة/);assert.match(source,/rank:payload\.rankPositions\?\.\[index\]/);
+ assert.match(source,/الرتبة الأصلية/);assert.match(source,/تغير آخر جلسة/);assert.match(source,/لقطة البيانات <time dir="ltr">\{day\(s\.asOf\)\}/);
  assert.match(storage,/ROW_NUMBER\(\) OVER/);assert.match(storage,/symbol COLLATE BINARY ASC/);
  assert.match(storage,/ensureRunEvaluations/);
 });
@@ -171,7 +172,17 @@ test('empty chart keeps all seven period controls',async()=>{
  const {default:Chart}=await vite.ssrLoadModule('/app/price-chart.tsx');
  const html=renderToStaticMarkup(React.createElement(Chart,{snapshot:{symbol:'TEST',name:'Synthetic chart fixture',asOf:'2025-01-01',provenance:{},history:[]}}));
  assert.equal((html.match(/role="tab"/g)||[]).length,7);
- assert.match(html,/لا تتوفر جلستان موثقتان/);
+ assert.match(html,/جارٍ تحميل الرسم اليومي/);
+ assert.match(html,/لا تتوفر بيانات إغلاق جلستين/);
+});
+
+test('chart defaults to the daily session with clearly labeled close fallback',async()=>{
+ const {default:Chart}=await vite.ssrLoadModule('/app/price-chart.tsx');
+ const html=renderToStaticMarkup(React.createElement(Chart,{snapshot:{symbol:'TEST',name:'Synthetic chart fixture',asOf:'2025-01-03T20:00:00Z',provenance:{},history:[{date:'2025-01-02',close:10},{date:'2025-01-03',close:12}]}}));
+ assert.match(html,/جلسة يومية/);
+ assert.match(html,/إغلاق آخر جلستين مكتملتين من لقطة 2025-01-03/);
+ assert.match(html,/2025-01-03 · \$12\.00/);
+ assert.match(html,/data-state="active"[^>]*>يوم</);
 });
 
 test('historical chart filters duplicate, future and nonfinite bars and displays actual extrema',async()=>{
@@ -301,13 +312,24 @@ test('unified opportunity view displays final grades and complete ranking',async
  assert.match(source,/state=\$\{opportunityState\}/);
  assert.match(source,/e\.state===opportunityState/);
  assert.match(source,/e\.score\.toFixed\(2\)/);
- assert.match(source,/\$\{f\.points\.toFixed\(3\)\} نقطة/);
- assert.match(source,/operatingCandidateSignals\(s\)/);
- assert.match(source,/candidate-signals/);
+ assert.match(source,/className="card-open"/);
+ assert.match(source,/className="copy-button"/);
+ assert.match(source,/className=\{`star-button/);
  assert.match(source,/الترتيب النهائي لجميع الأسهم/);assert.doesNotMatch(source,/ليست درجة نهائية|نقاط موثقة مؤقتة/);
  assert.match(source,/useState<OpportunityState>\('ranked'\)/);
- assert.match(source,/visibleEvaluated\.map\(\(\{s,e,rank\},index\)=>/);
+ assert.match(source,/visibleEvaluated\.map\(\(\{s,e,rank\}\)=>/);
  assert.match(source,/visibleEvaluated\.length\} نتيجة معروضة/);
+});
+
+test('profile starts with the daily chart, then company description and research detail',async()=>{
+ const source=await readFile(path.join(root,'app/company-sheet.tsx'),'utf8');
+ const scroll=source.indexOf('className="sheet-scroll"');
+ const chart=source.indexOf('<PriceChart key={s.symbol}');
+ const description=source.indexOf('ماذا تفعل الشركة',chart);
+ const summary=source.indexOf('className="company-summary opportunity"',description);
+ const strategy=source.indexOf('className="detail-strategy opportunity"',summary);
+ assert.ok(scroll>0&&chart>scroll&&description>chart&&summary>description&&strategy>summary);
+ assert.match(source,/modelInputCoveragePct/);
 });
 
 test('opportunity report uses the unified evaluation and factor blockers',async()=>{

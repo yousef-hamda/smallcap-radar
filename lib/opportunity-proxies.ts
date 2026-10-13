@@ -6,6 +6,7 @@ import { compatibleSnapshotMetrics, commercialObservationKind, operatingIssuerMe
 import {peerObservation,peerContext,uniqueIssuerPeers} from './opportunity-peers';
 import {buildOpportunityThesis,intrinsicValuationGrade} from './opportunity-thesis';
 import {MODEL_DEPENDENCIES,conflictAffectsKeys,modelFactorConflicts} from './opportunity-conflicts';
+import {hasVerifiedShareRatio} from './research';
 export {conflictAffectsKeys,modelFactorConflicts} from './opportunity-conflicts';
 
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
@@ -27,7 +28,7 @@ export function proxyOpportunityEvidence(snapshot: Snapshot,horizonMonths:number
     ||Date.parse(derivedGrowth.source.periodEnd)>=Date.parse(oldGrowthSource!.periodEnd));
   const growthTrace = useDerivedGrowth?derivedGrowth!.inputs:[];
   const observation = (key: string): number | null => {
-    if (key === 'dilution' && snapshot.splitAdjusted !== true) return null;
+    if (key === 'dilution' && !hasVerifiedShareRatio(snapshot)) return null;
     if (['ps','evSales','fcfYield'].includes(key) && !commonPerShareMetricsApplicable(snapshot)) return null;
     if (!operatingIssuerMetricsApplicable(snapshot) && !['price','ma30w','low52w','high52w','return12m','nextEarnings'].includes(key)) return null;
     const value = key==='revenueGrowth'&&useDerivedGrowth ? derivedGrowth?.value : snapshot[key as keyof Snapshot];

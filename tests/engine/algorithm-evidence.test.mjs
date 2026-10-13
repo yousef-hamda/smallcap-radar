@@ -82,10 +82,11 @@ test('backlog discovery coverage requires aligned currency, consolidated scope a
 });
 
 test('split-adjusted chart history does not certify or penalize an unreconciled SEC share change',()=>{
- const stock={history:[{date:'2025-01-01',close:10},{date:'2026-10-02',close:10}],splits:[{date:'2026-01-15',factor:2}],url:'https://query1.finance.yahoo.com/v8/finance/chart/SYNTH',source:'Yahoo Finance chart API',retrievedAt:asOf,availableAt:'2026-10-02T21:00:00Z'};
- const s={...snapshot(),shareCountRatio:2.2,dilution:1.2,splitAdjusted:false,provenance:{shareCountRatio:source('2025-06-30','2026-06-30'),dilution:source('2025-06-30','2026-06-30')}};
+ const stock={history:[{date:'2025-01-01',close:10},{date:'2026-10-02',close:10}],splits:[{date:'2026-01-15',factor:2}],url:'https://query1.finance.yahoo.com/v8/finance/chart/SYNTH?events=div%2Csplits',source:'Yahoo Finance chart API · split-adjusted daily history and split events',retrievedAt:asOf,availableAt:'2026-10-02T21:00:00Z'};
+ const raw=(start,end)=>source(start,end,{source:'SEC reported share ratio; corporate actions unverified'});
+ const s={...snapshot(),shareCountRatio:2.2,dilution:1.2,splitAdjusted:false,provenance:{shareCountRatio:raw('2025-06-30','2026-06-30'),dilution:raw('2025-06-30','2026-06-30')}};
  attachScanMarketResearch(s,stock);assert.equal(s.splitAdjusted,true);assert(Math.abs(s.dilution-.1)<1e-12);
- const uncovered={...snapshot(),shareCountRatio:2.2,dilution:1.2,splitAdjusted:false,provenance:{shareCountRatio:source('2024-06-30','2026-06-30')}};attachScanMarketResearch(uncovered,stock);assert.equal(uncovered.splitAdjusted,false);
+ const uncovered={...snapshot(),shareCountRatio:2.2,dilution:1.2,splitAdjusted:false,provenance:{shareCountRatio:raw('2024-06-30','2026-06-30')}};attachScanMarketResearch(uncovered,stock);assert.equal(uncovered.splitAdjusted,false);
  const noShares=snapshot();attachScanMarketResearch(noShares,stock);assert.notEqual(noShares.splitAdjusted,true);
 });
 

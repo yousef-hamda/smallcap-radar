@@ -13,10 +13,16 @@ import {buildOpportunityThesis,intrinsicValuationGrade} from '../../.test-build/
 import {parseFilingObservations,persistFilingDocument} from '../../.test-build/filing-observations.mjs';
 import {env as runtimeEnv} from '../runtime/env.mjs';
 import {derivedEvidence} from '../../.test-build/evidence.mjs';
+import {reviewShareSplits} from '../../.test-build/research.mjs';
 
 const asOf='2026-10-03T12:00:00Z';
 const source=(start='2026-01-01',end='2026-06-30')=>({source:'SEC fixture',url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0000000001.json',periodStart:start,periodEnd:end,availableAt:'2026-08-01T00:00:00Z',retrievedAt:asOf,currency:'USD',rightsStatus:'redistribution-permitted',confidence:'high'});
-const base=()=>({symbol:'SYNTH',name:'Fixture',asOf,securityType:'common',price:10,marketCap:1000,revenue:100,fcf:20,netIncome:15,cash:100,debt:30,splitAdjusted:true,dilution:0,provenance:Object.fromEntries(['revenue','fcf','netIncome','dilution'].map(k=>[k,source()]).concat(['cash','debt'].map(k=>[k,source(undefined)])))});
+const base=()=>{
+ const raw={...source('2025-06-30','2026-06-30'),source:'SEC reported share ratio; corporate actions unverified'};
+ const yahoo={...source(undefined,'2026-10-02'),source:'Yahoo Finance chart API · split-adjusted daily history and split events',url:'https://query1.finance.yahoo.com/v8/finance/chart/SYNTH?events=div%2Csplits',availableAt:'2026-10-02T21:00:00Z'};
+ const snapshot={symbol:'SYNTH',name:'Fixture',asOf,securityType:'common',price:10,marketCap:1000,revenue:100,fcf:20,netIncome:15,cash:100,debt:30,splitAdjusted:false,shareCountRatio:1,dilution:0,provenance:{...Object.fromEntries(['revenue','fcf','netIncome'].map(k=>[k,source()]).concat(['cash','debt'].map(k=>[k,source(undefined)]))),shareCountRatio:raw,dilution:raw}};
+ return reviewShareSplits(snapshot,[],'2025-06-01','2026-10-02',yahoo);
+};
 const factor=(s,id)=>evaluateOpportunity(s).factors.find(x=>x.id===id);
 
 const valuationFixture=()=>{
@@ -34,6 +40,39 @@ test('intrinsic sensitivities use owner cash flow and a conservative earnings cr
  for(const item of thesis.valuation.scenarios){assert.equal(item.equityValue,Math.min(item.cashflowValue,item.earningsValue));assert.equal(item.upside,item.valuePerSecurity/s.price-1);assert.equal(item.discount,1-s.price/item.valuePerSecurity);}
  assert.notEqual(base.upside,base.discount);assert(intrinsicValuationGrade(thesis)>=0);
  const evaluation=evaluateOpportunity(s);assert.equal(evaluation.factors[0].calculation.rubricId,'valuation-model-v5-opportunity');assert(evaluation.factors[0].calculation.inputs.some(item=>item.name==='base:intrinsic estimate'));assert.equal(evaluation.thesis.action,'research-required');
+});
+
+test('intrinsic valuation recognizes a break-even bear case without changing factor weights',()=>{
+ const snapshot=valuationFixture(),thesis=buildOpportunityThesis(snapshot);
+ assert.equal(thesis.valuation.status,'available');
+ const grade=(bear,base)=>{
+  const scenario=structuredClone(thesis);
+  scenario.valuation.scenarios[0].upside=bear;
+  scenario.valuation.scenarios[1].upside=base;
+  return intrinsicValuationGrade(scenario);
+ };
+ assert.equal(grade(-.5,.5),2,'a 50% bear loss gets no protection credit');
+ assert.equal(grade(-.25,.5),5,'partial bear protection gets partial credit');
+ assert.equal(grade(0,0),0,'bear protection alone cannot make a zero-upside valuation');
+ assert.equal(grade(0,.01),.12,'near-zero base upside only earns near-zero credit');
+ assert.equal(grade(0,.25),3.5,'half the base-upside hurdle gives half the combined grade');
+ assert.equal(grade(0,.5),8,'a break-even bear case clears the conservative required return');
+ assert.equal(grade(.25,.5),8,'bear gains cannot exceed the fixed 60% component');
+ assert.equal(grade(0,1),10,'full factor grade is attainable with sourced scenario economics');
+ for(const bear of [-.5,-.25,0,.25]){
+  const results=[0,.01,.25,.5,1].map(base=>grade(bear,base));
+  assert(results.every((score,index)=>index===0||score>=results[index-1]),'more base upside cannot lower the grade');
+ }
+ for(const base of [0,.25,.5,1]){
+  const results=[-.5,-.25,0,.25].map(bear=>grade(bear,base));
+  assert(results.every((score,index)=>index===0||score>=results[index-1]),'better bear protection cannot lower the grade');
+ }
+ assert.equal(thesis.action,'candidate-review','the sourced fixture clears both intrinsic scenario thresholds');
+ assert.equal(intrinsicValuationGrade(thesis),10);
+ const evaluated=evaluateOpportunity(snapshot);
+ assert.equal(evaluated.factors[0].calculation.inputs.find(input=>input.name==='intrinsic-value-sensitivity:grade').value,10);
+ assert.equal(evaluated.thesis.action,'research-required','a strong valuation alone cannot bypass catalyst and financing review');
+ assert.deepEqual(OPPORTUNITY_SPEC.factors.map(f=>f.weight),[25,20,15,12,10,10,5,3]);
 });
 
 test('intrinsic model withholds unsupported financial, class, currency, time and sector inputs',()=>{

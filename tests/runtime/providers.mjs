@@ -1,7 +1,8 @@
 export let historyCalls=0;
+export const historyRequests=[];
 let historyResult=null;
 export function setHistoryResult(value){historyResult=value;}
-export async function historicalMarketData(){historyCalls++;if(historyResult)return historyResult;throw Error('Injected provider outage');}
+export async function historicalMarketData(...args){historyCalls++;historyRequests.push(args);if(historyResult)return historyResult;throw Error('Injected provider outage');}
 export async function companySnapshot(){throw Error('No provider configured in isolated test');}
 let opportunityResult={providerStatus:'retrieved',retryable:false};
 export let opportunityCalls=0;

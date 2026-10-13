@@ -4,7 +4,7 @@ import {publishDirectoryRatings} from './directory-rating';
 import { currentHash, db, ensureSchema, insertSnapshot, log } from './storage';
 import { companySnapshot, consumeProviderIssues, enrichSnapshotsWithSecOpportunity, historicalMarketData, quickSymbols, universe,yahooBulkQuotes } from './providers';
 import { fetchBulkFundamentals, fetchCompanyFactsFallback, needsCompanyFacts, preliminarySnapshot, type BulkFundamentals } from './bulk';
-import { opportunityHistoryMetrics, completedSessionQuote, reviewShareSplits } from './research';
+import { opportunityHistoryMetrics, completedSessionQuote, reviewShareSplits, shareReviewHistoryDays } from './research';
 import { applyFinancingRisk } from './financing-risk';
 
 const BATCH_SIZE = 1;
@@ -280,8 +280,18 @@ export async function processScanBatch(runId: string) {
       const cacheKey=`scan-history:v3:${company.ticker}:${now.slice(0,10)}`;
       try {
         const cached=await database.prepare('SELECT retrieved_at,payload FROM raw_cache WHERE key=?').bind(cacheKey).first() as any;
-        const historical:Awaited<ReturnType<typeof historicalMarketData>>=cached&&Date.parse(now)-Date.parse(cached.retrieved_at)<24*60*60_000?JSON.parse(cached.payload):await historicalMarketData(company.ticker, now, 550);
-        if(!cached||cached.retrieved_at!==historical.retrievedAt)await database.prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(cacheKey,historical.source,historical.retrievedAt,JSON.stringify(historical)).run();
+        const lookbackDays=shareReviewHistoryDays(snapshot,now);
+        const cachedHistory=cached&&Date.parse(now)-Date.parse(cached.retrieved_at)<24*60*60_000?JSON.parse(cached.payload) as Awaited<ReturnType<typeof historicalMarketData>>:null;
+        const reusable=cachedHistory&&(lookbackDays===550||(cachedHistory.requestedLookbackDays??550)>=lookbackDays);
+        const historical:Awaited<ReturnType<typeof historicalMarketData>>=reusable?cachedHistory:await historicalMarketData(company.ticker,now,lookbackDays);
+        if(!reusable){
+          // Stage 11 needs only recent bars. Keep the full split-event response
+          // and its original coverage date, but avoid storing years of extra
+          // daily rows on the constrained SQLite volume.
+          const compactHistory=lookbackDays>550?historical.history.filter(bar=>Date.parse(bar.date)>=Date.parse(now)-550*86_400_000):historical.history;
+          const compact={...historical,history:compactHistory,splitReviewCoverageStart:historical.history[0]?.date,requestedLookbackDays:lookbackDays};
+          await database.prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(cacheKey,historical.source,historical.retrievedAt,JSON.stringify(compact)).run();
+        }
         const history = historical.history.filter((bar): bar is typeof bar & { close: number } => Number.isFinite(bar.close));
         const metrics = opportunityHistoryMetrics(history, now);
         // The historical observations were retrieved after the bulk row was
@@ -297,7 +307,7 @@ export async function processScanBatch(runId: string) {
           snapshot.provenance.price={...historyEvidence,periodEnd:session.periodEnd,tag:'last completed session close'};
           snapshot.provenance.dailyChange={...historyEvidence,periodEnd:session.periodEnd,tag:'last completed close / previous completed close - 1'};
         }
-        snapshot=reviewShareSplits(snapshot,historical.splits,history[0]?.date??'',last?.date??'',historyEvidence);
+        snapshot=reviewShareSplits(snapshot,historical.splits,historical.splitReviewCoverageStart??history[0]?.date??'',last?.date??'',historyEvidence);
         snapshot=applyFinancingRisk(snapshot);
         if (metrics.return12m != null) {
           snapshot.return12m = metrics.return12m;

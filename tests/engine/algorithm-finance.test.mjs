@@ -4,6 +4,7 @@ import {scoreCatalysts,scoreFinancialStrength,scoreFinancialStrengthPartial,scor
 import {assessFinancingRisk,applyFinancingRisk} from '../../.test-build/financing-risk.mjs';
 import {buildOpportunityThesis} from '../../.test-build/opportunity-thesis.mjs';
 import {peerObservation,peerContext} from '../../.test-build/opportunity-peers.mjs';
+import {reviewShareSplits} from '../../.test-build/research.mjs';
 
 const asOf='2026-10-03T12:00:00Z';
 const source=(start='2025-07-01',end='2026-06-30')=>({source:'SEC fixture',url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0000000001.json',periodStart:start,periodEnd:end,availableAt:'2026-08-01T00:00:00Z',retrievedAt:asOf,currency:'USD',rightsStatus:'redistribution-permitted',confidence:'high'});
@@ -56,7 +57,12 @@ const knownEvent=(overrides={})=>event({impactAsPctTtmRevenue:impact(20,'percent
    const input=finance();mutate(input);assert.equal(scoreFinancialStrength(input).score,null);assert(scoreFinancialStrengthPartial(input).coveragePct<100);
   }
  });
- const snapshot=()=>({symbol:'FIN',name:'Finance fixture',asOf,securityType:'common',cash:100,debt:20,revenue:100,fcf:12,netIncome:10,splitAdjusted:true,dilution:0,provenance:{cash:instant(),debt:instant(),revenue:source(),fcf:source(),netIncome:source(),dilution:source()}});
+ const snapshot=()=>{
+  const raw={...source('2025-06-30','2026-06-30'),source:'SEC reported share ratio; corporate actions unverified'};
+  const yahoo={...instant(),source:'Yahoo Finance chart API · split-adjusted daily history and split events',url:'https://query1.finance.yahoo.com/v8/finance/chart/FIN?events=div%2Csplits',periodEnd:'2026-10-02',availableAt:'2026-10-02T21:00:00Z'};
+  const input={symbol:'FIN',name:'Finance fixture',asOf,securityType:'common',cash:100,debt:20,revenue:100,fcf:12,netIncome:10,splitAdjusted:false,shareCountRatio:1,dilution:0,provenance:{cash:instant(),debt:instant(),revenue:source(),fcf:source(),netIncome:source(),dilution:raw,shareCountRatio:raw}};
+  return reviewShareSplits(input,[],'2025-06-01','2026-10-02',yahoo);
+ };
  test('loss-making issuers retain evidenced severe leverage, burn and dilution findings',()=>{
   const s={...snapshot(),cash:1,debt:20,fcf:-20,netIncome:-20,dilution:.8};
   assert.equal(assessFinancingRisk(s).level,'severe');
