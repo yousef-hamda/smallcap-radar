@@ -4,6 +4,9 @@ let historyResult=null;
 export function setHistoryResult(value){historyResult=value;}
 export async function historicalMarketData(...args){historyCalls++;historyRequests.push(args);if(historyResult)return historyResult;throw Error('Injected provider outage');}
 export async function companySnapshot(){throw Error('No provider configured in isolated test');}
+let observedDescription=null;
+export const setObservedCompanyDescription=value=>{observedDescription=value;};
+export async function observedNasdaqCompanyDescription(){return observedDescription;}
 let opportunityResult={providerStatus:'retrieved',retryable:false};
 export let opportunityCalls=0;
 export const resetOpportunityCalls=()=>{opportunityCalls=0;};

@@ -6,7 +6,7 @@ import {visitor} from '../../.test-build/visitor.mjs';
 import {body as parseBody} from '../../.test-build/http.mjs';
 import {numeric,parseNews,fetchJson} from '../../.test-build/providers.mjs';
 import {reconcile} from '../../.test-build/reconcile.mjs';
-import {setHistoryResult,setOpportunityResearchResult,setUniverse,setBulkQuoteTransform,universeCalls,setIntradayResult,opportunityCalls,resetOpportunityCalls,historyRequests} from './providers.mjs';
+import {setHistoryResult,setOpportunityResearchResult,setUniverse,setBulkQuoteTransform,universeCalls,setIntradayResult,opportunityCalls,resetOpportunityCalls,historyRequests,setObservedCompanyDescription} from './providers.mjs';
 import {evaluateStrategy} from '../../.test-build/engine.mjs';
 import {proxyOpportunityEvidence} from '../../.test-build/opportunity-proxies.mjs';
 import {fixtures} from '../../.test-build/fixtures.mjs';
@@ -247,15 +247,17 @@ test('newest finished full universe remains canonical despite partial provider c
  const created=new Date(Date.now()+86400000).toISOString(),id='partial-test';
  await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe_total,stage,strategy_hash) VALUES(?,?,?,'partial','Bulk Quotes/SEC Frames · full',2,2,13,?)").bind(id,created,created,currentHash()).run();
  try{
+  const description='شركة اختبار تقدم خدمات دفع محلية لعملاء تجاريين.';
+  setObservedCompanyDescription({description,source:{source:'Nasdaq company profile fixture',url:'https://api.nasdaq.com/api/company/PARTIAL-A/company-profile',periodEnd:created.slice(0,10),availableAt:created,retrievedAt:created,confidence:'medium'}});
   await insertSnapshot(id,{...base,symbol:'PARTIAL-A'}).run();await insertSnapshot(id,{symbol:'PARTIAL-Z',name:'Missing provider data',asOf:base.asOf,securityType:'unknown',provenance:{}}).run();
   invalidateStateCache();const current=await readState({limit:10});assert.equal(current.dataRunId,id);assert.equal(current.summary.opportunityRanked,2);assert.equal(current.summary.missingFinalGrades,0);
   const report=await(await reportGET(new Request('https://radar.test/api/scan-report?runId='+id))).json();assert.equal(report.counts.passed,2);
   for(const [index,snapshot]of current.snapshots.entries()){
    const expected=current.storedEvaluations[index].opportunity;
-   const company=await(await companyGET(new Request('https://radar.test/api/company?symbol='+snapshot.symbol))).json();assert.deepEqual(company.evaluation,expected);assert.equal(company.ranking.runId,id);assert.equal(company.ranking.position,current.rankPositions[index]);
+   const company=await(await companyGET(new Request('https://radar.test/api/company?symbol='+snapshot.symbol))).json();assert.deepEqual(company.evaluation,expected);assert.equal(company.ranking.runId,id);assert.equal(company.ranking.position,current.rankPositions[index]);assert.equal(company.profileDescription.description,description);assert.equal(company.snapshot.description,snapshot.description,'current profile prose never mutates the archived rating snapshot');
    const row=report.rows.find(row=>row.symbol===snapshot.symbol);assert.deepEqual(row.evaluation,expected);assert.equal(row.rank,current.rankPositions[index]);
   }
- }finally{await db().prepare('DELETE FROM fundamental_snapshots WHERE run_id=?').bind(id).run();await db().prepare('DELETE FROM strategy_runs WHERE id=?').bind(id).run();invalidateStateCache();}
+ }finally{setObservedCompanyDescription(null);await db().prepare('DELETE FROM fundamental_snapshots WHERE run_id=?').bind(id).run();await db().prepare('DELETE FROM strategy_runs WHERE id=?').bind(id).run();invalidateStateCache();}
 });
 test('API personal favorites start at zero, writes are idempotent and isolated',async()=>{
  await db().prepare("INSERT INTO watchlist(symbol,created_at) VALUES('OLD_SHARED','2026-01-01')").run();
