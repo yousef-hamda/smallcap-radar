@@ -6,12 +6,13 @@ import {visitor} from '../../.test-build/visitor.mjs';
 import {body as parseBody} from '../../.test-build/http.mjs';
 import {numeric,parseNews,fetchJson} from '../../.test-build/providers.mjs';
 import {reconcile} from '../../.test-build/reconcile.mjs';
-import {setHistoryResult,setOpportunityResearchResult,setUniverse,setBulkQuoteTransform,universeCalls,setIntradayResult,opportunityCalls,resetOpportunityCalls,historyRequests,setObservedCompanyDescription} from './providers.mjs';
+import {setHistoryResult,setOpportunityResearchResult,setUniverse,setBulkQuoteTransform,universeCalls,setIntradayResult,opportunityCalls,resetOpportunityCalls,historyRequests,setObservedCompanyDescription,HistoricalSessionsUnavailableError} from './providers.mjs';
 import {evaluateStrategy} from '../../.test-build/engine.mjs';
 import {proxyOpportunityEvidence} from '../../.test-build/opportunity-proxies.mjs';
 import {fixtures} from '../../.test-build/fixtures.mjs';
 import {ensureSchema,db,currentHash,readState,insertSnapshot,invalidateStateCache,readResearchConflictCount,migrateCompatibleAcquisitionRuns} from '../../.test-build/storage.mjs';
 import {processScanBatch,startScan,historyCandidate,preliminaryCandidates} from '../../.test-build/scanner.mjs';
+import {decodeHistoryCache} from '../../.test-build/history-cache.mjs';
 import {hasVerifiedShareRatio} from '../../.test-build/research.mjs';
 import {GET,POST} from '../../.test-build/radar-api.mjs';
 import {GET as recoverGET} from '../../.test-build/recover-api.mjs';
@@ -444,7 +445,7 @@ test('history stage extends only the needed share interval and caches recent bar
   const row=await db().prepare("SELECT payload FROM fundamental_snapshots WHERE run_id='long-share-interval' AND symbol='LONG-SHARES'").first();
   assert.equal(hasVerifiedShareRatio(JSON.parse(row.payload)),true);
   const cache=await db().prepare('SELECT payload FROM raw_cache WHERE key=?').bind(`scan-history:v3:LONG-SHARES:${now.slice(0,10)}`).first();
-  const saved=JSON.parse(cache.payload);assert.equal(saved.splitReviewCoverageStart,history[0].date);assert(saved.history.length<history.length);assert(saved.history.every(bar=>Date.parse(bar.date)>=Date.parse(now)-550*864e5));
+  const saved=await decodeHistoryCache(cache.payload);assert.equal(saved.splitReviewCoverageStart,history[0].date);assert(saved.history.length<history.length);assert(saved.history.every(bar=>Date.parse(bar.date)>=Date.parse(now)-550*864e5));
  }finally{setHistoryResult(null);}
 });
 
@@ -457,6 +458,35 @@ test('history retries recover without double-counting failures or retaining stal
   const transition=await processScanBatch('outage');assert.equal(transition.run.stage,11);assert.equal(transition.done,false);
   const r=await processScanBatch('outage');assert.equal(r.done,true);assert.equal(r.run.failed,0);assert.equal(r.run.status,'complete');assert.equal(r.run.error,null);
   const row=await db().prepare("SELECT payload,evaluation FROM fundamental_snapshots WHERE id='outage:OUTAGE'").first();assert(!row.payload.includes('Injected provider outage'));assert.equal(JSON.parse(row.evaluation).opportunity.researchState,'needs-research');
+ }finally{setHistoryResult(null);}
+});
+test('same-day empty history cache is refetched and cannot count as successful acquisition',async()=>{
+ const now=new Date().toISOString(),company={ticker:'CACHE-BAD',cik:0};
+ await db().prepare('INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,strategy_hash) VALUES(?,?,?,?,?,?,?,?,?)').bind('bad-history-cache',now,now,'running','Bulk Quotes/SEC Frames · full',1,JSON.stringify([company]),10,currentHash()).run();
+ await insertSnapshot('bad-history-cache',{...base,symbol:company.ticker,cik:0,asOf:now,price:10,provenance:{...base.provenance}}).run();
+ const key=`scan-history:v3:${company.ticker}:${now.slice(0,10)}`;
+ await db().prepare('INSERT INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(key,'corrupt test cache',now,JSON.stringify({history:[],source:'TEST_ONLY',url:'https://example.test',retrievedAt:now,availableAt:now})).run();
+ const before=historyRequests.length;
+ setHistoryResult({history:[{date:now.slice(0,10),close:11,volume:100}],splits:[],source:'TEST_ONLY',url:'https://example.test',retrievedAt:now,availableAt:now});
+ try{
+  const result=await processScanBatch('bad-history-cache');
+  assert.equal(result.run.stage,11);assert.equal(result.run.failed,0);
+  assert(historyRequests.slice(before).some(([symbol])=>symbol===company.ticker));
+  const stored=await decodeHistoryCache((await db().prepare('SELECT payload FROM raw_cache WHERE key=?').bind(key).first()).payload);
+  assert.equal(stored.history.length,1);
+ }finally{setHistoryResult(null);}
+});
+test('terminal no-session instruments retain missing coverage without repeated history retries',async()=>{
+ const now=new Date().toISOString(),company={ticker:'NO-SESSIONS',cik:0};
+ await db().prepare('INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,strategy_hash) VALUES(?,?,?,?,?,?,?,?,?)').bind('terminal-history',now,now,'running','Bulk Quotes/SEC Frames · full',1,JSON.stringify([company]),10,currentHash()).run();
+ await insertSnapshot('terminal-history',{...base,symbol:company.ticker,cik:0,asOf:now,price:10,provenance:{...base.provenance}}).run();
+ setHistoryResult(new HistoricalSessionsUnavailableError(company.ticker));
+ try{
+  const before=historyRequests.length,result=await processScanBatch('terminal-history');
+  assert.equal(result.run.stage,11);assert.equal(result.run.failed,1);assert.equal(result.run.retryPending,0);
+  assert.equal(historyRequests.slice(before).filter(([symbol])=>symbol===company.ticker).length,1);
+  const stored=(await db().prepare("SELECT payload FROM fundamental_snapshots WHERE run_id='terminal-history'").first()).payload;
+  assert.match(stored,/no historical sessions returned/);
  }finally{setHistoryResult(null);}
 });
 test('history completion queues all CIK-linked common stocks for SEC research and recovered SEC retries complete cleanly',async()=>{

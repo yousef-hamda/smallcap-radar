@@ -360,6 +360,53 @@ test('opening a profile synchronizes its completed-session quote back into the v
  assert.match(source,/setCardQuotes\(current=>\(\{\.\.\.current,\.\.\.payload\.quotes\}\)\)/);
 });
 
+test('saved favorites render before the optional quote fetch, including when a provider fails',async()=>{
+ const source=await readFile(path.join(root,'app/page.tsx'),'utf8');
+ const savedRows=source.indexOf('setRatedRows(old=>append?');
+ const quoteFetch=source.indexOf('void request<{quotes:Record<string,CardQuote>;errors?:string[]}>');
+ assert.ok(savedRows>0&&quoteFetch>savedRows);
+ assert.match(source,/const quoteCandidate=cardQuotes\[s\.symbol\]/);
+ assert.match(source,/if\(view==='favorites'&&result\.errors\?\.length&&!Object\.keys\(result\.quotes\)\.length\)setNotice/);
+ assert.doesNotMatch(source,/if\(view==='favorites'&&snapshots\.length\)\{\s*try\{const quotePayload=await request/);
+ assert.match(source,/listError\?<section className="empty-state" role="alert"/);
+});
+
+test('a portfolio profile retains a visible chart and retry when its canonical fetch fails',async()=>{
+ const source=await readFile(path.join(root,'app/company-sheet.tsx'),'utf8');
+ assert.match(source,/s&&!opportunityEvaluation&&<div className="sheet-scroll"/);
+ assert.match(source,/التقييم النهائي غير متاح في هذه اللقطة/);
+ assert.match(source,/ما زالت بيانات الشركة المحفوظة معروضة.*<button onClick=\{onRetry\}>إعادة المحاولة<\/button>/s);
+});
+
+test('a failed first portfolio fetch shows retry instead of claiming the wallet is empty',async()=>{
+ const source=await readFile(path.join(root,'app/portfolio-view.tsx'),'utf8');
+ assert.match(source,/if \(!data\) return <div className="portfolio-loading" role="alert"/);
+ assert.match(source,/onClick=\{\(\) => void refresh\(\)\}>إعادة المحاولة/);
+});
+
+test('portfolio quote refresh does not write display quotes into the database',async()=>{
+ const source=await readFile(path.join(root,'lib/portfolio-storage.ts'),'utf8');
+ assert.match(source,/for\(let offset=0;offset<keys\.length;offset\+=400\)/);
+ const start=source.indexOf('export async function readPortfolioQuotes(');
+ const end=source.indexOf('export async function canonicalPortfolioAsset(',start);
+ const body=source.slice(start,end);
+ assert.match(body,/rememberQuote\(quote,Date\.now\(\)\)/);
+ assert.match(body,/yahooBulkQuotes\(missing\)\.catch\(\(\) => \[\]\)/);
+ assert.doesNotMatch(body,/\b(?:INSERT|UPDATE|DELETE|REPLACE)\b/);
+});
+
+test('company and portfolio-history reads retain dated fallback without writing provider data',async()=>{
+ const [company,history]=await Promise.all([
+  readFile(path.join(root,'app/api/company/route.ts'),'utf8'),
+  readFile(path.join(root,'app/api/portfolio-history/route.ts'),'utf8'),
+ ]);
+ assert.match(company,/deepCache\.get\(cacheKey/);
+ assert.match(company,/cached:true,stale:true/);
+ assert.match(history,/rememberHistory\(symbol,payload\)/);
+ assert.match(history,/const fallback=eligible\(local\?\.payload\)/);
+ for(const route of [company,history])assert.doesNotMatch(route,/\b(?:INSERT|UPDATE|DELETE|REPLACE)\s+(?:OR\s+\w+\s+)?(?:INTO|FROM)?\s*raw_cache/i);
+});
+
 test('screen refresh work is bounded while manual refresh remains available',async()=>{
  const [radar,portfolio]=await Promise.all([readFile(path.join(root,'app/page.tsx'),'utf8'),readFile(path.join(root,'app/portfolio-view.tsx'),'utf8')]);
  assert.match(radar,/if\(view==='portfolio'\)return/);

@@ -8,7 +8,8 @@ import { secUserAgentCacheVersion } from '@/lib/sec-user-agent';
 import { evaluateOpportunityDossier, opportunityDossierFromSnapshot } from '@/lib/opportunity-dossier';
 import type {Snapshot} from '@/lib/engine';
 import {translateToArabic} from '@/lib/translation';
-const pending=new Map<string,Promise<Snapshot>>();
+import {createEphemeralCache} from '@/lib/ephemeral-cache';
+const deepCache=createEphemeralCache<Snapshot>(30*60_000,32);
 
 export async function GET(request: Request) {
   try {
@@ -31,30 +32,24 @@ export async function GET(request: Request) {
     // previous partial response cannot mask newly available fields.
     const cacheKey = `deep:${secUserAgentCacheVersion()}:${symbol}`;
     const cached = await db().prepare('SELECT retrieved_at,payload FROM raw_cache WHERE key=?').bind(cacheKey).first() as any;
-    if (cached && Date.now() - Date.parse(cached.retrieved_at) < 30 * 60_000) {
-      try {
-        const snapshot=JSON.parse(cached.payload) as Snapshot;
-        return json({ snapshot, evaluation:evaluateOpportunityDossier(snapshot,opportunityDossierFromSnapshot(snapshot)), cached: true });
-      }
-      catch { await db().prepare('DELETE FROM raw_cache WHERE key=?').bind(cacheKey).run(); }
-    }
+    let cachedSnapshot:Snapshot|null=null;
+    try{if(cached)cachedSnapshot=JSON.parse(cached.payload) as Snapshot;}catch{/* ignore a corrupted legacy cache row */}
+    if(cachedSnapshot&&Date.now()-Date.parse(cached.retrieved_at)<30*60_000)
+      return json({snapshot:cachedSnapshot,evaluation:evaluateOpportunityDossier(cachedSnapshot,opportunityDossierFromSnapshot(cachedSnapshot)),cached:true});
     const previousRow = await db().prepare('SELECT payload FROM fundamental_snapshots WHERE symbol=? ORDER BY as_of DESC LIMIT 1').bind(symbol).first() as any;
     let previous:Snapshot|null=null;
     try{previous=previousRow?.payload?JSON.parse(previousRow.payload) as Snapshot:null;}catch{/* ignore a corrupted historical row */}
     const company = await resolveCompanyBySymbol(symbol)||(previous?{ticker:symbol,name:previous.name,cik:Number(previous.cik)||0,exchange:previous.exchange||'',sector:previous.sector,industry:previous.industry,price:previous.price??undefined,marketCap:previous.marketCap??undefined}:null);
     if (!company) return json({ error: 'الشركة غير موجودة في الدليل' }, 404);
-    let work=pending.get(symbol);
-    if(!work){
-     work=(async()=>{
-      const snapshot=await companySnapshot(company,{includeOpportunityResearch:true});
-      const result = reconcile(snapshot, previous);
-      await db().prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(cacheKey, 'Nasdaq history + identity-checked SEC Company Facts', new Date().toISOString(), JSON.stringify(result)).run();
-      return result;
-     })().finally(()=>pending.delete(symbol));
-     pending.set(symbol,work);
+    try{
+      const snapshot=await deepCache.get(cacheKey,async()=>reconcile(await companySnapshot(company,{includeOpportunityResearch:true}),previous));
+      return json({snapshot,evaluation:evaluateOpportunityDossier(snapshot,opportunityDossierFromSnapshot(snapshot)),cached:false});
+    }catch(error){
+      // A dated legacy observation is more useful than a blank profile when
+      // the upstream provider is unavailable. It is never silently redated.
+      if(cachedSnapshot)return json({snapshot:cachedSnapshot,evaluation:evaluateOpportunityDossier(cachedSnapshot,opportunityDossierFromSnapshot(cachedSnapshot)),cached:true,stale:true});
+      throw error;
     }
-    const snapshot=await work;
-    return json({ snapshot, evaluation:evaluateOpportunityDossier(snapshot,opportunityDossierFromSnapshot(snapshot)), cached: false });
   } catch (error) {
     return json({ error: error instanceof Error ? error.message : 'تعذّر تحميل التحقق العميق' }, statusOf(error,503));
   }

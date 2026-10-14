@@ -1,8 +1,9 @@
 export let historyCalls=0;
 export const historyRequests=[];
+export class HistoricalSessionsUnavailableError extends Error {constructor(symbol){super(`${symbol}: no historical sessions returned by Yahoo, Cboe or Nasdaq`);this.name='HistoricalSessionsUnavailableError';this.retryable=false;}}
 let historyResult=null;
 export function setHistoryResult(value){historyResult=value;}
-export async function historicalMarketData(...args){historyCalls++;historyRequests.push(args);if(historyResult)return historyResult;throw Error('Injected provider outage');}
+export async function historicalMarketData(...args){historyCalls++;historyRequests.push(args);if(historyResult instanceof Error)throw historyResult;if(historyResult)return historyResult;throw Error('Injected provider outage');}
 export async function companySnapshot(){throw Error('No provider configured in isolated test');}
 let observedDescription=null;
 export const setObservedCompanyDescription=value=>{observedDescription=value;};
