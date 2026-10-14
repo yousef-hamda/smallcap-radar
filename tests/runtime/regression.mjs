@@ -6,7 +6,7 @@ import {visitor} from '../../.test-build/visitor.mjs';
 import {body as parseBody} from '../../.test-build/http.mjs';
 import {numeric,parseNews,fetchJson} from '../../.test-build/providers.mjs';
 import {reconcile} from '../../.test-build/reconcile.mjs';
-import {setHistoryResult,setOpportunityResearchResult,setUniverse,setBulkQuoteTransform,universeCalls,setIntradayResult,opportunityCalls,resetOpportunityCalls} from './providers.mjs';
+import {setHistoryResult,setOpportunityResearchResult,setUniverse,setBulkQuoteTransform,universeCalls,setIntradayResult,opportunityCalls,resetOpportunityCalls,historyRequests,HistoricalSessionsUnavailableError} from './providers.mjs';
 import {evaluateStrategy} from '../../.test-build/engine.mjs';
 import {proxyOpportunityEvidence} from '../../.test-build/opportunity-proxies.mjs';
 import {fixtures} from '../../.test-build/fixtures.mjs';
@@ -417,6 +417,17 @@ test('history retries recover without double-counting failures or retaining stal
   const transition=await processScanBatch('outage');assert.equal(transition.run.stage,11);assert.equal(transition.done,false);
   const r=await processScanBatch('outage');assert.equal(r.done,true);assert.equal(r.run.failed,0);assert.equal(r.run.status,'complete');assert.equal(r.run.error,null);
   const row=await db().prepare("SELECT payload,evaluation FROM fundamental_snapshots WHERE id='outage:OUTAGE'").first();assert(!row.payload.includes('Injected provider outage'));assert.equal(JSON.parse(row.evaluation).opportunity.researchState,'needs-research');
+ }finally{setHistoryResult(null);}
+});
+test('confirmed no-session instruments finish history without a repeated retry',async()=>{
+ const now=new Date().toISOString(),company={ticker:'NO-SESSIONS',cik:0};
+ await db().prepare('INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,strategy_hash) VALUES(?,?,?,?,?,?,?,?,?)').bind('terminal-history',now,now,'running','Bulk Quotes/SEC Frames · full',1,JSON.stringify([company]),10,currentHash()).run();
+ await insertSnapshot('terminal-history',{...base,symbol:company.ticker,cik:0,asOf:now,price:10,provenance:{...base.provenance}}).run();
+ setHistoryResult(new HistoricalSessionsUnavailableError(company.ticker));
+ try{
+  const before=historyRequests.length,result=await processScanBatch('terminal-history');
+  assert.equal(result.run.stage,11);assert.equal(result.run.failed,1);assert.equal(result.run.retryPending,0);
+  assert.equal(historyRequests.slice(before).filter(([symbol])=>symbol===company.ticker).length,1);
  }finally{setHistoryResult(null);}
 });
 test('history completion queues all CIK-linked common stocks for SEC research and recovered SEC retries complete cleanly',async()=>{
