@@ -24,6 +24,7 @@ import {scheduledScanTick} from '../../.test-build/scheduled-scan.mjs';
 import {archivedWriteStatements,restoreArchivedRow} from '../../.test-build/snapshot-archive.mjs';
 import {GET as favoriteQuotesGET} from '../../.test-build/favorite-quotes-api.mjs';
 import {GET as chartGET} from '../../.test-build/chart-api.mjs';
+import {createEphemeralCache} from '../../.test-build/ephemeral-cache.mjs';
 import worker from '../../.test-build/worker.mjs';
 import {validPushSubscription} from '../../.test-build/push-validation.mjs';
 import {createECDH,randomBytes} from 'node:crypto';
@@ -282,10 +283,24 @@ test('radar cards reuse the canonical completed-session value from a refreshed p
  await db().prepare('INSERT INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind('deep:v11:CANONICAL','test',now,JSON.stringify(deep)).run();
  const result=await readState({strategy:'favorites',owner});assert.equal(result.snapshots[0].price,12);assert.equal(result.snapshots[0].dailyChange,.25);assert.match(result.snapshots[0].provenance.dailyChange.tag,/completed close/);assert.equal(Object.hasOwn(result.snapshots[0],'__cacheKey'),false);
 });
-test('favorite quote refresh returns the cached completed-session pair used by profile cards',async()=>{
- const now=new Date().toISOString(),quote={symbol:'FAVQUOTE',price:22,dailyChange:.1,periodEnd:'2026-09-28',provenance:{price:{source:'test',periodEnd:'2026-09-28',tag:'last completed session close'},dailyChange:{source:'test',periodEnd:'2026-09-28',tag:'last completed close / previous completed close - 1'}}};
- await db().prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind('favorite-quote:v1:FAVQUOTE','test',now,JSON.stringify(quote)).run();
- const response=await favoriteQuotesGET(new Request('https://radar.test/api/favorite-quotes?symbols=FAVQUOTE'));assert.equal(response.status,200);const payload=await response.json();assert.equal(payload.quotes.FAVQUOTE.price,22);assert.equal(payload.quotes.FAVQUOTE.dailyChange,.1);assert.equal(payload.errors.length,0);
+test('display-only quote refresh coalesces reads and does not write to the database',async()=>{
+ setHistoryResult({history:[{date:'2026-09-24',close:20},{date:'2026-09-25',close:22}],source:'TEST_ONLY',url:'https://example.test/history',retrievedAt:new Date().toISOString()});
+ try{
+  const request=new Request('https://radar.test/api/favorite-quotes?symbols=FAVQUOTE');
+  const first=await favoriteQuotesGET(request);assert.equal(first.status,200);const payload=await first.json();assert.equal(payload.quotes.FAVQUOTE.price,22);assert(Math.abs(payload.quotes.FAVQUOTE.dailyChange-.1)<1e-12);assert.equal(payload.errors.length,0);
+  assert.equal(await db().prepare("SELECT key FROM raw_cache WHERE key='favorite-quote:v1:FAVQUOTE'").first(),null);
+  setHistoryResult(null);
+  const second=await favoriteQuotesGET(request);assert.equal(second.status,200);assert.equal((await second.json()).quotes.FAVQUOTE.price,22);
+ }finally{setHistoryResult(null)}
+});
+test('display cache shares pending work, expires and evicts old entries',async()=>{
+ let clock=0,calls=0;const cache=createEphemeralCache(10,2,()=>clock);
+ const load=()=>{calls++;return Promise.resolve(calls)};
+ assert.deepEqual(await Promise.all([cache.get('A',load),cache.get('A',load)]),[1,1]);assert.equal(calls,1);
+ await cache.get('B',load);await cache.get('C',load);assert.equal(cache.has('A'),false);
+ assert.equal(await cache.get('A',load),4);clock=11;assert.equal(cache.has('A'),false);assert.equal(await cache.get('A',load),5);
+ await assert.rejects(cache.get('FAIL',()=>Promise.reject(Error('outage'))));
+ assert.equal(cache.has('FAIL'),false);
 });
 test('portfolio API persists isolated trades, validates balances and supports update/delete',async()=>{
  const initial=await portfolioGET(new Request('https://radar.test/api/portfolio'));assert.equal(initial.status,200);const cookie=initial.headers.get('set-cookie').split(';')[0];assert.deepEqual((await initial.json()).transactions,[]);
@@ -368,6 +383,7 @@ test('intraday chart API validates symbols, returns JSON and reuses its short ca
  assert.equal((await chartGET(new Request('https://radar.test/api/chart?symbol=BAD!'))).status,400);
  assert.equal((await chartGET(new Request('https://radar.test/api/chart?symbol=NONE'))).status,404);
  const first=await chartGET(new Request('https://radar.test/api/chart?symbol=TEST'));assert.equal(first.status,200);assert.equal((await first.json()).points.length,2);
+ assert.equal(await db().prepare("SELECT key FROM raw_cache WHERE key='chart:v1:TEST:1D'").first(),null);
  setIntradayResult(Error('provider should not be called while cached'));
  try{const cached=await chartGET(new Request('https://radar.test/api/chart?symbol=TEST'));const payload=await cached.json();assert.equal(cached.status,200);assert.equal(payload.cached,true);}finally{setIntradayResult({points:[{t:1,c:10},{t:2,c:11}],baseline:9,changePct:2/9,baselineLabel:'TEST',source:'TEST_ONLY',availableAt:'2026-09-08T00:00:00Z'});}
 });
@@ -842,6 +858,15 @@ test('production scheduler requires native capacity and never queries prohibited
  assert.throws(()=>db().prepare('PRAGMA freelist_count'),/not authorized/);
  const missing=await worker.fetch(new Request('https://radar.test/__radar-scheduled',{method:'POST',headers:{'X-Radar-Background':'capacity-secret'}}),{BACKGROUND_SCAN_SECRET:'capacity-secret',RAILWAY_VOLUME_MOUNT_PATH:'/app/data'},{waitUntil:()=>{}});assert.equal(missing.status,503);
  const malformed=await worker.fetch(new Request('https://radar.test/__radar-scheduled',{method:'POST',headers:{'X-Radar-Background':'capacity-secret','X-Radar-Reusable-Bytes':'-1','X-Radar-Filesystem-Free-Bytes':'Infinity'}}),{BACKGROUND_SCAN_SECRET:'capacity-secret',RAILWAY_VOLUME_MOUNT_PATH:'/app/data'},{waitUntil:()=>{}});assert.equal(malformed.status,503);
+});
+
+test('low physical storage pauses the scheduler before archive maintenance writes',async()=>{
+ const originalPrepare=runtimeEnv.DB.prepare;let archiveQueries=0;
+ runtimeEnv.DB.prepare=sql=>{if(String(sql).includes('snapshot_archives'))archiveQueries++;return originalPrepare(sql)};
+ try{
+  const result=await scheduledScanTick(Date.now(),{reusableBytes:2*1024**3,filesystemFreeBytes:128*1024**2});
+  assert.equal(result.pausedForCapacity,true);assert.equal(archiveQueries,0);
+ }finally{runtimeEnv.DB.prepare=originalPrepare;}
 });
 
 

@@ -90,6 +90,7 @@ const knownEvent=(overrides={})=>event({impactAsPctTtmRevenue:impact(20,'percent
  const intrinsic=()=>{
   const s=snapshot();s.cik=1;s.price=10;s.marketCap=100;s.issuerCommonListingCount=1;
   s.provenance.price={...instant(),periodEnd:'2026-10-02',availableAt:'2026-10-02'};s.provenance.marketCap=s.provenance.price;
+  s.equityCapitalizationReview={economicCommonClassCount:1,totalCommonShares:10,source:{source:'Reviewed SEC filing equity capitalization',url:'https://www.sec.gov/Archives/edgar/data/1/000000000126000001/report.htm',accession:'0000000001-26-000001',contentHash:'a'.repeat(64),tag:'One economic common class; 10 total shares',periodEnd:'2026-09-30',availableAt:'2026-10-02T00:00:00Z',retrievedAt:asOf,rightsStatus:'redistribution-permitted',confidence:'high'}};
   s.opportunityResearch={financialStrength:{industryModel:'industrial-operating-company'},earnings:{conflicts:[],annual:[2023,2024,2025].map(y=>({start:y+'-01-01',end:y+'-12-31',metrics:Object.fromEntries(Object.entries({revenue:100,netIncome:20,operatingCashFlow:30,capitalExpenditure:5,stockBasedCompensation:5}).map(([k,v])=>[k,sv(v,source(y+'-01-01',y+'-12-31'))]))})),quarterly:[]}};return s;
  };
  const recentQuarters=(income=1)=>[['2025-07-01','2025-09-30'],['2025-10-01','2025-12-31'],['2026-01-01','2026-03-31'],['2026-04-01','2026-06-30']].map(([start,end])=>({start,end,metrics:Object.fromEntries(Object.entries({operatingCashFlow:4,capitalExpenditure:1,stockBasedCompensation:1,netIncome:income}).map(([key,value])=>[key,sv(value,source(start,end))]))}));

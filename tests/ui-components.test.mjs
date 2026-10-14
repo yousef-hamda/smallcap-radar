@@ -123,6 +123,7 @@ test('radar displays numeric research scores, original ranks and separate sessio
 
 test('research-fit control keeps the full rank and names the evidence-limited view',async()=>{
  const [page,route,storage]=await Promise.all(['app/page.tsx','app/api/radar/route.ts','lib/storage.ts'].map(file=>readFile(path.join(root,file),'utf8')));
+ assert.match(page,/\[researchFit,setResearchFit\]=useState\(true\)/);
  assert.match(page,/fit=research/);
  assert.match(page,/aria-pressed=\{researchFit\}/);
  assert.match(page,/قائمة بحث أولية وليست فرص شراء مؤكدة/);
@@ -183,6 +184,16 @@ test('chart defaults to the daily session with clearly labeled close fallback',a
  assert.match(html,/إغلاق آخر جلستين مكتملتين من لقطة 2025-01-03/);
  assert.match(html,/2025-01-03 · \$12\.00/);
  assert.match(html,/data-state="active"[^>]*>يوم</);
+});
+
+test('daily chart includes a newer independently sourced completed close without changing the saved snapshot',async()=>{
+ const {default:Chart}=await vite.ssrLoadModule('/app/price-chart.tsx');
+ const snapshot={symbol:'TEST',name:'Synthetic chart fixture',asOf:'2025-01-03T20:00:00Z',provenance:{},history:[{date:'2025-01-02',close:10},{date:'2025-01-03',close:12}]};
+ const html=renderToStaticMarkup(React.createElement(Chart,{snapshot,completedClose:{price:13,periodEnd:'2025-01-06',source:'Completed daily bars'}}));
+ assert.match(html,/2025-01-06 · \$13\.00/);
+ assert.match(html,/إغلاق 2025-01-06 من Completed daily bars/);
+ assert.match(html,/مستقل عن لقطة التقييم 2025-01-03/);
+ assert.equal(snapshot.history.length,2);
 });
 
 test('historical chart filters duplicate, future and nonfinite bars and displays actual extrema',async()=>{
@@ -345,6 +356,8 @@ test('opening a profile synchronizes its completed-session quote back into the v
  const source=await readFile(path.join(root,'app/page.tsx'),'utf8');
  assert.match(source,/function syncCardQuote\(profile:Snapshot\)/);
  assert.match(source,/syncCardQuote\(p\.snapshot\);setSelected\(p\.snapshot\)/);
+ assert.match(source,/ratedRows\.slice\(0,80\).*favorite-quotes/s);
+ assert.match(source,/setCardQuotes\(current=>\(\{\.\.\.current,\.\.\.payload\.quotes\}\)\)/);
 });
 
 test('screen refresh work is bounded while manual refresh remains available',async()=>{

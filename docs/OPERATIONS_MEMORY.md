@@ -1,5 +1,11 @@
 # Operations memory — Railway
 
+## October 14 audit and capacity gate (current)
+
+Read-only `df -B1 /app/data` showed **263,610,368 bytes free** of 4,838,498,304, below the 256 MiB (268,435,456-byte) scanner reserve. The active October 12 full run is paused at stage 10; no production scan, database, deployment, subscription or volume setting was changed. Public home, ranking status and anonymous portfolio returned HTTP 200, and anonymous browser navigation through the wallet did not blank. The signed-in production wallet path was not retested; the earlier verified signed-in hotfix remains live on scorer 1.2.6.
+
+The source candidate now uses rubric `1.5.2-reviewed-economic-capitalization` / `e7c7d017`; its changed scorer would repair 7,517 saved rows, so a live rollout still needs safe physical headroom and a fresh verified private off-host backup. No paid volume resize is authorized. The candidate stops archive maintenance writes below the reserve, slows paused scheduler ticks to 30 seconds, and removes persistent quote/chart overlay writes. The raw `scan-history` cache currently occupies roughly 258 MB across 5,634 rows, but the active stage-10/11 acquisition still needs those checkpoints; do not prune them to make room. See the [acceptance audit](INDEPENDENT_ACCEPTANCE_AUDIT_2026_10_14.md).
+
 ## October 13 capacity and rollout gate (current)
 
 Read-only `railway ssh -- df -B1 /app/data` reported **266,846,208 bytes available** of 4,838,498,304 on October 13, below the scanner's 256 MiB reserve of 268,435,456 bytes. The tested 1.5.1 candidate would repair/re-rank 7,517 saved rows on production; do not deploy the changed rubric or start a source scan at this capacity. The existing private off-host backup remains preserved. No live database, volume, subscription, deployment or scan state was changed in this wave. A recurring-cost volume resize requires explicit owner authorization. Once safe headroom is arranged, recheck the backup and volume, deploy, allow the bounded saved-row repair, then prove complete rank/API/export/profile parity and monitor volume. Candidate source `e10e9c6` is in [draft PR #1](https://github.com/yousef-hamda/smallcap-radar/pull/1) with both verify jobs and GitGuardian passing. See [the new report](RATING_AND_STOCK_VIEW_REPORT_2026_10_13.md).

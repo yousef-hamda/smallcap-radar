@@ -28,7 +28,7 @@ const request=apiJson;
 const post=(data:unknown)=>({method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
 
 export default function RadarApp(){
- const [view,setView]=useState<View>('opportunity'),[opportunityState]=useState<OpportunityState>('ranked'),[researchFit,setResearchFit]=useState(false),[query,setQuery]=useState(''),[search,setSearch]=useState('');
+ const [view,setView]=useState<View>('opportunity'),[opportunityState]=useState<OpportunityState>('ranked'),[researchFit,setResearchFit]=useState(true),[query,setQuery]=useState(''),[search,setSearch]=useState('');
  const [data,setData]=useState<RadarData|null>(null),[ratedRows,setRatedRows]=useState<RatedRow[]>([]),[favorites,setFavorites]=useState<string[]>([]);
  const [cardQuotes,setCardQuotes]=useState<Record<string,CardQuote>>({});
  const [loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
@@ -106,6 +106,11 @@ export default function RadarApp(){
     // Background metadata refresh must preserve loaded canonical ranking pages.
     // An active scan's completion or an explicit refresh replaces the snapshot.
     void request<{run:ScanRun|null}>('/api/radar?status=1').then(payload=>setData(old=>old?{...old,run:payload.run}:old)).catch(()=>{});
+    // Refresh displayed completed-session quotes without replacing the saved
+    // research scores or the user's current rank page. Keep this bounded to
+    // the first two loaded pages; later pages refresh when explicitly loaded.
+    const symbols=ratedRows.slice(0,80).map(({s})=>s.symbol);
+    if(symbols.length)void request<{quotes:Record<string,CardQuote>}>(`/api/favorite-quotes?symbols=${encodeURIComponent(symbols.join(','))}`).then(payload=>setCardQuotes(current=>({...current,...payload.quotes}))).catch(()=>{});
     return;
    }
    void refresh();
@@ -114,7 +119,7 @@ export default function RadarApp(){
   const timer=window.setInterval(refreshWhenVisible,10*60_000);
   document.addEventListener('visibilitychange',onVisibility);
   return()=>{window.clearInterval(timer);document.removeEventListener('visibilitychange',onVisibility)};
- },[refresh,view]);
+ },[refresh,view,ratedRows]);
 
  async function scan(mode:'quick'|'full'='full'){
   setBusy(true);setError('');
@@ -185,6 +190,9 @@ export default function RadarApp(){
  async function importFile(file?:File){if(!file)return;setBusy(true);try{if(file.size>4_000_000)throw Error('الحد الأقصى 4 MB');const value=JSON.parse(await file.text());const records=Array.isArray(value)?value:Array.isArray(value.results)?value.results.map((row:{snapshot:Snapshot})=>row.snapshot):value.snapshots;await request('/api/radar',post({action:'import',records}));await refresh();setNotice('حُفظت اللقطة وأُعيد تقييمها.')}catch(e){setError(String(e))}finally{setBusy(false)}}
  // Keep the API state filter invariant at the rendering boundary too.
  const visibleEvaluated=useMemo(()=>view==='favorites'?ratedRows:view==='opportunity'?ratedRows.filter(({e})=>e.state===opportunityState):[],[ratedRows,view,opportunityState]);
+ const selectedCardQuote=selected?cardQuotes[selected.symbol]:null;
+ const selectedCardPriceSource=selectedCardQuote?.provenance?.price;
+ const selectedCompletedClose=selectedCardPriceSource?.tag?.includes('last completed session close')&&selectedCardPriceSource.periodEnd&&Number.isFinite(selectedCardQuote?.price)?{price:selectedCardQuote!.price!,periodEnd:selectedCardPriceSource.periodEnd,source:selectedCardPriceSource.source}:null;
  return <div className="radar-app" dir="rtl">
   <header className="radar-header"><div className="header-inner">
    <div className="header-line"><div className="brand"><h1>رادار الشركات الصغيرة</h1><p>{(data?.summary.total??0).toLocaleString('en-US')} شركة مفحوصة · {day(data?.dataRun?.updated_at)}</p></div>
@@ -200,10 +208,10 @@ export default function RadarApp(){
    {view==='portfolio'?<PortfolioView key={accountRevision} onOpenCompany={snapshot=>void openCompany(snapshot) } onCountChange={setPortfolioCount}/>:<>
    <section className={`strategy-brief ${view}`}>
     {view==='favorites'?<><div className="section-line"><h2>المفضلة ({favorites.length})</h2><button className="text-button" onClick={()=>setView('opportunity')}>عودة للفرص</button></div><p>قائمتك الخاصة. الحفظ لا يجعل السهم مؤهلًا أو يغيّر ترتيبه.</p></>:<>
-     {view==='opportunity'&&<><p>جميع الأسهم مرتبة حسب الدرجة النهائية من 100، من الأعلى إلى الأدنى. تظهر فجوات الأدلة وملاحظات السلامة مع التقييم.</p>
-     <div className="model-state"><b>الترتيب النهائي لجميع الأسهم</b><span>ثمانية عوامل بأوزان ثابتة. تُستخدم تقديرات حسابية قابلة للتفسير عند غياب المراجعة المكتملة؛ المكونات المفقودة تحصل على صفر. الدرجة المعروضة هي نفسها المستخدمة في الترتيب.</span></div>
+     {view==='opportunity'&&<><p>{researchFit?'تظهر هنا قائمة بحث أولية من الأسهم التي تجتاز شروط العرض؛ تُقدَّم مراجعة التمويل المؤهلة، ثم تُحفظ الرتبة الأصلية لكل سهم.':'جميع الأسهم مرتبة حسب الدرجة النهائية من 100، من الأعلى إلى الأدنى. تظهر فجوات الأدلة وملاحظات السلامة مع التقييم.'}</p>
+     {!researchFit&&<div className="model-state"><b>الترتيب النهائي لجميع الأسهم</b><span>ثمانية عوامل بأوزان ثابتة. تُستخدم تقديرات حسابية قابلة للتفسير عند غياب المراجعة المكتملة؛ المكونات المفقودة تحصل على صفر. الدرجة المعروضة هي نفسها المستخدمة في الترتيب.</span></div>}
      <div className="research-fit-switch" role="group" aria-label="طريقة عرض الفرص"><button type="button" aria-pressed={!researchFit} onClick={()=>setResearchFit(false)}>جميع الأسهم</button><button type="button" aria-pressed={researchFit} onClick={()=>setResearchFit(true)}>قائمة بحث أولية</button></div>
-     {researchFit&&<p className="muted">شركات تشغيلية بأسهم عادية ومدرجة حاليًا، قيمتها السوقية حتى 5 مليارات دولار، مع إيرادات سنوية مرتبطة بالمُصدر من SEC، وسيولة مرصودة لا تقل عن 150 ألف دولار يوميًا، وإشارة تقييم موجبة، ودون خطر تمويل شديد أو مرتفع معروف. تُعرض مراجعة التمويل المؤهلة أولًا ثم حسب الرتبة الأصلية؛ الرقم على كل بطاقة هو رتبتها في القائمة الكاملة. بيانات السوق قد تكون حقوق استخدامها غير محسومة؛ هذه قائمة بحث أولية وليست فرص شراء مؤكدة.</p>}
+     {researchFit&&<details className="research-fit-details"><summary>قائمة بحث أولية وليست فرص شراء مؤكدة · عرض الشروط</summary><p>شركات تشغيلية بأسهم عادية ومدرجة حاليًا، قيمتها السوقية حتى 5 مليارات دولار، مع إيرادات سنوية مرتبطة بالمُصدر من SEC، وسيولة مرصودة لا تقل عن 150 ألف دولار يوميًا، وإشارة تقييم موجبة، ودون خطر تمويل شديد أو مرتفع معروف. تُعرض مراجعة التمويل المؤهلة أولًا ثم حسب الرتبة الأصلية؛ الرقم على كل بطاقة هو رتبتها في القائمة الكاملة. بيانات السوق قد تكون حقوق استخدامها غير محسومة.</p></details>}
      <div className="brief-stats"><div><b>{data?.summary.total??0}</b><span>أسهم في الترتيب</span></div><div><b>{data?.summary.opportunityRanked??0}</b><span>تقييم نهائي محسوب</span></div><div><b>{data?.summary.opportunityWithEvidence??0}</b><span>لها أدلة مصدرية</span></div></div>
     <details><summary>كيف يعمل الترتيب والدرجة؟</summary><p>القيمة العادلة 25%، المحفزات 20%، القوة المالية 15%، جودة الأرباح 12%، الميزة التنافسية 10%، المخاطر 10%، الإدارة والحوكمة 5%، والتوقيت الفني 3%. الدرجة النهائية هي مجموع درجة كل عامل من 10 مضروبة في وزنه ومقسومة على 10. عند التعادل يُستخدم رمز السهم بترتيب ثابت.</p><p>تغطية مدخلات النموذج تقيس الأجزاء التي تملك بيانات قابلة للحساب، وتغطية المصادر تقيس المراجعة المؤهلة. كلاهما منفصل عن اكتمال الدرجة الرقمية. نقص الأدلة لا يُعد استنتاجًا إيجابيًا ولا يمنع ظهور السهم. التقييم أداة بحث وليس توقعًا للعائد أو توصية استثمارية.</p></details></>}
 
@@ -221,7 +229,7 @@ export default function RadarApp(){
    <footer className="radar-footer"><h3>ما لا تفعله هذه الأداة</h3><p>الدرجة النهائية ترتّب جميع الأسهم وفق الأوزان الثابتة، ولا تمثّل وعدًا بالعائد. تُجمع نماذج Form 4 في الفحص الآلي وتُحفظ مع مصادرها؛ كل حقيقة ناقصة تبقى غير متاحة. احتمال العائد لم يُقَس بعد باختبار تاريخي مستقل.</p><button onClick={()=>setSettings(true)}>المنهجية والمصادر وسجل التدقيق</button></footer>
    </>}
   </main>
-  <CompanySheet snapshot={selected} opportunityEvaluation={selectedOpportunity} profileDescription={profileDescription} loading={detailLoading} error={detailError} onClose={closeCompany} onRetry={()=>selected&&openCompany(selected)} favorite={selected?favorites.includes(selected.symbol):false} onFavorite={()=>selected&&favorite(selected)} onCopy={()=>selected&&copy(selected.symbol)}/>
+  <CompanySheet snapshot={selected} opportunityEvaluation={selectedOpportunity} profileDescription={profileDescription} cardCompletedClose={selectedCompletedClose} loading={detailLoading} error={detailError} onClose={closeCompany} onRetry={()=>selected&&openCompany(selected)} favorite={selected?favorites.includes(selected.symbol):false} onFavorite={()=>selected&&favorite(selected)} onCopy={()=>selected&&copy(selected.symbol)}/>
   <Dialog open={accountOpen} onOpenChange={setAccountOpen}><DialogContent className="account-dialog" dir="rtl"><DialogTitle>{account?'حساب المزامنة':'مزامنة بياناتك بين الأجهزة'}</DialogTitle><DialogDescription>{account?'المحفظة والمفضلة محفوظتان على هذا الحساب ويمكن فتحهما من الهاتف والكمبيوتر.':'أنشئ حسابًا بكلمة مرور حتى تظهر المحفظة والمفضلة نفسها على كل أجهزتك.'}</DialogDescription>{account?<div className="account-status"><div><UserRound size={22}/><b dir="ltr">{account.username}</b></div><p>آخر التغييرات تُحفظ على الخادم وتظهر بعد تسجيل الدخول بهذا الحساب.</p><button className="account-submit" onClick={()=>void logout()} disabled={accountBusy}><LogOut size={17}/>{accountBusy?'جارٍ التنفيذ…':'تسجيل الخروج'}</button></div>:<form className="account-form" onSubmit={accountAction}><div className="account-mode" role="tablist" aria-label="نوع الحساب"><button type="button" className={accountMode==='login'?'active':''} onClick={()=>setAccountMode('login')}>تسجيل الدخول</button><button type="button" className={accountMode==='signup'?'active':''} onClick={()=>setAccountMode('signup')}>إنشاء حساب</button></div><label>اسم المستخدم<input required minLength={3} maxLength={32} pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,31}" autoComplete="username" value={accountUsername} onChange={event=>setAccountUsername(event.target.value)} placeholder="مثال: yousef" dir="ltr"/></label><label>كلمة المرور<input required minLength={8} maxLength={128} type="password" autoComplete={accountMode==='login'?'current-password':'new-password'} value={accountPassword} onChange={event=>setAccountPassword(event.target.value)} placeholder="8 أحرف على الأقل" dir="ltr"/></label><p>بياناتك الحالية على هذا الجهاز ستُنقل إلى الحساب عند الإنشاء أو تسجيل الدخول.</p><button className="account-submit" disabled={accountBusy}>{accountBusy?<RefreshCw className="spin" size={17}/>:accountMode==='login'?<LogIn size={17}/>:<UserRound size={17}/>} {accountBusy?'جارٍ الحفظ…':accountMode==='login'?'دخول ومزامنة':'إنشاء ومزامنة'}</button></form>}</DialogContent></Dialog>
   <Dialog open={settings} onOpenChange={setSettings}><DialogContent className="settings-dialog" dir="rtl" showCloseButton={false}><DialogClose className="absolute top-4 left-4" aria-label="إغلاق مركز البيانات"><X size={20}/></DialogClose><DialogTitle>مركز البيانات والإشعارات</DialogTitle><DialogDescription>حالة المصادر والفحص، وأدوات حفظ النتائج ومراجعتها.</DialogDescription>
    <div className="settings-scroll">{(error||notice)&&<div className={`message ${error?'error':''}`} role={error?'alert':'status'}>{error||notice}</div>}<section><h3>إشعار اكتمال الفحص</h3><p>على iPhone: افتح الموقع في Safari ← أضف إلى الشاشة الرئيسية ← افتحه من الأيقونة ← فعّل الإشعارات ← وافق على الإذن ← اختبر الإشعار.</p><div className="action-pair"><button onClick={()=>notifications()} disabled={notificationBusy}>تفعيل الإشعارات</button><button onClick={()=>notifications(true)} disabled={notificationBusy}>اختبار الإشعار</button></div><small>قبول الإرسال من المزود ليس دليل وصول على الهاتف.</small></section>
