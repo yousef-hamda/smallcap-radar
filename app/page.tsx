@@ -26,11 +26,23 @@ type RatedRow={s:Snapshot;e:OpportunityEvaluation;rank:number};
 const names:Record<View,string>={opportunity:'الفرص الاستثمارية',favorites:'المفضلة',portfolio:'محفظتي'};
 const request=apiJson;
 const post=(data:unknown)=>({method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+export function mergeRecentQuote(base:Snapshot,alternative:Snapshot):Snapshot {
+ const result={...base,provenance:{...base.provenance}};
+ for(const field of ['price','dailyChange'] as const){
+  const incoming=alternative.provenance[field],current=base.provenance[field];
+  if(!Number.isFinite(alternative[field])||!incoming?.periodEnd)continue;
+  if(current?.periodEnd&&incoming.periodEnd<current.periodEnd)continue;
+  if(current?.periodEnd===incoming.periodEnd&&current.availableAt&&incoming.availableAt<current.availableAt)continue;
+  result[field]=alternative[field];
+  result.provenance[field]=incoming;
+ }
+ return result;
+}
 
 export default function RadarApp(){
  const [view,setView]=useState<View>('opportunity'),[opportunityState]=useState<OpportunityState>('ranked'),[query,setQuery]=useState(''),[search,setSearch]=useState('');
  const [data,setData]=useState<RadarData|null>(null),[ratedRows,setRatedRows]=useState<RatedRow[]>([]),[favorites,setFavorites]=useState<string[]>([]);
- const [loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
+ const [loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState(''),[listError,setListError]=useState(''),[notice,setNotice]=useState('');
  const [selected,setSelected]=useState<Snapshot|null>(null),[selectedOpportunity,setSelectedOpportunity]=useState<OpportunityEvaluation|null>(null),[detailLoading,setDetailLoading]=useState(false),[detailError,setDetailError]=useState('');
  const [reportOpen,setReportOpen]=useState(false);
  const [portfolioCount,setPortfolioCount]=useState(0);
@@ -42,7 +54,7 @@ export default function RadarApp(){
  const cursor=useRef(0),loadingRequest=useRef(false),favoriteVersion=useRef(0),favoritePending=useRef(false),lastResume=useRef(0);
  const progress=scanProgress(data?.run);
  function mergeCardQuotes(current:Snapshot[],quotes:Record<string,{price?:number;dailyChange?:number;provenance?:Snapshot['provenance']}>) {
-  return current.map(row=>{const quote=quotes[row.symbol];if(!quote)return row;return {...row,...(Number.isFinite(quote.price)?{price:quote.price}:{}),...(Number.isFinite(quote.dailyChange)?{dailyChange:quote.dailyChange}:{}),provenance:{...row.provenance,...(quote.provenance?.price?{price:quote.provenance.price}:{}),...(quote.provenance?.dailyChange?{dailyChange:quote.provenance.dailyChange}:{})}}});
+  return current.map(row=>{const quote=quotes[row.symbol];if(!quote)return row;return mergeRecentQuote(row,{...row,...quote,provenance:{...row.provenance,...quote.provenance}});});
  }
  const refresh=useCallback(async(append=false)=>{
   listRequest.current?.abort();const controller=new AbortController();listRequest.current=controller;loadingRequest.current=true;
@@ -52,19 +64,20 @@ export default function RadarApp(){
    const pin=append&&releaseRef.current?`&runId=${encodeURIComponent(releaseRef.current.runId)}&release=${encodeURIComponent(releaseRef.current.token)}`:'';
    const payload=await request<RadarData>(`/api/radar?view=compact&strategy=${view==='opportunity'?'opportunity':view}&q=${encodeURIComponent(search)}&limit=40&offset=${offset}${stateParam}${pin}`,{signal:controller.signal});
    if(controller.signal.aborted)return;
-   let snapshots=payload.snapshots;
-   if(view==='favorites'&&snapshots.length){
-    try{const quotePayload=await request<{quotes:Record<string,{price?:number;dailyChange?:number;provenance?:Snapshot['provenance']}>}>(`/api/favorite-quotes?symbols=${encodeURIComponent(snapshots.map(s=>s.symbol).join(','))}`,{signal:controller.signal});snapshots=mergeCardQuotes(snapshots,quotePayload.quotes)}catch(error){if(controller.signal.aborted)return;setNotice(error instanceof Error?error.message:'تعذّر تحديث أسعار المفضلة؛ عُرضت آخر لقطة محفوظة.');}
-   }
+   const snapshots=payload.snapshots;
    // The portfolio has its own data view. Its radar request updates shared
    // header counts, but must not publish stock-list rows without their ratings.
    const pageRows:RatedRow[]=view==='portfolio'?[]:snapshots.map((s,index)=>({s,e:canonicalRating(s,payload.storedEvaluations?.[index]?.opportunity),rank:payload.rankPositions?.[index]??offset+index+1}));
-   releaseRef.current=payload.release??null;setData(payload);if(version===favoriteVersion.current&&!favoritePending.current)setFavorites(payload.favorites);setPortfolioCount(payload.portfolioCount??0);setHasMore(payload.page.hasMore);cursor.current=offset+snapshots.length;setError('');
+   releaseRef.current=payload.release??null;setData(payload);if(version===favoriteVersion.current&&!favoritePending.current)setFavorites(payload.favorites);setPortfolioCount(payload.portfolioCount??0);setHasMore(payload.page.hasMore);cursor.current=offset+snapshots.length;setListError('');setError('');
    if(view!=='portfolio'){
     setRatedRows(old=>append?[...old,...pageRows.filter(row=>!old.some(previous=>previous.s.symbol===row.s.symbol))]:pageRows);
     void saveOffline({savedAt:new Date().toISOString(),run:payload.dataRun,release:payload.release,snapshots:payload.snapshots,evaluations:payload.storedEvaluations,ranks:payload.rankPositions}).catch(()=>{});
+    if(view==='favorites'&&snapshots.length)void request<{quotes:Record<string,{price?:number;dailyChange?:number;provenance?:Snapshot['provenance']}>}>(`/api/favorite-quotes?symbols=${encodeURIComponent(snapshots.map(s=>s.symbol).join(','))}`,{signal:controller.signal}).then(result=>{
+      if(controller.signal.aborted||lastView.current.view!=='favorites')return;
+      setRatedRows(current=>current.map(row=>({...row,s:mergeCardQuotes([row.s],result.quotes)[0]})));
+    }).catch(()=>{if(!controller.signal.aborted&&lastView.current.view==='favorites')setNotice('تعذّر تحديث أسعار المفضلة؛ عُرضت آخر لقطة محفوظة.');});
    }
-  }catch(e){if(!controller.signal.aborted)setError(e instanceof Error?e.message:'تعذّر تحميل البيانات');}
+  }catch(e){if(!controller.signal.aborted){const message=e instanceof Error?e.message:'تعذّر تحميل البيانات';setListError(message);setError(message);}}
   finally{if(!controller.signal.aborted){setLoading(false);loadingRequest.current=false;}}
  },[opportunityState]);
  useEffect(()=>{lastView.current={view,search};cursor.current=0;queueMicrotask(()=>{setLoading(true);setRatedRows([]);void refresh()});return()=>listRequest.current?.abort()},[view,search,opportunityState,refresh]);
@@ -132,17 +145,13 @@ export default function RadarApp(){
   try{await request('/api/account',post({action:'logout'}));setAccount(null);setAccountRevision(version=>version+1);await refresh();setNotice('تم تسجيل الخروج.')}catch(error){setError(error instanceof Error?error.message:'تعذّر تسجيل الخروج.')}finally{setAccountBusy(false)}
  }
  function syncCardQuote(profile:Snapshot){
-  setRatedRows(current=>current.map(row=>row.s.symbol!==profile.symbol?row:{...row,s:{...row.s,
-   ...(Number.isFinite(profile.price)?{price:profile.price}:{}),
-   ...(Number.isFinite(profile.dailyChange)?{dailyChange:profile.dailyChange}:{}),
-   provenance:{...row.s.provenance,...(profile.provenance.price?{price:profile.provenance.price}:{}),...(profile.provenance.dailyChange?{dailyChange:profile.provenance.dailyChange}:{})}
-  }}));
+  setRatedRows(current=>current.map(row=>row.s.symbol!==profile.symbol?row:{...row,s:mergeRecentQuote(row.s,profile)}));
  }
  async function openCompany(s:Snapshot){
   selection.current?.abort();const controller=new AbortController();selection.current=controller;
   setSelected(s);setSelectedOpportunity(ratedRows.find(row=>row.s.symbol===s.symbol)?.e??null);setDetailLoading(true);setDetailError('');
   const pin=data?.release?`&runId=${encodeURIComponent(data.release.runId)}&release=${encodeURIComponent(data.release.token)}`:'';
-  try{const p=await request<{snapshot:Snapshot;evaluation:OpportunityEvaluation}>(`/api/company?symbol=${encodeURIComponent(s.symbol)}${pin}`,{signal:controller.signal});if(!controller.signal.aborted){syncCardQuote(p.snapshot);setSelected(p.snapshot);setSelectedOpportunity(canonicalRating(p.snapshot,p.evaluation))}}
+  try{const p=await request<{snapshot:Snapshot;evaluation:OpportunityEvaluation;stale?:boolean;chartHistory?:{stale:boolean;availableAt:string}|null}>(`/api/company?symbol=${encodeURIComponent(s.symbol)}&includeHistory=1${pin}`,{signal:controller.signal});if(!controller.signal.aborted){if(!p.stale)syncCardQuote(p.snapshot);setSelected(previous=>previous?.symbol===p.snapshot.symbol?mergeRecentQuote(p.snapshot,previous):p.snapshot);setSelectedOpportunity(canonicalRating(p.snapshot,p.evaluation));if(p.stale)setDetailError('تعذّر تحديث بيانات الشركة؛ هذه نسخة محفوظة بتاريخ سابق.');else if(p.chartHistory?.stale)setDetailError(`تعذّر تحديث الرسم السعري؛ عُرض آخر تاريخ محفوظ حتى ${p.chartHistory.availableAt.slice(0,10)}.`)}}
   catch(e){if(!controller.signal.aborted)setDetailError(e instanceof Error?e.message:'تعذّر تحديث الملف')}
   finally{if(!controller.signal.aborted)setDetailLoading(false)}
  }
@@ -154,7 +163,7 @@ export default function RadarApp(){
   const found=ratedRows.find(row=>row.s.symbol===query.trim().toUpperCase());if(found){await openCompany(found.s);return;}
   selection.current?.abort();const controller=new AbortController();selection.current=controller;
   setBusy(true);setError('');
-   try{const p=await request<{snapshot:Snapshot;evaluation:OpportunityEvaluation}>(`/api/company?symbol=${encodeURIComponent(query.trim().toUpperCase())}`,{signal:controller.signal});if(!controller.signal.aborted){syncCardQuote(p.snapshot);setSelected(p.snapshot);setSelectedOpportunity(canonicalRating(p.snapshot,p.evaluation));setDetailError('');setDetailLoading(false);}}
+   try{const p=await request<{snapshot:Snapshot;evaluation:OpportunityEvaluation;stale?:boolean;chartHistory?:{stale:boolean;availableAt:string}|null}>(`/api/company?symbol=${encodeURIComponent(query.trim().toUpperCase())}&includeHistory=1`,{signal:controller.signal});if(!controller.signal.aborted){if(!p.stale)syncCardQuote(p.snapshot);setSelected(p.snapshot);setSelectedOpportunity(canonicalRating(p.snapshot,p.evaluation));setDetailError(p.stale?'تعذّر تحديث بيانات الشركة؛ هذه نسخة محفوظة بتاريخ سابق.':p.chartHistory?.stale?`تعذّر تحديث الرسم السعري؛ عُرض آخر تاريخ محفوظ حتى ${p.chartHistory.availableAt.slice(0,10)}.`:'');setDetailLoading(false);}}
   catch(e){if(!controller.signal.aborted)setError(e instanceof Error?e.message:'لا توجد بيانات لهذا الرمز')}finally{setBusy(false)}
  }
  async function notifications(testOnly=false){
@@ -206,7 +215,7 @@ export default function RadarApp(){
     <div className="opportunity-card-head"><div><div className="stock-identity"><span className="rank-number" dir="ltr">{`#${queuePosition}`}</span><b dir="ltr"><button className="ticker-open" aria-label={`فتح ملف ${s.symbol}`} onClick={()=>openCompany(s)}>{s.symbol}</button></b><button className="copy-button" onClick={()=>copy(s.symbol)} aria-label={`نسخ ${s.symbol}`}>{copied===s.symbol?'تم':'نسخ'}</button><button className={`star-button ${favorites.includes(s.symbol)?'saved':''}`} onClick={()=>favorite(s)} disabled={saving===s.symbol} aria-label={`${favorites.includes(s.symbol)?'إزالة':'إضافة'} ${s.symbol} ${favorites.includes(s.symbol)?'من':'إلى'} المفضلة`}><Star size={21} fill={favorites.includes(s.symbol)?'currentColor':'none'}/></button></div><p dir="auto">{s.nameAr||s.name}</p></div><div className="opportunity-score"><strong>{e.score.toFixed(2)}</strong><span>/ 100</span><em>درجة نهائية · تغطية المصادر {e.coveragePct.toFixed(1)}%{e.researchState==='excluded'?' · ملاحظات سلامة':''}</em></div></div>
     {e.state==='needs-research'&&<div className="candidate-signals" aria-label={`إشارات SEC التشغيلية لـ ${s.symbol}`}><span>سنوات ربحية <b>{candidate.profitableYears}/{candidate.yearsWithProfitEvidence||'—'}</b></span><span>سنوات FCF موجب <b>{candidate.positiveFcfYears}/{candidate.yearsWithFcfEvidence||'—'}</b></span><span>نمو الإيرادات <b dir="ltr">{candidate.revenueGrowth===null?'—':`${candidate.revenueGrowth>=0?'+':''}${(candidate.revenueGrowth*100).toFixed(1)}%`}</b></span><span>سنوات مالية مكتملة <b>{candidate.annualEvidenceYears}/3</b></span></div>}
     <div className="opportunity-factors">{e.factors.map(f=><span key={f.id} className={f.complete?'pass':f.evidenced?'partial':'unknown'} title={f.rationale}><b>{f.label}</b><small>{f.score!=null?`${f.score.toFixed(2)}/10 · ${f.points.toFixed(3)} نقطة · ${f.proxy&&!f.evidenced?'درجة خوارزمية · تغطية خوارزمية '+f.algorithmicCoveragePct.toFixed(0)+'%':'تغطية مصدرية '+f.coveragePct.toFixed(0)+'%'}`: `غير مثبت · وزن ${f.weight}%`}</small></span>)}</div><p className="opportunity-reason">درجة نهائية محسوبة من العوامل الثمانية · تغطية المصدر المؤهل {e.coveragePct.toFixed(1)}% · {e.researchState==='excluded'?'توجد ملاحظات سلامة؛ راجع الملف.':e.sourceEligible?'اكتملت الأدلة المصدرية ومراجعة السلامة.':'توجد فجوات أدلة موضحة في الملف.'}</p><p className="stock-meta" dir="auto">{s.exchange||'السوق غير متاح'} · {s.sectorAr||s.sector||'القطاع غير متاح'} · {price(s.price)} · {s.provenance.price?.availableAt?day(s.provenance.price.availableAt):'تاريخ السعر غير متاح'}</p>
-   </li>})}</ul>:<section className="empty-state"><h2>{view==='favorites'?'لم تضف أي سهم إلى المفضلة':search?'لا توجد نتائج مطابقة':view==='opportunity'&&opportunityState==='ranked'?'لا توجد لقطة أسهم محفوظة':view==='opportunity'&&opportunityState==='excluded'?'لا توجد شركات مستبعدة بدليل':'لم تُنشأ لقطة سوق بعد'}</h2><p>{view==='favorites'?'اضغط النجمة بجانب السهم لحفظه هنا.':search?'ابحث برمز سهم لفتح ملفه، أو امسح البحث لرؤية القائمة.':view==='opportunity'&&opportunityState==='ranked'?'تظهر جميع الأسهم المحفوظة بدرجاتها النهائية.':data?.dataRun?'الجولة محفوظة؛ ابدأ جولة جديدة لربط البيانات الحالية بتقييم الفرص.':'ابدأ فحص السوق. ستظهر الحالات التي تحتاج بحثًا بوضوح، ولن تُعرض درجات الفئات القديمة.'}</p>{!data?.dataRun&&view!=='favorites'&&<button className="scan-button" onClick={()=>scan()} disabled={busy||progress.active}>فحص السوق</button>}</section>}
+   </li>})}</ul>:listError?<section className="empty-state" role="alert"><h2>تعذّر تحميل القائمة المحفوظة</h2><p>{listError}</p><button className="scan-button" onClick={()=>void refresh()}>إعادة المحاولة</button></section>:<section className="empty-state"><h2>{view==='favorites'?'لم تضف أي سهم إلى المفضلة':search?'لا توجد نتائج مطابقة':view==='opportunity'&&opportunityState==='ranked'?'لا توجد لقطة أسهم محفوظة':view==='opportunity'&&opportunityState==='excluded'?'لا توجد شركات مستبعدة بدليل':'لم تُنشأ لقطة سوق بعد'}</h2><p>{view==='favorites'?'اضغط النجمة بجانب السهم لحفظه هنا.':search?'ابحث برمز سهم لفتح ملفه، أو امسح البحث لرؤية القائمة.':view==='opportunity'&&opportunityState==='ranked'?'تظهر جميع الأسهم المحفوظة بدرجاتها النهائية.':data?.dataRun?'الجولة محفوظة؛ ابدأ جولة جديدة لربط البيانات الحالية بتقييم الفرص.':'ابدأ فحص السوق. ستظهر الحالات التي تحتاج بحثًا بوضوح، ولن تُعرض درجات الفئات القديمة.'}</p>{!data?.dataRun&&view!=='favorites'&&<button className="scan-button" onClick={()=>scan()} disabled={busy||progress.active}>فحص السوق</button>}</section>}
    {hasMore&&!loading&&<button className="load-more" onClick={()=>refresh(true)}>عرض المزيد <ChevronDown size={16}/></button>}
    <footer className="radar-footer"><h3>ما لا تفعله هذه الأداة</h3><p>الدرجة النهائية ترتّب جميع الأسهم وفق الأوزان الثابتة، ولا تمثّل وعدًا بالعائد. تُجمع نماذج Form 4 في الفحص الآلي وتُحفظ مع مصادرها؛ كل حقيقة ناقصة تبقى غير متاحة. احتمال العائد لم يُقَس بعد باختبار تاريخي مستقل.</p><button onClick={()=>setSettings(true)}>المنهجية والمصادر وسجل التدقيق</button></footer>
    </>}

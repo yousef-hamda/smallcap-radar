@@ -40,7 +40,7 @@ type PortfolioData = {
 };
 
 type SearchResult = { symbol: string; name: string; nameAr?: string; exchange?: string; securityType?: string; price?: number | null; sector?: string; industry?: string };
-type HistoryData = { points: PortfolioPoint[]; unavailable: string[]; incompleteSymbols: string[]; sources: Array<{ symbol: string; source: string; availableAt: string }>; asOf: string; method?: string };
+type HistoryData = { points: PortfolioPoint[]; unavailable: string[]; staleSymbols?: string[]; incompleteSymbols: string[]; sources: Array<{ symbol: string; source: string; availableAt: string }>; asOf: string; method?: string };
 type FormState = { id?: string; symbol: string; side: 'buy' | 'sell'; quantity: string; price: string; fees: string; tradeDate: string; note: string };
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -102,6 +102,8 @@ export function PerformanceChart({ history }: { history: HistoryData | null }) {
       </>}
     </div>
     {!!history?.unavailable.length && <p className="portfolio-warning"><AlertTriangle size={16}/> التاريخ غير متاح حاليًا لـ {history.unavailable.join('، ')}؛ لم تُحوّل البيانات الناقصة إلى صفر.</p>}
+    {!!history?.staleSymbols?.length && <p className="portfolio-warning"><AlertTriangle size={16}/> تعذّر تحديث تاريخ {history.staleSymbols.join('، ')}؛ استُخدمت بيانات سابقة مؤرخة حتى يعود مصدر الأسعار.</p>}
+    {!!history?.incompleteSymbols?.length && <p className="portfolio-warning"><AlertTriangle size={16}/> تاريخ الأسعار غير مكتمل منذ أول صفقة لـ {history.incompleteSymbols.join('، ')}؛ قد لا يعرض الرسم أداء المحفظة الكامل.</p>}
   </section>;
 }
 
@@ -266,6 +268,7 @@ export default function PortfolioView({ onOpenCompany, onCountChange }: { onOpen
   }).length ?? 0;
 
   if (loading && !data) return <div className="portfolio-loading" role="status"><BriefcaseBusiness/> جارٍ تحميل محفظتك المحفوظة…</div>;
+  if (!data) return <div className="portfolio-loading" role="alert"><BriefcaseBusiness/><span>{error || 'تعذّر تحميل محفظتك المحفوظة.'}</span><button className="portfolio-refresh" onClick={() => void refresh()}>إعادة المحاولة</button></div>;
   return <section className="portfolio-view" aria-label="محفظتي الاستثمارية">
     {(error || notice) && <div className={`message ${error ? 'error' : ''}`} role={error ? 'alert' : 'status'}><span>{error || notice}</span><button aria-label="إغلاق الرسالة" onClick={() => { setError(''); setNotice(''); }}><X size={16}/></button></div>}
     <div className="portfolio-hero"><div><span className="portfolio-kicker"><BriefcaseBusiness size={17}/> محفظتي</span><h2>متابعة قراراتك، لا أسعارك فقط</h2><p>سجّل الشراء والبيع، ثم راقب العائد والتوزيع والتركيز من بياناتك الحقيقية.</p></div><div className="portfolio-hero-actions"><button className="portfolio-refresh" onClick={() => void refresh(true)} disabled={loading} aria-label="تحديث أسعار المحفظة"><RefreshCw size={17} className={loading ? 'spin' : ''}/> {loading ? 'جارٍ التحديث…' : 'تحديث الأسعار'}</button><button className="portfolio-export" onClick={exportCsv} disabled={!data?.transactions.length}><Download size={17}/> تصدير CSV</button><button className="scan-button" onClick={openNewTransaction}><Plus size={17}/> إضافة عملية</button></div></div>

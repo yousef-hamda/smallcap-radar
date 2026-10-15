@@ -16,12 +16,14 @@ export default function PriceChart({snapshot,loading=false}:{snapshot:Snapshot;l
   return()=>controller.abort();
  },[range,intraday,snapshot.symbol]);
  const rows=useMemo(()=>{
-  const end=Math.min(Date.parse(snapshot.asOf),observedAt);
+  // Chart bars carry their own session dates and may be newer than the pinned
+  // research/rating snapshot. Limit only by the time this view was opened.
+  const end=observedAt;
   if(range==='1D')return (intraday?.points??[]).filter(r=>r.t*1000<=end).map(r=>({date:new Date(r.t*1000).toISOString(),close:r.c}));
   const unique=new Map((snapshot.history||[]).filter(r=>Number.isFinite(r.close)&&r.close>0&&Number.isFinite(Date.parse(r.date))&&Date.parse(r.date)<=end).map(r=>[r.date,r]));
   const all=[...unique.values()].sort((a,b)=>a.date.localeCompare(b.date));
   return all.filter(r=>Date.parse(r.date)>=end-chartRanges[range].days*86_400_000);
- },[snapshot.history,snapshot.asOf,range,observedAt,intraday]);
+ },[snapshot.history,range,observedAt,intraday]);
  const low=rows.length?Math.min(...rows.map(r=>r.close)):0,high=rows.length?Math.max(...rows.map(r=>r.close)):0;
  const pad=(high-low||high*.02||1)*.1,y=(n:number)=>145-(n-low+pad)/(high-low+pad*2)*125,x=(i:number)=>12+i/Math.max(1,rows.length-1)*576;
  const points=rows.map((r,i)=>`${x(i)},${y(r.close)}`).join(' '),change=range==='1D'&&intraday?intraday.changePct:rows.length>1?rows.at(-1)!.close/rows[0].close-1:null;
@@ -38,6 +40,6 @@ export default function PriceChart({snapshot,loading=false}:{snapshot:Snapshot;l
    </svg><div className="chart-dates" dir="ltr"><span>{range==='1D'?new Date(rows[0].date).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',timeZone:'America/New_York'}):rows[0].date.slice(5,10)}</span><span dir="rtl">أدنى {low.toFixed(2)} · أعلى {high.toFixed(2)}</span><span>{range==='1D'?new Date(rows.at(-1)!.date).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',timeZone:'America/New_York'}):rows.at(-1)!.date.slice(5,10)}</span></div>
   </>}</div>
   <Tabs value={range} onValueChange={v=>{const next=v as Range;setRange(next);setPoint(null);if(next==='1D'&&!intraday){setRangeLoading(true);setRangeError('')}}} dir="rtl" className="chart-tabs"><TabsList aria-label="فترة الرسم السعري">{(Object.keys(chartRanges) as Range[]).map(k=><TabsTrigger key={k} value={k}>{chartRanges[k].label}</TabsTrigger>)}</TabsList></Tabs>
-  <small className="muted">{range==='1D'?(intraday?.source||'بيانات جلسة اليوم كل 5 دقائق عند توفرها'):'أسعار إغلاق يومية موثقة'}؛ حرّك المؤشر أو استخدم مفاتيح الأسهم لعرض السعر والتاريخ.</small>
+  <small className="muted">{range==='1D'?(intraday?.source||'بيانات جلسة اليوم كل 5 دقائق عند توفرها'):`أسعار إغلاق يومية موثقة${rows.length?` · أحدث جلسة ${rows.at(-1)!.date.slice(0,10)}`:''}`}؛ حرّك المؤشر أو استخدم مفاتيح الأسهم لعرض السعر والتاريخ.</small>
  </section>;
 }

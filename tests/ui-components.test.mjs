@@ -101,6 +101,16 @@ test('radar exposes one opportunity category, favorites and portfolio without bo
  assert.doesNotMatch(html,/bottom-nav|terminal-shell|sidebar-head/);
 });
 
+test('a dated saved profile cannot replace a newer completed-session quote',async()=>{
+ const {mergeRecentQuote}=await vite.ssrLoadModule('/app/page.tsx');
+ const source=(periodEnd,availableAt)=>({source:'fixture',periodEnd,availableAt,retrievedAt:availableAt,confidence:'high'});
+ const current={symbol:'TEST',name:'Test',asOf:'2026-10-15T00:00:00Z',price:18,dailyChange:.03,provenance:{price:source('2026-10-14','2026-10-14T21:00:00Z'),dailyChange:source('2026-10-14','2026-10-14T21:00:00Z')}};
+ const older={...current,price:12,dailyChange:-.07,provenance:{price:source('2026-10-13','2026-10-13T21:00:00Z'),dailyChange:source('2026-10-13','2026-10-13T21:00:00Z')}};
+ assert.equal(mergeRecentQuote(older,current).price,18);
+ assert.equal(mergeRecentQuote(current,older).price,18);
+ assert.equal(mergeRecentQuote(current,older).dailyChange,.03);
+});
+
 test('company profile consumes only the canonical Opportunity evaluation',async()=>{
  const source=await readFile(path.join(root,'app/company-sheet.tsx'),'utf8');
  const route=await readFile(path.join(root,'app/api/company/route.ts'),'utf8');
@@ -164,7 +174,9 @@ test('empty chart keeps all seven period controls',async()=>{
 
 test('historical chart filters duplicate, future and nonfinite bars and displays actual extrema',async()=>{
  const {default:Chart}=await vite.ssrLoadModule('/app/price-chart.tsx');
- const html=renderToStaticMarkup(React.createElement(Chart,{snapshot:{symbol:'TEST',name:'Synthetic chart fixture',asOf:'2025-01-03',provenance:{},history:[{date:'2025-01-01',close:10},{date:'2025-01-01',close:10},{date:'2025-01-02',close:12},{date:'2025-01-04',close:99999},{date:'2025-01-02',close:NaN}]}}));
+ const date=offset=>new Date(Date.now()+offset*86_400_000).toISOString().slice(0,10);
+ const older=date(-2),latest=date(-1),future=date(1);
+ const html=renderToStaticMarkup(React.createElement(Chart,{snapshot:{symbol:'TEST',name:'Synthetic chart fixture',asOf:older,provenance:{},history:[{date:older,close:10},{date:older,close:10},{date:latest,close:12},{date:future,close:99999},{date:latest,close:NaN}]}}));
  assert.match(html,/10\.00/);assert.match(html,/12\.00/);assert.doesNotMatch(html,/99999|NaN|Infinity/);
  assert.match(html,/polyline/);
 });
@@ -311,6 +323,54 @@ test('opening a profile synchronizes its completed-session quote back into the v
  const source=await readFile(path.join(root,'app/page.tsx'),'utf8');
  assert.match(source,/function syncCardQuote\(profile:Snapshot\)/);
  assert.match(source,/syncCardQuote\(p\.snapshot\);setSelected\(p\.snapshot\)/);
+});
+
+test('saved favorites render before the optional quote fetch, including when a provider fails',async()=>{
+ const source=await readFile(path.join(root,'app/page.tsx'),'utf8');
+ const savedRows=source.indexOf('setRatedRows(old=>append?');
+ const quoteFetch=source.indexOf("if(view==='favorites'&&snapshots.length)void request");
+ assert.ok(savedRows>0&&quoteFetch>savedRows);
+ assert.match(source,/setRatedRows\(current=>current\.map\(row=>\(\{\.\.\.row,s:mergeCardQuotes/);
+ assert.match(source,/setNotice\('تعذّر تحديث أسعار المفضلة؛ عُرضت آخر لقطة محفوظة.'\)/);
+ assert.doesNotMatch(source,/if\(view==='favorites'&&snapshots\.length\)\{\s*try\{const quotePayload=await request/);
+ assert.match(source,/listError\?<section className="empty-state" role="alert"/);
+});
+
+test('a portfolio profile retains a visible chart and retry when its canonical fetch fails',async()=>{
+ const source=await readFile(path.join(root,'app/company-sheet.tsx'),'utf8');
+ assert.match(source,/s&&!opportunityEvaluation&&<div className="sheet-scroll"/);
+ assert.match(source,/التقييم النهائي غير متاح في هذه اللقطة/);
+ assert.match(source,/ما زالت بيانات الشركة المحفوظة معروضة.*<button onClick=\{onRetry\}>إعادة المحاولة<\/button>/s);
+});
+
+test('a failed first portfolio fetch shows retry instead of claiming the wallet is empty',async()=>{
+ const source=await readFile(path.join(root,'app/portfolio-view.tsx'),'utf8');
+ assert.match(source,/if \(!data\) return <div className="portfolio-loading" role="alert"/);
+ assert.match(source,/onClick=\{\(\) => void refresh\(\)\}>إعادة المحاولة/);
+});
+
+test('portfolio quote refresh does not write display quotes into the database',async()=>{
+ const source=await readFile(path.join(root,'lib/portfolio-storage.ts'),'utf8');
+ assert.match(source,/for\(let offset=0;offset<keys\.length;offset\+=400\)/);
+ const start=source.indexOf('export async function readPortfolioQuotes(');
+ const end=source.indexOf('export async function canonicalPortfolioAsset(',start);
+ const body=source.slice(start,end);
+ assert.match(body,/rememberQuote\(quote,Date\.now\(\)\)/);
+ assert.match(body,/yahooBulkQuotes\(missing\)\.catch\(\(\) => \[\]\)/);
+ assert.doesNotMatch(body,/\b(?:INSERT|UPDATE|DELETE|REPLACE)\b/);
+});
+
+test('company and portfolio-history reads retain dated fallback without writing provider data',async()=>{
+ const [company,history]=await Promise.all([
+  readFile(path.join(root,'app/api/company/route.ts'),'utf8'),
+  readFile(path.join(root,'app/api/portfolio-history/route.ts'),'utf8'),
+ ]);
+ assert.match(company,/remember\(cacheKey,snapshot\)/);
+ assert.match(company,/cached:true,stale:true/);
+ assert.match(history,/rememberHistory\(symbol,payload\)/);
+ assert.match(history,/const fallback=valid\(local\?\.payload\)/);
+ assert.match(history,/startCoverageGaps\.add\(symbol\)/);
+ for(const route of [company,history])assert.doesNotMatch(route,/\b(?:INSERT|UPDATE|DELETE|REPLACE)\s+(?:OR\s+\w+\s+)?(?:INTO|FROM)?\s*raw_cache/i);
 });
 
 test('screen refresh work is bounded while manual refresh remains available',async()=>{

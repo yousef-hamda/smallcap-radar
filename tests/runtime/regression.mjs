@@ -6,7 +6,7 @@ import {visitor} from '../../.test-build/visitor.mjs';
 import {body as parseBody} from '../../.test-build/http.mjs';
 import {numeric,parseNews,fetchJson} from '../../.test-build/providers.mjs';
 import {reconcile} from '../../.test-build/reconcile.mjs';
-import {setHistoryResult,setOpportunityResearchResult,setUniverse,setBulkQuoteTransform,universeCalls,setIntradayResult,opportunityCalls,resetOpportunityCalls} from './providers.mjs';
+import {setHistoryResult,setOpportunityResearchResult,setUniverse,setBulkQuoteTransform,universeCalls,setIntradayResult,opportunityCalls,resetOpportunityCalls,historyRequests,HistoricalSessionsUnavailableError} from './providers.mjs';
 import {evaluateStrategy} from '../../.test-build/engine.mjs';
 import {proxyOpportunityEvidence} from '../../.test-build/opportunity-proxies.mjs';
 import {fixtures} from '../../.test-build/fixtures.mjs';
@@ -21,6 +21,7 @@ import {reserveProviderRequest} from '../../.test-build/provider-quota.mjs';
 import {publishDirectoryRatings} from '../../.test-build/directory-rating.mjs';
 import {scheduledScanTick} from '../../.test-build/scheduled-scan.mjs';
 import {archivedWriteStatements,restoreArchivedRow} from '../../.test-build/snapshot-archive.mjs';
+import {encodeHistoryCache} from '../../.test-build/history-cache.mjs';
 import {GET as favoriteQuotesGET} from '../../.test-build/favorite-quotes-api.mjs';
 import {GET as chartGET} from '../../.test-build/chart-api.mjs';
 import worker from '../../.test-build/worker.mjs';
@@ -256,6 +257,44 @@ test('newest finished full universe remains canonical despite partial provider c
   }
  }finally{await db().prepare('DELETE FROM fundamental_snapshots WHERE run_id=?').bind(id).run();await db().prepare('DELETE FROM strategy_runs WHERE id=?').bind(id).run();invalidateStateCache();}
 });
+test('canonical company chart reaches beyond saved rating date without changing its evaluation',async()=>{
+ const id='canonical-chart-history',symbol='CHART-HISTORY',asOf='2026-10-10T23:00:00.000Z';
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES(?,?,?,'complete','Bulk Quotes/SEC Frames · full',1,1,13,?)").bind(id,asOf,asOf,currentHash()).run();
+ await insertSnapshot(id,{...base,symbol,asOf,history:undefined}).run();
+ const key=`scan-history:v3:${symbol}:2026-10-10`;
+ const payload={url:'https://example.test/chart',source:'TEST_CHART',retrievedAt:asOf,availableAt:asOf,history:[{date:'2026-10-09',close:10},{date:'2026-10-10',close:11},{date:'2026-10-12',close:12}]};
+ await db().prepare('INSERT INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(key,payload.source,asOf,await encodeHistoryCache(payload)).run();
+ try{
+  const basic=await(await companyGET(new Request(`https://radar.test/api/company?symbol=${symbol}&runId=${id}`))).json();
+  const chartResponse=await companyGET(new Request(`https://radar.test/api/company?symbol=${symbol}&runId=${id}&includeHistory=1`));
+  assert.equal(chartResponse.status,200);
+  const chart=await chartResponse.json();
+  assert.deepEqual(chart.snapshot.history,[{date:'2026-10-09',close:10},{date:'2026-10-10',close:11},{date:'2026-10-12',close:12}]);
+  assert.equal(chart.snapshot.asOf,asOf,'the scored snapshot date remains pinned');
+  assert.equal(chart.chartHistory.availableAt,asOf);
+  assert.equal(chart.chartHistory.stale,true,'old history cache is clearly dated when refresh fails');
+  assert.deepEqual(chart.evaluation,basic.evaluation);
+  assert.equal(chart.ranking.position,basic.ranking.position);
+  await db().prepare('DELETE FROM raw_cache WHERE key=?').bind(key).run();
+  setHistoryResult({...payload,retrievedAt:new Date().toISOString(),history:[{date:'2026-10-08',close:9},{date:'2026-10-09',close:10}]});
+  const fetched=await(await companyGET(new Request(`https://radar.test/api/company?symbol=${symbol}&runId=${id}&includeHistory=1`))).json();
+  assert.equal(fetched.snapshot.history.length,2);
+  assert.equal(fetched.chartHistory.stale,false);
+  assert(historyRequests.at(-1)[1].slice(0,10)>asOf.slice(0,10),'new chart fetch must use current observation date');
+  assert.deepEqual(fetched.evaluation,basic.evaluation);
+  assert.equal(await db().prepare('SELECT key FROM raw_cache WHERE key=?').bind(key).first(),null);
+  setHistoryResult(new Error('Injected provider outage'));
+  const unavailable=await companyGET(new Request(`https://radar.test/api/company?symbol=${symbol}&runId=${id}&includeHistory=1`));
+  assert.equal(unavailable.status,200);
+  assert.deepEqual((await unavailable.json()).evaluation,basic.evaluation);
+ }finally{
+  setHistoryResult(null);
+  await db().prepare('DELETE FROM raw_cache WHERE key=?').bind(key).run();
+  await db().prepare('DELETE FROM fundamental_snapshots WHERE run_id=?').bind(id).run();
+  await db().prepare('DELETE FROM strategy_runs WHERE id=?').bind(id).run();
+  invalidateStateCache();
+ }
+});
 test('API personal favorites start at zero, writes are idempotent and isolated',async()=>{
  await db().prepare("INSERT INTO watchlist(symbol,created_at) VALUES('OLD_SHARED','2026-01-01')").run();
  const initial=await GET(new Request('https://radar.test/api/radar'));assert.equal(initial.status,200);const cookie=initial.headers.get('set-cookie').split(';')[0];assert.deepEqual((await initial.json()).favorites,[]);
@@ -307,6 +346,13 @@ test('portfolio history endpoint persists owner scope and returns sourced aggreg
  setHistoryResult({history:[{date:'2026-01-01',close:10},{date:'2026-01-02',close:12}],splits:[],source:'TEST_HISTORY',url:'https://example.test/history',availableAt:'2026-01-02T22:00:00Z',retrievedAt:'2026-01-03T00:00:00Z'});
  try{
   const response=await portfolioHistoryGET(new Request('https://radar.test/api/portfolio-history',{headers:{cookie}}));assert.equal(response.status,200);const payload=await response.json();assert(payload.points.length>=2);assert.equal(payload.points.find(point=>point.date==='2026-01-02').returnPct,.2);assert.equal(payload.sources[0].source,'TEST_HISTORY');
+  const older=await portfolioPOST(new Request('https://radar.test/api/portfolio',{method:'POST',headers:{origin:'https://radar.test',cookie,'content-type':'application/json'},body:JSON.stringify({symbol:'TEST',side:'buy',quantity:1,price:8,fees:0,tradeDate:'2020-01-01',note:''})}));assert.equal(older.status,200);
+  const before=historyRequests.length;
+  const partial=await(await portfolioHistoryGET(new Request('https://radar.test/api/portfolio-history',{headers:{cookie}}))).json();
+  assert(partial.incompleteSymbols.includes('TEST'),'history beginning years after the purchase must be marked incomplete');
+  const repeated=await(await portfolioHistoryGET(new Request('https://radar.test/api/portfolio-history',{headers:{cookie}}))).json();
+  assert(repeated.incompleteSymbols.includes('TEST'));
+  assert.equal(historyRequests.length-before,2,'an insufficient history must not be treated as a covered cache hit');
   const stranger=await portfolioHistoryGET(new Request('https://radar.test/api/portfolio-history'));assert.deepEqual((await stranger.json()).points,[]);
  }finally{setHistoryResult(null);}
 });
@@ -417,6 +463,17 @@ test('history retries recover without double-counting failures or retaining stal
   const transition=await processScanBatch('outage');assert.equal(transition.run.stage,11);assert.equal(transition.done,false);
   const r=await processScanBatch('outage');assert.equal(r.done,true);assert.equal(r.run.failed,0);assert.equal(r.run.status,'complete');assert.equal(r.run.error,null);
   const row=await db().prepare("SELECT payload,evaluation FROM fundamental_snapshots WHERE id='outage:OUTAGE'").first();assert(!row.payload.includes('Injected provider outage'));assert.equal(JSON.parse(row.evaluation).opportunity.researchState,'needs-research');
+ }finally{setHistoryResult(null);}
+});
+test('confirmed no-session instruments finish history without a repeated retry',async()=>{
+ const now=new Date().toISOString(),company={ticker:'NO-SESSIONS',cik:0};
+ await db().prepare('INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,strategy_hash) VALUES(?,?,?,?,?,?,?,?,?)').bind('terminal-history',now,now,'running','Bulk Quotes/SEC Frames · full',1,JSON.stringify([company]),10,currentHash()).run();
+ await insertSnapshot('terminal-history',{...base,symbol:company.ticker,cik:0,asOf:now,price:10,provenance:{...base.provenance}}).run();
+ setHistoryResult(new HistoricalSessionsUnavailableError(company.ticker));
+ try{
+  const before=historyRequests.length,result=await processScanBatch('terminal-history');
+  assert.equal(result.run.stage,11);assert.equal(result.run.failed,1);assert.equal(result.run.retryPending,0);
+  assert.equal(historyRequests.slice(before).filter(([symbol])=>symbol===company.ticker).length,1);
  }finally{setHistoryResult(null);}
 });
 test('history completion queues all CIK-linked common stocks for SEC research and recovered SEC retries complete cleanly',async()=>{

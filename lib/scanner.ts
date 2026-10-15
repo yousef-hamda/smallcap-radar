@@ -2,10 +2,11 @@ import {scanCapacityPaused} from './scan-capacity';
 import {reconcileAcquisitionDirectory} from './directory-reconcile';
 import {publishDirectoryRatings} from './directory-rating';
 import { currentHash, db, ensureSchema, insertSnapshot, log } from './storage';
-import { companySnapshot, consumeProviderIssues, enrichSnapshotsWithSecOpportunity, historicalMarketData, quickSymbols, universe,yahooBulkQuotes } from './providers';
+import { companySnapshot, consumeProviderIssues, enrichSnapshotsWithSecOpportunity, historicalMarketData, HistoricalSessionsUnavailableError, quickSymbols, universe,yahooBulkQuotes } from './providers';
 import { fetchBulkFundamentals, fetchCompanyFactsFallback, needsCompanyFacts, preliminarySnapshot, type BulkFundamentals } from './bulk';
 import { opportunityHistoryMetrics, completedSessionQuote, reviewShareSplits } from './research';
 import { applyFinancingRisk } from './financing-risk';
+import {decodeHistoryCache,encodeHistoryCache} from './history-cache';
 
 const BATCH_SIZE = 1;
 const HISTORY_BATCH_SIZE = 18;
@@ -16,6 +17,15 @@ const OPPORTUNITY_BATCH_SIZE = 8;
 export const SCAN_SOURCE_VERSION = 'Bulk Quotes/SEC Frames + Opportunity SEC v14';
 const UNIVERSE_PAGE=100;
 const universePageSize=(run:any)=>run.universe==='paged-v2'?UNIVERSE_PAGE:1000;
+async function cachedMarketHistory(payload:string):Promise<Awaited<ReturnType<typeof historicalMarketData>>|null>{
+ try{
+  const value:any=await decodeHistoryCache(payload);
+  if(!value||typeof value.source!=='string'||typeof value.url!=='string'||typeof value.retrievedAt!=='string'||typeof value.availableAt!=='string'
+    ||!Array.isArray(value.history)||!value.history.length
+    ||!value.history.every((bar:any)=>/^\d{4}-\d{2}-\d{2}$/.test(bar?.date)&&Number.isFinite(bar.close)&&bar.close>0))return null;
+  return value;
+ }catch{return null;}
+}
 async function saveUniverse(runId:string,companies:any[],kind='candidates',pageSize=UNIVERSE_PAGE){
  const statements=[];
  for(let offset=0;offset<companies.length;offset+=pageSize)statements.push(db().prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(`universe:${runId}:${kind}:${offset/pageSize}`,'scan directory checkpoint',new Date().toISOString(),JSON.stringify(companies.slice(offset,offset+pageSize))));
@@ -263,9 +273,10 @@ export async function processScanBatch(runId: string) {
     try {
       const cachedBenchmark=await database.prepare('SELECT retrieved_at,payload FROM raw_cache WHERE key=?').bind(benchmarkKey).first() as any;
       benchmark=cachedBenchmark&&Date.now()-Date.parse(cachedBenchmark.retrieved_at)<24*60*60_000
-        ?JSON.parse(cachedBenchmark.payload)
+        ?await cachedMarketHistory(cachedBenchmark.payload)
         :await historicalMarketData('SPY',now,550);
-      if(benchmark&&(!cachedBenchmark||cachedBenchmark.retrieved_at!==benchmark.retrievedAt))await database.prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(benchmarkKey,benchmark.source,benchmark.retrievedAt,JSON.stringify(benchmark)).run();
+      if(!benchmark)benchmark=await historicalMarketData('SPY',now,550);
+      if(benchmark&&(!cachedBenchmark||cachedBenchmark.retrieved_at!==benchmark.retrievedAt))await database.prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(benchmarkKey,benchmark.source,benchmark.retrievedAt,await encodeHistoryCache(benchmark)).run();
     } catch(error) { await log(run.id,'history',`SPY benchmark history unavailable for this run: ${error instanceof Error?error.message:'provider request failed'}`); }
     const writes: any[] = [];
     const rows=entries.length?(await database.prepare(`SELECT symbol,payload FROM fundamental_snapshots WHERE run_id=? AND symbol IN (${entries.map(()=>'?').join(',')})`).bind(run.id,...entries.map((c:any)=>c.ticker)).all()).results:[];
@@ -273,15 +284,17 @@ export async function processScanBatch(runId: string) {
     const outcomes:any[]=[];
     for(let start=0;start<entries.length;start+=PROVIDER_CONCURRENCY)outcomes.push(...await Promise.all(entries.slice(start,start+PROVIDER_CONCURRENCY).map(async (company: any) => {
       const row = bySymbol.get(company.ticker);
-      if (!row) {await log(run.id,'history',`${company.ticker}: snapshot missing`);return {company,failed:true};}
+      if (!row) {await log(run.id,'history',`${company.ticker}: snapshot missing`);return {company,failed:true,retryable:false};}
       let snapshot = JSON.parse(row.payload);
       if (!historyCandidate(snapshot)) return { snapshot, company, skipped: true };
       snapshot.dataIssues=(snapshot.dataIssues??[]).filter((issue:string)=>!issue.startsWith('تعذّر تحميل تاريخ'));
       const cacheKey=`scan-history:v3:${company.ticker}:${now.slice(0,10)}`;
+      let retryable=true;
       try {
         const cached=await database.prepare('SELECT retrieved_at,payload FROM raw_cache WHERE key=?').bind(cacheKey).first() as any;
-        const historical:Awaited<ReturnType<typeof historicalMarketData>>=cached&&Date.parse(now)-Date.parse(cached.retrieved_at)<24*60*60_000?JSON.parse(cached.payload):await historicalMarketData(company.ticker, now, 550);
-        if(!cached||cached.retrieved_at!==historical.retrievedAt)await database.prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(cacheKey,historical.source,historical.retrievedAt,JSON.stringify(historical)).run();
+        const cachedHistory=cached&&Date.parse(now)-Date.parse(cached.retrieved_at)<24*60*60_000?await cachedMarketHistory(cached.payload):null;
+        const historical:Awaited<ReturnType<typeof historicalMarketData>>=cachedHistory??await historicalMarketData(company.ticker,now,550);
+        if(!cachedHistory)await database.prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(cacheKey,historical.source,historical.retrievedAt,await encodeHistoryCache(historical)).run();
         const history = historical.history.filter((bar): bar is typeof bar & { close: number } => Number.isFinite(bar.close));
         const metrics = opportunityHistoryMetrics(history, now);
         // The historical observations were retrieved after the bulk row was
@@ -329,11 +342,12 @@ export async function processScanBatch(runId: string) {
         // Keep the durable screening row compact. Full bars remain available
         // through /api/company and are fetched on demand for the chart.
       } catch (error) {
+        retryable=!(error instanceof HistoricalSessionsUnavailableError);
         snapshot.dataIssues = [...(snapshot.dataIssues ?? []), `تعذّر تحميل تاريخ الارتداد: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`];
         await log(run.id,'history',`${company.ticker}: ${snapshot.dataIssues.at(-1)}`);
       }
       const failed=snapshot.dataIssues?.some((issue: string) => issue.startsWith('تعذّر تحميل تاريخ')) === true;
-      return { snapshot, company, failed, cacheKey: failed ? undefined : cacheKey };
+      return { snapshot, company, failed, retryable, cacheKey: failed ? undefined : cacheKey };
     })));
     const historyFailed = outcomes.filter(outcome => outcome?.failed).length;
     for (const [index,outcome] of outcomes.entries()) {
@@ -346,7 +360,7 @@ export async function processScanBatch(runId: string) {
         const prefix=`scan-history:v3:${outcome.company.ticker}:`;
         writes.push(database.prepare('DELETE FROM raw_cache WHERE key>=? AND key<? AND key<>?').bind(prefix,`${prefix}\uffff`,outcome.cacheKey));
       }
-      if(outcome.failed&&jobs[index].attempt<2)remaining.push({...jobs[index],attempt:jobs[index].attempt+1});
+      if(outcome.failed&&outcome.retryable!==false&&jobs[index].attempt<2)remaining.push({...jobs[index],attempt:jobs[index].attempt+1});
     }
     const offset = retrying?run.offset:run.offset + entries.length;
     const done = offset >= run.total && remaining.length===0;
@@ -399,11 +413,11 @@ export async function processScanBatch(runId: string) {
     const marketBySymbol=new Map<string,Awaited<ReturnType<typeof historicalMarketData>>>();
     for(const ticker of tickers){
       const cached=await database.prepare("SELECT payload FROM raw_cache WHERE key LIKE ? ORDER BY retrieved_at DESC LIMIT 1").bind(`scan-history:v3:${ticker}:%`).first() as any;
-      if(cached){try{marketBySymbol.set(ticker,JSON.parse(cached.payload));}catch{/* malformed market cache stays unavailable */}}
+      if(cached){const history=await cachedMarketHistory(cached.payload);if(history)marketBySymbol.set(ticker,history);}
     }
     let benchmarkResearch:Awaited<ReturnType<typeof historicalMarketData>>|null=null;
     const benchmarkRow=await database.prepare("SELECT payload FROM raw_cache WHERE key LIKE 'scan-history:v3:SPY:%' ORDER BY retrieved_at DESC LIMIT 1").first() as any;
-    if(benchmarkRow){try{benchmarkResearch=JSON.parse(benchmarkRow.payload);}catch{/* malformed market cache stays unavailable */}}
+    if(benchmarkRow)benchmarkResearch=await cachedMarketHistory(benchmarkRow.payload);
     const outcomes:any[]=[];
     for(let start=0;start<jobs.length;start+=4)outcomes.push(...await Promise.all(jobs.slice(start,start+4).map(async(job:any)=>{
       const issuerTickers=job.company.tickers ?? [job.company.ticker];
