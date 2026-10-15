@@ -9,6 +9,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createServer } from "vite";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
+function completedChartDays(count){
+ const day=new Date(Date.now()-2*86_400_000),dates=[];
+ while(dates.length<count){if(day.getUTCDay()!==0&&day.getUTCDay()!==6)dates.push(day.toISOString().slice(0,10));day.setUTCDate(day.getUTCDate()-1);}
+ return dates.reverse();
+}
 const vite = await createServer({
   appType: "custom",
   configFile: false,
@@ -101,6 +106,16 @@ test('radar exposes one opportunity category, favorites and portfolio without bo
  assert.doesNotMatch(html,/bottom-nav|terminal-shell|sidebar-head/);
 });
 
+test('a dated saved profile cannot replace a newer completed-session quote',async()=>{
+ const {mergeRecentQuote}=await vite.ssrLoadModule('/app/page.tsx');
+ const source=(periodEnd,availableAt)=>({source:'fixture',periodEnd,availableAt,retrievedAt:availableAt,confidence:'high'});
+ const current={symbol:'TEST',name:'Test',asOf:'2026-10-15T00:00:00Z',price:18,dailyChange:.03,provenance:{price:source('2026-10-14','2026-10-14T21:00:00Z'),dailyChange:source('2026-10-14','2026-10-14T21:00:00Z')}};
+ const older={...current,price:12,dailyChange:-.07,provenance:{price:source('2026-10-13','2026-10-13T21:00:00Z'),dailyChange:source('2026-10-13','2026-10-13T21:00:00Z')}};
+ assert.equal(mergeRecentQuote(older,current).price,18);
+ assert.equal(mergeRecentQuote(current,older).price,18);
+ assert.equal(mergeRecentQuote(current,older).dailyChange,.03);
+});
+
 test('company profile consumes only the canonical Opportunity evaluation',async()=>{
  const source=await readFile(path.join(root,'app/company-sheet.tsx'),'utf8');
  const route=await readFile(path.join(root,'app/api/company/route.ts'),'utf8');
@@ -179,26 +194,41 @@ test('empty chart keeps all seven period controls',async()=>{
 
 test('chart defaults to the daily session with clearly labeled close fallback',async()=>{
  const {default:Chart}=await vite.ssrLoadModule('/app/price-chart.tsx');
- const html=renderToStaticMarkup(React.createElement(Chart,{snapshot:{symbol:'TEST',name:'Synthetic chart fixture',asOf:'2025-01-03T20:00:00Z',provenance:{},history:[{date:'2025-01-02',close:10},{date:'2025-01-03',close:12}]}}));
+ const [previous,current]=completedChartDays(2);
+ const html=renderToStaticMarkup(React.createElement(Chart,{snapshot:{symbol:'TEST',name:'Synthetic chart fixture',asOf:`${current}T23:00:00Z`,provenance:{},history:[{date:previous,close:10},{date:current,close:12}]}}));
  assert.match(html,/جلسة يومية/);
- assert.match(html,/إغلاق آخر جلستين مكتملتين من لقطة 2025-01-03/);
- assert.match(html,/2025-01-03 · \$12\.00/);
+ assert.ok(html.includes(`إغلاق آخر جلستين مكتملتين من لقطة ${current}`));
+ assert.ok(html.includes(`${current} · $12.00`));
  assert.match(html,/data-state="active"[^>]*>يوم</);
 });
 
 test('daily chart includes a newer independently sourced completed close without changing the saved snapshot',async()=>{
  const {default:Chart}=await vite.ssrLoadModule('/app/price-chart.tsx');
- const snapshot={symbol:'TEST',name:'Synthetic chart fixture',asOf:'2025-01-03T20:00:00Z',provenance:{},history:[{date:'2025-01-02',close:10},{date:'2025-01-03',close:12}]};
- const html=renderToStaticMarkup(React.createElement(Chart,{snapshot,completedClose:{price:13,periodEnd:'2025-01-06',source:'Completed daily bars'}}));
- assert.match(html,/2025-01-06 · \$13\.00/);
- assert.match(html,/إغلاق 2025-01-06 من Completed daily bars/);
- assert.match(html,/مستقل عن لقطة التقييم 2025-01-03/);
+ const [older,previous,current]=completedChartDays(3);
+ const snapshot={symbol:'TEST',name:'Synthetic chart fixture',asOf:`${previous}T23:00:00Z`,provenance:{},history:[{date:older,close:10},{date:previous,close:12}]};
+ const html=renderToStaticMarkup(React.createElement(Chart,{snapshot,completedClose:{price:13,periodEnd:current,source:'Completed daily bars'}}));
+ assert.ok(html.includes(`${current} · $13.00`));
+ assert.ok(html.includes(`إغلاق ${current} من Completed daily bars`));
+ assert.ok(html.includes(`مستقل عن لقطة التقييم ${previous}`));
  assert.equal(snapshot.history.length,2);
+});
+
+test('saved rating date does not truncate independently fetched completed chart history',async()=>{
+ const {default:Chart}=await vite.ssrLoadModule('/app/price-chart.tsx');
+ const [older,previous,current]=completedChartDays(3);
+ const source={source:'Test daily history',periodEnd:current,availableAt:`${current}T21:00:00Z`,retrievedAt:new Date().toISOString(),tag:'display-only completed daily history; saved rating unchanged'};
+ const snapshot={symbol:'TEST',name:'Synthetic chart fixture',asOf:`${older}T23:00:00Z`,provenance:{history:source},history:[{date:older,close:10},{date:previous,close:11},{date:current,close:12}]};
+ const html=renderToStaticMarkup(React.createElement(Chart,{snapshot}));
+ assert.ok(html.includes(`${current} · $12.00`));
+ assert.ok(html.includes(`تاريخ حتى ${current} من Test daily history`));
+ assert.ok(html.includes(`مستقل عن لقطة التقييم ${older}`));
+ assert.equal(snapshot.asOf,`${older}T23:00:00Z`);
 });
 
 test('historical chart filters duplicate, future and nonfinite bars and displays actual extrema',async()=>{
  const {default:Chart}=await vite.ssrLoadModule('/app/price-chart.tsx');
- const html=renderToStaticMarkup(React.createElement(Chart,{snapshot:{symbol:'TEST',name:'Synthetic chart fixture',asOf:'2025-01-03',provenance:{},history:[{date:'2025-01-01',close:10},{date:'2025-01-01',close:10},{date:'2025-01-02',close:12},{date:'2025-01-04',close:99999},{date:'2025-01-02',close:NaN}]}}));
+ const [previous,current]=completedChartDays(2),future=new Date(Date.now()+2*86_400_000).toISOString().slice(0,10);
+ const html=renderToStaticMarkup(React.createElement(Chart,{snapshot:{symbol:'TEST',name:'Synthetic chart fixture',asOf:`${current}T23:00:00Z`,provenance:{},history:[{date:previous,close:10},{date:previous,close:10},{date:current,close:12},{date:future,close:99999},{date:current,close:NaN}]}}));
  assert.match(html,/10\.00/);assert.match(html,/12\.00/);assert.doesNotMatch(html,/99999|NaN|Infinity/);
  assert.match(html,/polyline/);
 });
@@ -402,8 +432,13 @@ test('company and portfolio-history reads retain dated fallback without writing 
  ]);
  assert.match(company,/deepCache\.get\(cacheKey/);
  assert.match(company,/cached:true,stale:true/);
+ assert.match(company,/params\.get\('includeHistory'\)==='1'\?displayHistory/);
+ assert.match(company,/const chartHistory=chart\?/);
  assert.match(history,/rememberHistory\(symbol,payload\)/);
- assert.match(history,/const fallback=eligible\(local\?\.payload\)/);
+ assert.match(history,/const fallback=hasBars\(local\?\.payload\)/);
+ assert.match(history,/firstTradeBySymbol\.get\(symbol\)/);
+ assert.match(history,/incompleteSymbols:\[\.\.\.new Set\(\[\.\.\.series\.incompleteSymbols,\.\.\.incompleteRange\]\)\]/);
+ assert.doesNotMatch(history,/requestedFrom:firstDate/);
  for(const route of [company,history])assert.doesNotMatch(route,/\b(?:INSERT|UPDATE|DELETE|REPLACE)\s+(?:OR\s+\w+\s+)?(?:INTO|FROM)?\s*raw_cache/i);
 });
 

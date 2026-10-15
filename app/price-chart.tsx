@@ -17,20 +17,25 @@ export default function PriceChart({snapshot,loading=false,completedClose}:{snap
   return()=>controller.abort();
  },[range,intraday,snapshot.symbol]);
  const completedDate=completedClose&&/^\d{4}-\d{2}-\d{2}$/.test(completedClose.periodEnd)&&Number.isFinite(completedClose.price)&&completedClose.price>0&&Date.parse(`${completedClose.periodEnd}T21:00:00Z`)<=observedAt?completedClose.periodEnd:null;
+ const historySource=snapshot.provenance.history;
+ const historyDate=historySource?.tag?.includes('display-only completed daily history')&&historySource.periodEnd&&Date.parse(`${historySource.periodEnd}T21:00:00Z`)<=observedAt?historySource.periodEnd:null;
  const lastIntradayTime=intraday?.points?.at(-1)?.t;
  const intradayDate=Number.isFinite(lastIntradayTime)&&Math.abs(lastIntradayTime!*1000)<8.64e15?new Date(lastIntradayTime!*1000).toISOString().slice(0,10):null;
- const intradayStale=!!completedDate&&!!intradayDate&&intradayDate<completedDate;
+ const latestDailyDate=completedDate&&historyDate?completedDate>historyDate?completedDate:historyDate:completedDate||historyDate;
+ const intradayStale=!!latestDailyDate&&!!intradayDate&&intradayDate<latestDailyDate;
  const chartIsIntraday=range==='1D'&&!!intraday?.points?.length&&!intradayStale;
  const rows=useMemo(()=>{
   const completedEnd=completedDate?Date.parse(`${completedDate}T21:00:00Z`):0;
-  const end=Math.min(Math.max(Date.parse(snapshot.asOf),completedEnd),observedAt);
+  const historyEnd=historyDate?Date.parse(`${historyDate}T21:00:00Z`):0;
+  const snapshotEnd=Date.parse(snapshot.asOf);
+  const end=Math.min(Math.max(Number.isFinite(snapshotEnd)?snapshotEnd:0,completedEnd,historyEnd),observedAt);
   if(chartIsIntraday&&intraday?.points?.length)return intraday.points.filter(r=>Number.isFinite(r.c)&&r.c>0&&Number.isFinite(r.t)&&r.t*1000<=Date.parse(intraday.availableAt)).map(r=>({date:new Date(r.t*1000).toISOString(),close:r.c}));
-  const unique=new Map((snapshot.history||[]).filter(r=>Number.isFinite(r.close)&&r.close>0&&Number.isFinite(Date.parse(r.date))&&Date.parse(r.date)<=end).map(r=>[r.date,r]));
+  const unique=new Map((snapshot.history||[]).filter(r=>/^\d{4}-\d{2}-\d{2}$/.test(r.date)&&Number.isFinite(r.close)&&r.close>0&&Date.parse(`${r.date}T21:00:00Z`)<=end).map(r=>[r.date,r]));
   if(completedDate&&completedClose)unique.set(completedDate,{date:completedDate,close:completedClose.price});
   const all=[...unique.values()].sort((a,b)=>a.date.localeCompare(b.date));
   if(range==='1D')return all.slice(-2);
   return all.filter(r=>Date.parse(r.date)>=end-chartRanges[range].days*86_400_000);
- },[snapshot.history,snapshot.asOf,range,observedAt,intraday,chartIsIntraday,completedDate,completedClose]);
+ },[snapshot.history,snapshot.asOf,range,observedAt,intraday,chartIsIntraday,completedDate,completedClose,historyDate]);
  const low=rows.length?Math.min(...rows.map(r=>r.close)):0,high=rows.length?Math.max(...rows.map(r=>r.close)):0;
  const pad=(high-low||high*.02||1)*.1,y=(n:number)=>145-(n-low+pad)/(high-low+pad*2)*125,x=(i:number)=>12+i/Math.max(1,rows.length-1)*576;
  const points=rows.map((r,i)=>`${x(i)},${y(r.close)}`).join(' '),change=chartIsIntraday?intraday!.changePct:rows.length>1?rows.at(-1)!.close/rows[0].close-1:null;
@@ -48,6 +53,6 @@ export default function PriceChart({snapshot,loading=false,completedClose}:{snap
    </svg><div className="chart-dates" dir="ltr"><span>{chartIsIntraday?new Date(rows[0].date).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',timeZone:'America/New_York'}):rows[0].date.slice(5,10)}</span><span dir="rtl">أدنى {low.toFixed(2)} · أعلى {high.toFixed(2)}</span><span>{chartIsIntraday?new Date(rows.at(-1)!.date).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',timeZone:'America/New_York'}):rows.at(-1)!.date.slice(5,10)}</span></div>
   </>}</div>
   <Tabs value={range} onValueChange={v=>{const next=v as Range;setRange(next);setPoint(null);if(next==='1D'&&!intraday){setRangeLoading(true);setRangeError('')}}} dir="rtl" className="chart-tabs"><TabsList aria-label="فترة الرسم السعري">{(Object.keys(chartRanges) as Range[]).map(k=><TabsTrigger key={k} value={k}>{chartRanges[k].label}</TabsTrigger>)}</TabsList></Tabs>
-  <small className="muted">{range==='1D'?(chartIsIntraday?`رسم جلسة ${rows.at(-1)?.date.slice(0,10)} من ${intraday!.source} · جُلب ${intraday!.availableAt.slice(0,16).replace('T',' ')} UTC · مستقل عن لقطة التقييم ${snapshot.asOf.slice(0,10)}`:rows.length>=2?`إغلاق آخر جلستين مكتملتين${completedDate?`؛ إغلاق ${completedDate} من ${completedClose?.source}`:` من لقطة ${snapshot.asOf.slice(0,10)}`}؛ الرسم اللحظي ${intradayStale?`متأخر عند ${intradayDate}`:rangeLoading?'قيد التحميل':'غير متاح'} · مستقل عن لقطة التقييم ${snapshot.asOf.slice(0,10)}`:`لا تتوفر بيانات إغلاق جلستين في لقطة ${snapshot.asOf.slice(0,10)}؛ الرسم اللحظي ${rangeLoading?'قيد التحميل':'غير متاح'}`):`أسعار إغلاق يومية حتى لقطة ${snapshot.asOf.slice(0,10)}`}؛ حرّك المؤشر أو استخدم مفاتيح الأسهم لعرض السعر والتاريخ.</small>
+  <small className="muted">{range==='1D'?(chartIsIntraday?`رسم جلسة ${rows.at(-1)?.date.slice(0,10)} من ${intraday!.source} · جُلب ${intraday!.availableAt.slice(0,16).replace('T',' ')} UTC · مستقل عن لقطة التقييم ${snapshot.asOf.slice(0,10)}`:rows.length>=2?`إغلاق آخر جلستين مكتملتين${historyDate&&(!completedDate||historyDate>=completedDate)?`؛ تاريخ حتى ${historyDate} من ${historySource.source}`:completedDate?`؛ إغلاق ${completedDate} من ${completedClose?.source}`:` من لقطة ${snapshot.asOf.slice(0,10)}`}؛ الرسم اللحظي ${intradayStale?`متأخر عند ${intradayDate}`:rangeLoading?'قيد التحميل':'غير متاح'} · مستقل عن لقطة التقييم ${snapshot.asOf.slice(0,10)}`:`لا تتوفر بيانات إغلاق جلستين في لقطة ${snapshot.asOf.slice(0,10)}؛ الرسم اللحظي ${rangeLoading?'قيد التحميل':'غير متاح'}`):historyDate?`أسعار إغلاق يومية حتى ${historyDate} من ${historySource.source} · مستقلة عن لقطة التقييم ${snapshot.asOf.slice(0,10)}`:`أسعار إغلاق يومية حتى لقطة ${snapshot.asOf.slice(0,10)}`}؛ حرّك المؤشر أو استخدم مفاتيح الأسهم لعرض السعر والتاريخ.</small>
  </section>;
 }

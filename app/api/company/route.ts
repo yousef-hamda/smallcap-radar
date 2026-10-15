@@ -1,5 +1,5 @@
 import { requestedRankRelease } from '@/lib/rank-release';
-import { resolveCompanyBySymbol, companySnapshot, observedNasdaqCompanyDescription } from '@/lib/providers';
+import { resolveCompanyBySymbol, companySnapshot, historicalMarketData, observedNasdaqCompanyDescription, type HistoricalResult } from '@/lib/providers';
 import { db, ensureSchema, readCanonicalCompany } from '@/lib/storage';
 import { json, statusOf } from '@/lib/http';
 
@@ -10,13 +10,30 @@ import type {Snapshot} from '@/lib/engine';
 import {translateToArabic} from '@/lib/translation';
 import {createEphemeralCache} from '@/lib/ephemeral-cache';
 const deepCache=createEphemeralCache<Snapshot>(30*60_000,32);
+const chartHistoryCache=createEphemeralCache<HistoricalResult>(15*60_000,32);
+
+async function displayHistory(symbol:string,asOf:string){
+  const result=await chartHistoryCache.get(`${symbol}:${asOf.slice(0,10)}`,()=>historicalMarketData(symbol,asOf,1900));
+  const cutoff=Date.parse(asOf),bars=new Map<string,NonNullable<Snapshot['history']>[number]>();
+  for(const bar of result.history){
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(bar.date)||!Number.isFinite(bar.close)||bar.close<=0||Date.parse(`${bar.date}T21:00:00Z`)>cutoff)continue;
+    const prior=bars.get(bar.date);
+    if(prior&&prior.close!==bar.close)throw Error('تعارض في إغلاقات التاريخ السعري');
+    bars.set(bar.date,bar);
+  }
+  const history=[...bars.values()].sort((a,b)=>a.date.localeCompare(b.date));
+  const periodEnd=history.at(-1)?.date;
+  if(!periodEnd)throw Error('لا توجد جلسات مكتملة في التاريخ السعري');
+  const stale=result.source.includes('fallback')||cutoff-Date.parse(`${periodEnd}T21:00:00Z`)>7*86_400_000;
+  return {history,source:{source:result.source,url:result.url,periodEnd,availableAt:result.availableAt,retrievedAt:result.retrievedAt,currency:'USD',confidence:result.source.includes('fallback')?'low':'medium' as const,rightsStatus:'unknown' as const,tag:'display-only completed daily history; saved rating unchanged'},stale};
+}
 
 export async function GET(request: Request) {
   try {
-    const symbol = new URL(request.url).searchParams.get('symbol')?.trim().toUpperCase() ?? '';
+    const params=new URL(request.url).searchParams;
+    const symbol = params.get('symbol')?.trim().toUpperCase() ?? '';
     if (!/^[A-Z0-9.^-]{1,16}$/.test(symbol)) return json({ error: 'رمز غير صالح' }, 400);
     await ensureSchema();
-    const params=new URL(request.url).searchParams;
     const pin=requestedRankRelease(params);
     const canonical=await readCanonicalCompany(symbol,pin.runId,pin.releaseToken);
     if(pin.runId&&!canonical)return json({error:'الشركة غير موجودة في إصدار الترتيب المطلوب'},404);
@@ -24,9 +41,13 @@ export async function GET(request: Request) {
       // Keep the archived rating snapshot unchanged. A current issuer
       // explanation is display-only and carries its own observation date.
       const missingDescription=!canonical.snapshot.description||canonical.snapshot.description.startsWith('الوصف غير متاح');
-      const observed=missingDescription?await observedNasdaqCompanyDescription(symbol):null;
-      const translated=observed?await translateToArabic(observed.description,3_600):null;
-      return json({...canonical,cached:true,ratingSource:'saved-production-universe',profileDescription:observed?{description:observed.description,descriptionAr:translated?.text,source:observed.source}:null});
+      const [profileDescription,chart]=await Promise.all([
+        missingDescription?(async()=>{try{const observed=await observedNasdaqCompanyDescription(symbol);if(!observed)return null;const translated=await translateToArabic(observed.description,3_600);return {description:observed.description,descriptionAr:translated?.text,source:observed.source};}catch{return null;}})():Promise.resolve(null),
+        params.get('includeHistory')==='1'?displayHistory(symbol,new Date().toISOString()).catch(()=>null):Promise.resolve(null),
+      ]);
+      const snapshot=chart?{...canonical.snapshot,history:chart.history,provenance:{...canonical.snapshot.provenance,history:chart.source}}:canonical.snapshot;
+      const chartHistory=chart?{source:chart.source.source,availableAt:chart.source.availableAt,retrievedAt:chart.source.retrievedAt,periodEnd:chart.source.periodEnd,stale:chart.stale}:null;
+      return json({...canonical,snapshot,cached:true,ratingSource:'saved-production-universe',profileDescription,chartHistory,historyUnavailable:params.get('includeHistory')==='1'&&!chart});
     }
     // Version the deep cache whenever the enrichment contract changes so a
     // previous partial response cannot mask newly available fields.

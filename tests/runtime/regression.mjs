@@ -259,6 +259,19 @@ test('newest finished full universe remains canonical despite partial provider c
    const company=await(await companyGET(new Request('https://radar.test/api/company?symbol='+snapshot.symbol))).json();assert.deepEqual(company.evaluation,expected);assert.equal(company.ranking.runId,id);assert.equal(company.ranking.position,current.rankPositions[index]);assert.equal(company.profileDescription.description,description);assert.equal(company.snapshot.description,snapshot.description,'current profile prose never mutates the archived rating snapshot');
    const row=report.rows.find(row=>row.symbol===snapshot.symbol);assert.deepEqual(row.evaluation,expected);assert.equal(row.rank,current.rankPositions[index]);
   }
+  const prior=new Date(Date.now()-4*86_400_000).toISOString().slice(0,10),last=new Date(Date.now()-3*86_400_000).toISOString().slice(0,10);
+  const savedBefore=await db().prepare('SELECT payload,evaluation FROM fundamental_snapshots WHERE run_id=? AND symbol=?').bind(id,'PARTIAL-A').first();
+  setHistoryResult({history:[{date:prior,close:20},{date:last,close:22}],splits:[],source:'TEST_CHART_HISTORY',url:'https://example.test/chart-history',retrievedAt:new Date().toISOString(),availableAt:`${last}T21:00:00Z`});
+  try{
+   const chart=await(await companyGET(new Request('https://radar.test/api/company?symbol=PARTIAL-A&includeHistory=1'))).json();
+   assert.equal(chart.snapshot.asOf,current.snapshots.find(row=>row.symbol==='PARTIAL-A').asOf);
+   assert.deepEqual(chart.evaluation,current.storedEvaluations[current.snapshots.findIndex(row=>row.symbol==='PARTIAL-A')].opportunity);
+   assert.deepEqual(chart.snapshot.history.map(row=>row.date),[prior,last]);
+   assert.equal(chart.snapshot.provenance.history.periodEnd,last);
+   assert.equal(chart.chartHistory.source,'TEST_CHART_HISTORY');assert.equal(chart.chartHistory.stale,false);
+   const savedAfter=await db().prepare('SELECT payload,evaluation FROM fundamental_snapshots WHERE run_id=? AND symbol=?').bind(id,'PARTIAL-A').first();
+   assert.deepEqual(savedAfter,savedBefore,'display chart fetch must not mutate saved rating or snapshot');
+  }finally{setHistoryResult(null);}
  }finally{setObservedCompanyDescription(null);await db().prepare('DELETE FROM fundamental_snapshots WHERE run_id=?').bind(id).run();await db().prepare('DELETE FROM strategy_runs WHERE id=?').bind(id).run();invalidateStateCache();}
 });
 test('API personal favorites start at zero, writes are idempotent and isolated',async()=>{
@@ -327,6 +340,20 @@ test('portfolio history endpoint persists owner scope and returns sourced aggreg
  try{
   const response=await portfolioHistoryGET(new Request('https://radar.test/api/portfolio-history',{headers:{cookie}}));assert.equal(response.status,200);const payload=await response.json();assert(payload.points.length>=2);assert.equal(payload.points.find(point=>point.date==='2026-01-02').returnPct,.2);assert.equal(payload.sources[0].source,'TEST_HISTORY');
   const stranger=await portfolioHistoryGET(new Request('https://radar.test/api/portfolio-history'));assert.deepEqual((await stranger.json()).points,[]);
+ }finally{setHistoryResult(null);}
+});
+test('portfolio history reports a partial range from actual bars and keeps the saved fallback dated',async()=>{
+ const initial=await portfolioGET(new Request('https://radar.test/api/portfolio')),cookie=initial.headers.get('set-cookie').split(';')[0];
+ const saved=await portfolioPOST(new Request('https://radar.test/api/portfolio',{method:'POST',headers:{origin:'https://radar.test',cookie,'content-type':'application/json'},body:JSON.stringify({symbol:'TEST',side:'buy',quantity:2,price:10,fees:0,tradeDate:'2025-12-20',note:''})}));assert.equal(saved.status,200);
+ const before=await db().prepare("SELECT COUNT(*) AS n FROM raw_cache WHERE key='portfolio-history:v1:TEST'").first();
+ setHistoryResult({history:[{date:'2026-01-01',close:10},{date:'2026-01-02',close:12}],splits:[],source:'TEST_PARTIAL_HISTORY',url:'https://example.test/history',availableAt:'2026-01-02T21:00:00Z',retrievedAt:new Date().toISOString()});
+ try{
+  const response=await portfolioHistoryGET(new Request('https://radar.test/api/portfolio-history',{headers:{cookie}}));assert.equal(response.status,200);
+  const payload=await response.json();assert.deepEqual(payload.incompleteSymbols,['TEST']);assert.equal(payload.sources[0].source,'TEST_PARTIAL_HISTORY');
+  assert.equal((await db().prepare("SELECT COUNT(*) AS n FROM raw_cache WHERE key='portfolio-history:v1:TEST'").first()).n,before.n);
+  setHistoryResult(Error('Injected history outage'));
+  const fallback=await portfolioHistoryGET(new Request('https://radar.test/api/portfolio-history',{headers:{cookie}}));assert.equal(fallback.status,200);
+  const dated=await fallback.json();assert.deepEqual(dated.incompleteSymbols,['TEST']);assert.deepEqual(dated.staleSymbols,['TEST']);
  }finally{setHistoryResult(null);}
 });
 test('portfolio logo endpoint rejects malformed symbols before any provider call',async()=>{
