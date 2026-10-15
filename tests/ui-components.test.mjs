@@ -130,10 +130,24 @@ test('radar displays numeric research scores, original ranks and separate sessio
  const source=await readFile(path.join(root,'app/page.tsx'),'utf8');
  const storage=await readFile(path.join(root,'lib/storage.ts'),'utf8');
  assert.match(source,/e\.score\.toFixed\(2\)/);
- assert.match(source,/درجة بحث مرجّحة بالأدلة/);assert.match(source,/rank:payload\.rankPositions\?\.\[index\]/);
- assert.match(source,/الرتبة الأصلية/);assert.match(source,/تغير آخر جلسة/);assert.match(source,/لقطة البيانات <time dir="ltr">\{day\(s\.asOf\)\}/);
+ assert.match(source,/درجة النموذج المطلقة/);assert.match(source,/rank:payload\.rankPositions\?\.\[index\]/);
+ assert.match(source,/في القائمة الكاملة/);assert.match(source,/مراجعة المصادر \{e\.coveragePct\.toFixed\(0\)\}%/);
+ assert.match(source,/تغير آخر جلسة/);assert.match(source,/لقطة البيانات <time dir="ltr">\{day\(s\.asOf\)\}/);
  assert.match(storage,/ROW_NUMBER\(\) OVER/);assert.match(storage,/symbol COLLATE BINARY ASC/);
  assert.match(storage,/ensureRunEvaluations/);
+});
+
+test('stock card keeps a newer verified close even when its daily change is missing',async()=>{
+ const {cardSession}=await vite.ssrLoadModule('/app/card-session.ts');
+ const source=(periodEnd,tag)=>({source:'market history',periodEnd,tag});
+ const snapshot={price:10,dailyChange:.05,provenance:{price:source('2026-10-13','last completed session close'),dailyChange:source('2026-10-13','last completed close / previous completed close - 1')}};
+ const laterPrice=source('2026-10-14','last completed session close');
+ assert.deepEqual(cardSession(snapshot,{price:12,provenance:{price:laterPrice}}),{price:12,priceDate:'2026-10-14',completedClose:true,dailyChange:null,changeDate:null,hasPrice:true});
+ assert.equal(cardSession(snapshot,{price:12,dailyChange:.2,provenance:{price:laterPrice,dailyChange:source('2026-10-13','last completed close / previous completed close - 1')}}).dailyChange,null,'a stale daily change must not be paired with the latest close');
+ assert.equal(cardSession(snapshot,{price:12,dailyChange:.2,provenance:{price:laterPrice,dailyChange:source('2026-10-14','last completed close / previous completed close - 1')}}).dailyChange,.2);
+ assert.equal(cardSession(snapshot,{price:11,provenance:{price:source('2026-10-13','last completed session close')}}).dailyChange,null,'a corrected close on the same date cannot reuse a change calculated from the old price');
+ assert.equal(cardSession(snapshot,{price:10,provenance:{price:source('2026-10-13','last completed session close')}}).dailyChange,.05,'an identical same-session quote may keep the saved change');
+ assert.equal(cardSession(snapshot,{price:8,dailyChange:-.2,provenance:{price:source('2026-10-12','last completed session close'),dailyChange:source('2026-10-12','last completed close / previous completed close - 1')}}).price,10,'a stale quote must not replace the saved close');
 });
 
 test('research-fit control keeps the full rank and names the evidence-limited view',async()=>{
@@ -395,7 +409,7 @@ test('saved favorites render before the optional quote fetch, including when a p
  const savedRows=source.indexOf('setRatedRows(old=>append?');
  const quoteFetch=source.indexOf('void request<{quotes:Record<string,CardQuote>;errors?:string[]}>');
  assert.ok(savedRows>0&&quoteFetch>savedRows);
- assert.match(source,/const quoteCandidate=cardQuotes\[s\.symbol\]/);
+ assert.match(source,/cardSession\(s,cardQuotes\[s\.symbol\]\)/);
  assert.match(source,/if\(view==='favorites'&&result\.errors\?\.length&&!Object\.keys\(result\.quotes\)\.length\)setNotice/);
  assert.doesNotMatch(source,/if\(view==='favorites'&&snapshots\.length\)\{\s*try\{const quotePayload=await request/);
  assert.match(source,/listError\?<section className="empty-state" role="alert"/);

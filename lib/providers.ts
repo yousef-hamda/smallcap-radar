@@ -1,6 +1,7 @@
 import {completeDirectoryFiles,readCompleteDirectory,saveCompleteDirectory,previouslyTrackedCompanies} from './directory-cache';
 import {readSecArtifact,recordSecArtifact,secArtifactCik} from './sec-artifact-cache';
 import {persistFilingDocument} from './filing-observations';
+import {persistSecFinancialSource,secFinancialSourceCapacityAvailable,SEC_FINANCIAL_SOURCE_MAX_BYTES} from './sec-filing-sources';
 import { reserveProviderRequest } from './provider-quota';
 import type { Snapshot, Provenance, InsiderPurchase, SecFilingResearch } from './engine';
 import { completedSessionQuote, ma30Weeks, reviewShareSplits } from './research';
@@ -560,6 +561,45 @@ export async function fetchSec8KItemIndex(payload:any,cik:number,asOf:string,ret
  return {providerStatus,selectedDocuments:selected.length,fetchedDocuments,failedDocuments,truncatedDocuments,items,limitations};
 }
 
+/** On-demand copies of the newest annual and interim primary documents for
+ * later human capitalization review. Acquisition alone never changes a score. */
+type FinancialSourceIndex=NonNullable<SecFilingResearch['financialSourceIndex']>;
+export async function fetchSecFinancialFilingSources(payload:any,cik:number,asOf:string):Promise<FinancialSourceIndex>{
+ const empty=(providerStatus:FinancialSourceIndex['providerStatus'],limitations:string[]):FinancialSourceIndex=>({providerStatus,selectedDocuments:0,fetchedDocuments:0,failedDocuments:0,truncatedDocuments:0,items:[],limitations});
+ const now=new Date().toISOString();
+ if(!Number.isSafeInteger(cik)||cik<=0||!validSecDate(asOf.slice(0,10))||Date.parse(asOf)>Date.parse(now)+60_000)return empty('unavailable',['Invalid issuer or as-of time; SEC report source acquisition was skipped.']);
+ if(!secUserAgent())return empty('unavailable',['SEC report source acquisition requires a configured reachable contact identity.']);
+ if(!payload||Number(payload.cik)!==cik||!Array.isArray(payload?.filings?.recent?.form))return empty('unavailable',['SEC submissions identity or recent filing index is unavailable.']);
+ if(!await secFinancialSourceCapacityAvailable())return empty('paused',['SEC report source archive is paused until measured physical storage has at least 512 MiB free.']);
+ const index=parseSecFilingIndex(payload,cik,asOf,100,now);
+ const annual=new Set(['10-K','10-K/A','20-F','20-F/A','40-F','40-F/A']);
+ const quarterly=new Set(['10-Q','10-Q/A']);
+ const selected=[index.items.find(item=>annual.has(item.form)),index.items.find(item=>quarterly.has(item.form))].filter((item):item is NonNullable<typeof item>=>!!item);
+ if(!selected.length)return empty('empty',['No annual or quarterly primary document was present in the bounded recent SEC submission index.']);
+ const items:FinancialSourceIndex['items']=[];let failedDocuments=0,truncatedDocuments=0,totalBytes=0;
+ const deadline=Date.now()+8_000;
+ for(const filing of selected){
+  const remaining=deadline-Date.now();
+  if(remaining<=0){failedDocuments+=selected.length-items.length-failedDocuments-truncatedDocuments;break;}
+  try{
+   const response=await providerFetch(filing.url,{headers:{...requestHeaders(filing.url),Accept:'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8'},signal:AbortSignal.timeout(Math.min(5_000,remaining))});
+   if(!response.ok){failedDocuments++;recordProviderIssue(`SEC report ${filing.accession}: HTTP ${response.status}`);continue;}
+   const body=await readLimitedText(response,SEC_FINANCIAL_SOURCE_MAX_BYTES,2*SEC_FINANCIAL_SOURCE_MAX_BYTES-totalBytes);
+   if(body.truncated){truncatedDocuments++;continue;}
+   const archived=await persistSecFinancialSource({cik,accession:filing.accession,form:filing.form as FinancialSourceIndex['items'][number]['form'],url:filing.url,filed:filing.filed,retrievedAt:new Date().toISOString(),body:body.text});
+   totalBytes+=body.bytes;items.push(archived);
+  }catch(error){failedDocuments++;recordProviderIssue(`SEC report ${filing.accession}: ${error instanceof Error?error.message:'source capture failed'}`);}
+ }
+ const unattempted=Math.max(0,selected.length-items.length-failedDocuments-truncatedDocuments);
+ failedDocuments+=unattempted;
+ const limitations=['Captured primary documents are source copies only. Economic common share classes, diluted shares, amendments, exhibits, and market capitalization still require an explicit filing-level review. No score or valuation credit is granted.',...(index.limitations)];
+ if(!annual.has(selected[0]?.form??''))limitations.push('No annual report was selected from the recent submissions index.');
+ if(!selected.some(item=>quarterly.has(item.form)))limitations.push('No quarterly report was selected from the recent submissions index; foreign interim reports are not assumed equivalent to 10-Q.');
+ if(failedDocuments)limitations.push(`${failedDocuments} selected report(s) failed or were not attempted within the 8-second request budget; acquisition can be retried.`);
+ if(truncatedDocuments)limitations.push(`${truncatedDocuments} selected report(s) exceeded the ${SEC_FINANCIAL_SOURCE_MAX_BYTES}-byte complete-document cap and were not archived.`);
+ return {providerStatus:items.length===2&&failedDocuments===0&&truncatedDocuments===0?'retrieved':'partial',selectedDocuments:selected.length,fetchedDocuments:items.length,failedDocuments,truncatedDocuments,items,limitations};
+}
+
 /** Convert the official SEC submissions index into dated filing items when a
  * third-party news feed is empty. Filing metadata is not presented as news
  * sentiment; it is a sourced company event that keeps the profile useful. */
@@ -732,7 +772,7 @@ export async function fetchInsiderPurchases(cik: number,asOf:string,submissionsI
   }
 }
 
-async function attachOpportunityEarnings(snapshot: Snapshot, facts: unknown, providerError?: unknown, benchmark?: HistoricalResult | null, splitAdjusted = false, submissions?: unknown, includeFilingIndex = false, form8KItemIndex?:Awaited<ReturnType<typeof fetchSec8KItemIndex>>) {
+async function attachOpportunityEarnings(snapshot: Snapshot, facts: unknown, providerError?: unknown, benchmark?: HistoricalResult | null, splitAdjusted = false, submissions?: unknown, includeFilingIndex = false, form8KItemIndex?:Awaited<ReturnType<typeof fetchSec8KItemIndex>>, financialSourceIndex?:Awaited<ReturnType<typeof fetchSecFinancialFilingSources>>) {
   // The network response arrives after the snapshot's initial quote cut. Stamp
   // the research cut only after acquisition so SEC retrievedAt is never forged
   // into the past or rejected as future evidence.
@@ -840,7 +880,7 @@ async function attachOpportunityEarnings(snapshot: Snapshot, facts: unknown, pro
       readyForScoring: !!financialStrength.assessment,
     },
     technicalTiming,
-    ...(includeFilingIndex ? { secFilings: {...parseSecFilingIndex(submissions, Number(snapshot.cik), snapshot.asOf, 60, retrievedAt),...(form8KItemIndex?{form8KItemIndex}:{})} } : {}),
+    ...(includeFilingIndex ? { secFilings: {...parseSecFilingIndex(submissions, Number(snapshot.cik), snapshot.asOf, 60, retrievedAt),...(form8KItemIndex?{form8KItemIndex}:{}),...(financialSourceIndex?{financialSourceIndex}:{})} } : {}),
   };
   Object.assign(snapshot,alignSnapshotFinancials(snapshot));
 }
@@ -931,6 +971,7 @@ export async function companySnapshot(company: Company, options: { includeOpport
   const googleNewsPromise = fetch(`https://news.google.com/rss/search?q=${encodeURIComponent(`\"${symbol}\" stock`)}&hl=en-US&gl=US&ceid=US:en`, { headers: { 'User-Agent': browserAgent, Accept: 'application/rss+xml,text/xml' }, signal: AbortSignal.timeout(8_000) }).then(r => {if(!r.ok)throw Error(`HTTP ${r.status}`);return r.text();}).catch(error => {issues.push(`Google News RSS: ${error.message}`);return '';});
   const filingsPromise = fetchJson(submissionsUrlFor(company.cik),8_000).catch(error => {issues.push(`SEC submissions: ${error instanceof Error?error.message:'provider request failed'}`);return null;});
   const form8KItemIndexPromise=options.includeOpportunityResearch?filingsPromise.then(payload=>{const indexAsOf=new Date().toISOString();return fetchSec8KItemIndex(payload,company.cik,indexAsOf,indexAsOf).catch(error=>({providerStatus:'unavailable' as const,selectedDocuments:0,fetchedDocuments:0,failedDocuments:0,truncatedDocuments:0,items:[],limitations:[`Bounded SEC 8-K item scan failed: ${error instanceof Error?error.message:'provider request failed'}`]}));}):Promise.resolve(undefined);
+  const financialSourceIndexPromise=options.includeOpportunityResearch?filingsPromise.then(payload=>fetchSecFinancialFilingSources(payload,company.cik,new Date().toISOString()).catch(error=>({providerStatus:'unavailable' as const,selectedDocuments:0,fetchedDocuments:0,failedDocuments:0,truncatedDocuments:0,items:[],limitations:[`SEC financial report source capture failed: ${error instanceof Error?error.message:'provider request failed'}`]}))):Promise.resolve(undefined);
   const insiderPromise = fetchInsiderPurchases(company.cik,now);
   let history: NonNullable<Snapshot['history']> = [], historyUrl = NASDAQ_SCREENER,historySource='Nasdaq screener · bundled dated fallback',historyRetrievedAt=bundledUniverse.generatedAt,chartMeta:any=null,historySplitAdjusted=false;
   try {
@@ -964,7 +1005,7 @@ export async function companySnapshot(company: Company, options: { includeOpport
   if(session){snapshot.price=session.price;snapshot.dailyChange=session.dailyChange;snapshot.provenance.price={...quoteEvidence,periodEnd:session.periodEnd,tag:'last completed session close'};snapshot.provenance.dailyChange={...quoteEvidence,periodEnd:session.periodEnd,tag:'last completed close / previous completed close - 1'};}
   if(history.length)snapshot.provenance.history=quoteEvidence;
   if (snapshot.marketCap != null) {const availableAt=company.marketCapAvailableAt||company.quoteAvailableAt||bundledUniverse.generatedAt,source=company.marketCapSource||company.quoteSource||'Nasdaq stock screener';snapshot.provenance.marketCap = { source, url: NASDAQ_SCREENER, periodEnd: availableAt.slice(0, 10), availableAt, retrievedAt: now, currency: 'USD', confidence: source.includes('bundled') ? 'low' : 'medium' };}
-  const [summaryResult, newsResult, googleNewsResult, insiderResult, filingsResult,form8KItemIndex] = await Promise.all([summaryPromise, newsPromise, googleNewsPromise, insiderPromise, filingsPromise,form8KItemIndexPromise]);
+  const [summaryResult, newsResult, googleNewsResult, insiderResult, filingsResult,form8KItemIndex,financialSourceIndex] = await Promise.all([summaryPromise, newsPromise, googleNewsPromise, insiderPromise, filingsPromise,form8KItemIndexPromise,financialSourceIndexPromise]);
   const summary = summaryResult?.data?.summaryData ?? {};
   const summaryValue = (key: string) => String(summary[key]?.value ?? '').trim();
   const summaryEvidence:Provenance={source:'Nasdaq quote summary · observed',url:`https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/summary?assetclass=stocks`,periodEnd:now.slice(0,10),availableAt:now,retrievedAt:now,confidence:'medium'};
@@ -1009,7 +1050,7 @@ export async function companySnapshot(company: Company, options: { includeOpport
     }
     await enrichWithYahooProfile(snapshot, symbol, now, profilePromise);
     snapshot.research = { financials: !!snapshot.revenue, valuation: snapshot.evSales != null || snapshot.ps != null, analysts: snapshot.analystTarget != null, sector: !!snapshot.sector };
-    if (options.includeOpportunityResearch) await attachOpportunityEarnings(snapshot, null, factsResult.error, await benchmarkPromise, historySplitAdjusted, filingsResult, true,form8KItemIndex);
+    if (options.includeOpportunityResearch) await attachOpportunityEarnings(snapshot, null, factsResult.error, await benchmarkPromise, historySplitAdjusted, filingsResult, true,form8KItemIndex,financialSourceIndex);
     return translateSnapshotContent(applyFinancingRisk(snapshot));
   }
 
@@ -1023,7 +1064,7 @@ export async function companySnapshot(company: Company, options: { includeOpport
     const bundledRecovered=applyBundledFundamentals(snapshot,company.cik,now);
     await enrichWithYahooProfile(snapshot, symbol, now, profilePromise);
     snapshot.research = { financials: bundledRecovered||!!snapshot.revenue, valuation: snapshot.evSales != null || snapshot.ps != null, analysts: snapshot.analystTarget != null, sector: !!snapshot.sector };
-    if (options.includeOpportunityResearch) await attachOpportunityEarnings(snapshot, null, factsResult.error, await benchmarkPromise, historySplitAdjusted, filingsResult, true,form8KItemIndex);
+    if (options.includeOpportunityResearch) await attachOpportunityEarnings(snapshot, null, factsResult.error, await benchmarkPromise, historySplitAdjusted, filingsResult, true,form8KItemIndex,financialSourceIndex);
     return translateSnapshotContent(applyFinancingRisk(snapshot));
   }
 
@@ -1059,7 +1100,7 @@ export async function companySnapshot(company: Company, options: { includeOpport
   snapshot.research = { financials: !!snapshot.revenue, valuation: snapshot.evSales != null || snapshot.ps != null, analysts: snapshot.analystTarget != null, sector: !!snapshot.sector };
   // Preserve the root CIK and facts envelope for issuer-identity validation;
   // the legacy fundamental parsers above intentionally consume `facts` only.
-  if (options.includeOpportunityResearch) await attachOpportunityEarnings(snapshot, factsResult.value, undefined, await benchmarkPromise, historySplitAdjusted, filingsResult, true,form8KItemIndex);
+  if (options.includeOpportunityResearch) await attachOpportunityEarnings(snapshot, factsResult.value, undefined, await benchmarkPromise, historySplitAdjusted, filingsResult, true,form8KItemIndex,financialSourceIndex);
   return translateSnapshotContent(applyFinancingRisk(enrichFinancials(snapshot,facts,factsUrl)));
 }
 

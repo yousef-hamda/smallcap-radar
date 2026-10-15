@@ -9,9 +9,12 @@ export async function recordScanCapacity(capacity:{reusableBytes:number;filesyst
 }
 export async function scanCapacityPaused(now=Date.now()) {
  if(!(env as any).RAILWAY_VOLUME_MOUNT_PATH)return false;
- const row=await db().prepare('SELECT retrieved_at,payload FROM raw_cache WHERE key=?').bind(key).first() as any;
- if(!row)return true;
- const age=now-Date.parse(row.retrieved_at);
- try{const capacity=JSON.parse(row.payload);return !Number.isFinite(age)||age<0||age>5*60_000||!Number.isSafeInteger(capacity.filesystemFreeBytes)||capacity.filesystemFreeBytes<MIN_SCAN_FILESYSTEM_BYTES;}
+ try{
+  const row=await db().prepare('SELECT retrieved_at,payload FROM raw_cache WHERE key=?').bind(key).first() as any;
+  if(!row)return true;
+  const age=now-Date.parse(row.retrieved_at);
+  const capacity=JSON.parse(row.payload);
+  return !Number.isFinite(age)||age<0||age>5*60_000||!Number.isSafeInteger(capacity.filesystemFreeBytes)||capacity.filesystemFreeBytes<MIN_SCAN_FILESYSTEM_BYTES;
+ }
  catch{return true;}
 }

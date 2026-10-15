@@ -1088,6 +1088,51 @@ test('low or stale filesystem capacity pauses active scans and batons without ch
 });
 
 
+test('stage 10 resumes its saved cursor and retry queue after physical capacity is restored',async()=>{
+ const {recordScanCapacity}=await import('../../.test-build/scan-capacity.mjs');
+ const id='history-capacity-resume',now=Date.now(),date=new Date(now).toISOString();
+ const displayDate='9999-12-31T23:59:59.999Z';
+ const first={ticker:'CAPACITY-RETRY',cik:0},second={ticker:'CAPACITY-NEXT',cik:0};
+ const queue=JSON.stringify([{company:first,attempt:1}]);
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,failed,stage,offset,universe,strategy_hash,retry_queue) VALUES(?,?,?,'running','Bulk Quotes/SEC Frames + Opportunity SEC v14 · full',2,2,1,10,1,?,?,?)").bind(id,displayDate,displayDate,JSON.stringify([first,second]),currentHash(),queue).run();
+ for(const company of [first,second])await insertSnapshot(id,{...base,symbol:company.ticker,cik:0,asOf:date,price:10,provenance:{...base.provenance}}).run();
+ runtimeEnv.RAILWAY_VOLUME_MOUNT_PATH='/synthetic';
+ try{
+  await recordScanCapacity({reusableBytes:2*1024**3,filesystemFreeBytes:255*1024**2},now);
+  const before=await db().prepare('SELECT * FROM strategy_runs WHERE id=?').bind(id).first();
+  const paused=await processScanBatch(id);
+  assert.equal(paused.pausedForCapacity,true);
+  assert.deepEqual(await db().prepare('SELECT * FROM strategy_runs WHERE id=?').bind(id).first(),before);
+  const pausedStatus=await (await GET(new Request('https://radar.test/api/radar?status=1'))).json();
+  assert.equal(pausedStatus.run.id,id);
+  assert.equal(pausedStatus.pausedForCapacity,true);
+
+  await recordScanCapacity({reusableBytes:0,filesystemFreeBytes:1024**3},Date.now());
+  const resumedStatus=await (await GET(new Request('https://radar.test/api/radar?status=1'))).json();
+  assert.equal(resumedStatus.run.id,id);
+  assert.equal(resumedStatus.pausedForCapacity,false);
+  setHistoryResult(new HistoricalSessionsUnavailableError(second.ticker));
+  const resumed=await processScanBatch(id);
+  assert.equal(resumed.pausedForCapacity,undefined);
+  assert.equal(resumed.run.stage,10);
+  assert.equal(resumed.run.offset,2);
+  assert.equal(resumed.run.retryPending,1);
+  assert.equal(resumed.run.failed,2);
+
+  const recent=new Date().toISOString();
+  setHistoryResult({history:[{date:recent.slice(0,10),close:10,volume:100}],splits:[],source:'TEST_ONLY',url:'https://example.test',retrievedAt:recent,availableAt:recent});
+  const replayed=await processScanBatch(id);
+  assert.equal(replayed.run.stage,11);
+  assert.equal(replayed.run.retryPending,0);
+  assert.equal(replayed.run.failed,1);
+ }finally{
+  setHistoryResult(null);
+  delete runtimeEnv.RAILWAY_VOLUME_MOUNT_PATH;
+  await db().prepare('DELETE FROM fundamental_snapshots WHERE run_id=?').bind(id).run();
+  await db().prepare('DELETE FROM strategy_runs WHERE id=?').bind(id).run();
+ }
+});
+
 test('archive summaries bound duplicate trace storage while restoring exact evidence and grades',async()=>{
  const id='archive-rich-summary',snapshot={...base,symbol:'ARCHIVE-RICH',description:'source description '.repeat(1000)},value={opportunity:{...(await import('../../.test-build/opportunity-dossier.mjs')).evaluateOpportunityDossier(snapshot,{asOf:snapshot.asOf})}};
  for(const f of value.opportunity.factors)f.rationale='Synthetic detailed audit rationale '.repeat(1000);
