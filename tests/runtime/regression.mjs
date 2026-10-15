@@ -257,7 +257,7 @@ test('newest finished full universe remains canonical despite partial provider c
   }
  }finally{await db().prepare('DELETE FROM fundamental_snapshots WHERE run_id=?').bind(id).run();await db().prepare('DELETE FROM strategy_runs WHERE id=?').bind(id).run();invalidateStateCache();}
 });
-test('canonical company chart reads compressed history on demand without changing its saved rating',async()=>{
+test('canonical company chart reaches beyond saved rating date without changing its evaluation',async()=>{
  const id='canonical-chart-history',symbol='CHART-HISTORY',asOf='2026-10-10T23:00:00.000Z';
  await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES(?,?,?,'complete','Bulk Quotes/SEC Frames · full',1,1,13,?)").bind(id,asOf,asOf,currentHash()).run();
  await insertSnapshot(id,{...base,symbol,asOf,history:undefined}).run();
@@ -269,13 +269,18 @@ test('canonical company chart reads compressed history on demand without changin
   const chartResponse=await companyGET(new Request(`https://radar.test/api/company?symbol=${symbol}&runId=${id}&includeHistory=1`));
   assert.equal(chartResponse.status,200);
   const chart=await chartResponse.json();
-  assert.deepEqual(chart.snapshot.history,[{date:'2026-10-09',close:10},{date:'2026-10-10',close:11}]);
+  assert.deepEqual(chart.snapshot.history,[{date:'2026-10-09',close:10},{date:'2026-10-10',close:11},{date:'2026-10-12',close:12}]);
+  assert.equal(chart.snapshot.asOf,asOf,'the scored snapshot date remains pinned');
+  assert.equal(chart.chartHistory.availableAt,asOf);
+  assert.equal(chart.chartHistory.stale,true,'old history cache is clearly dated when refresh fails');
   assert.deepEqual(chart.evaluation,basic.evaluation);
   assert.equal(chart.ranking.position,basic.ranking.position);
   await db().prepare('DELETE FROM raw_cache WHERE key=?').bind(key).run();
-  setHistoryResult({...payload,history:[{date:'2026-10-08',close:9},{date:'2026-10-09',close:10}]});
+  setHistoryResult({...payload,retrievedAt:new Date().toISOString(),history:[{date:'2026-10-08',close:9},{date:'2026-10-09',close:10}]});
   const fetched=await(await companyGET(new Request(`https://radar.test/api/company?symbol=${symbol}&runId=${id}&includeHistory=1`))).json();
   assert.equal(fetched.snapshot.history.length,2);
+  assert.equal(fetched.chartHistory.stale,false);
+  assert(historyRequests.at(-1)[1].slice(0,10)>asOf.slice(0,10),'new chart fetch must use current observation date');
   assert.deepEqual(fetched.evaluation,basic.evaluation);
   assert.equal(await db().prepare('SELECT key FROM raw_cache WHERE key=?').bind(key).first(),null);
   setHistoryResult(new Error('Injected provider outage'));
