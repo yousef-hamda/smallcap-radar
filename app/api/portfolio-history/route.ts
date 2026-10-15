@@ -7,7 +7,7 @@ import { historicalMarketData } from '@/lib/providers';
 
 const CACHE_HOURS = 6;
 const MAX_SYMBOLS = 64;
-type CachedHistory={from:string;requestedFrom?:string;history:Array<{date:string;close:number}>;source:string;availableAt:string};
+type CachedHistory={from:string;history:Array<{date:string;close:number}>;source:string;availableAt:string};
 const historyCache=new Map<string,{expiresAt:number;payload:CachedHistory}>();
 function rememberHistory(symbol:string,payload:CachedHistory){
  historyCache.delete(symbol);
@@ -40,19 +40,23 @@ export async function GET(request: Request) {
     if (allSymbols.length > MAX_SYMBOLS) return json({ error: `يدعم الرسم حتى ${MAX_SYMBOLS} سهمًا مختلفًا في المحفظة.` }, 422);
     const now = new Date(), asOf = now.toISOString(), today = asOf.slice(0, 10);
     const firstDate = transactions.reduce((minimum, transaction) => transaction.tradeDate < minimum ? transaction.tradeDate : minimum, transactions[0].tradeDate);
+    // The transaction price can bridge a weekend or holiday, but a later
+    // history start leaves an unverified valuation gap.
+    const coverageDeadline=new Date(Date.parse(`${firstDate}T00:00:00Z`)+7*86_400_000).toISOString().slice(0,10);
     const requestedDays = Math.min(7_300, Math.max(45, Math.ceil((Date.now() - Date.parse(`${firstDate}T00:00:00Z`)) / 86_400_000) + 30));
     const cacheKeys = allSymbols.map(symbol => `portfolio-history:v1:${symbol}`);
     const placeholders = cacheKeys.map(() => '?').join(',');
     const cachedRows = (await db().prepare(`SELECT key,retrieved_at,payload FROM raw_cache WHERE key IN (${placeholders})`).bind(...cacheKeys).all()).results as any[];
     const cached = new Map(cachedRows.map(row => [String(row.key).split(':').at(-1)!, row]));
     const unavailable: string[] = [], staleSymbols:string[]=[], sources: Array<{ symbol: string; source: string; availableAt: string }> = [];
-    const histories: PortfolioHistory = {};
+    const histories: PortfolioHistory = {},startCoverageGaps=new Set<string>();
     await mapLimited(allSymbols, 4, async symbol => {
       const row = cached.get(symbol);
       let legacy:CachedHistory|null=null;
       try{if(row)legacy=JSON.parse(String(row.payload)) as CachedHistory;}catch{/* ignore a corrupted legacy cache row */}
       const local=historyCache.get(symbol);
-      const eligible=(payload:CachedHistory|null|undefined):payload is CachedHistory=>!!payload&&typeof payload.from==='string'&&(payload.from<=firstDate||!!payload.requestedFrom&&payload.requestedFrom<=firstDate)&&Array.isArray(payload.history)&&payload.history.length>0;
+      const valid=(payload:CachedHistory|null|undefined):payload is CachedHistory=>!!payload&&/^\d{4}-\d{2}-\d{2}$/.test(payload.from)&&Array.isArray(payload.history)&&payload.history.length>0;
+      const eligible=(payload:CachedHistory|null|undefined):payload is CachedHistory=>valid(payload)&&payload.from<=coverageDeadline;
       const recent=local&&local.expiresAt>Date.now()&&eligible(local.payload)?local.payload:row&&Date.now()-Date.parse(String(row.retrieved_at))<CACHE_HOURS*3_600_000&&eligible(legacy)?legacy:null;
       if(recent){histories[symbol]=recent.history;sources.push({symbol,source:recent.source||'ذاكرة تاريخ المحفظة',availableAt:recent.availableAt||String(row?.retrieved_at||asOf)});return;}
       try {
@@ -60,13 +64,15 @@ export async function GET(request: Request) {
         const history = result.history.filter(bar => bar.date <= today && Number.isFinite(bar.close) && bar.close! > 0).map(bar => ({ date: bar.date, close: Number(bar.close) }));
         if (!history.length) throw Error('لا توجد جلسات موثقة');
         histories[symbol] = history;
-        const payload = { from: history[0].date, requestedFrom:firstDate, history, source: result.source, availableAt: result.availableAt };
+        const payload = { from: history[0].date, history, source: result.source, availableAt: result.availableAt };
         rememberHistory(symbol,payload);
+        if(!eligible(payload))startCoverageGaps.add(symbol);
         sources.push({ symbol, source: result.source, availableAt: result.availableAt });
       } catch {
-        // Preserve a sufficiently long saved history during provider outages.
-        const fallback=eligible(local?.payload)?local!.payload:eligible(legacy)?legacy:null;
-        if(fallback){histories[symbol]=fallback.history;staleSymbols.push(symbol);sources.push({symbol,source:fallback.source||'ذاكرة تاريخ المحفظة',availableAt:fallback.availableAt||String(row?.retrieved_at||asOf)});}
+        // Keep dated partial history visible during an outage, but mark the
+        // missing interval instead of claiming it covers the purchase date.
+        const fallback=valid(local?.payload)?local!.payload:valid(legacy)?legacy:null;
+        if(fallback){histories[symbol]=fallback.history;staleSymbols.push(symbol);if(!eligible(fallback))startCoverageGaps.add(symbol);sources.push({symbol,source:fallback.source||'ذاكرة تاريخ المحفظة',availableAt:fallback.availableAt||String(row?.retrieved_at||asOf)});}
         else unavailable.push(symbol);
       }
     });
@@ -85,7 +91,7 @@ export async function GET(request: Request) {
       }
     }
     const series = buildPerformanceSeries(transactions, histories, today);
-    const response = json({ ...series, unavailable, staleSymbols, sources, asOf, method: 'الربح المحقق + غير المحقق ÷ إجمالي تكلفة المشتريات حتى كل تاريخ' });
+    const response = json({ ...series, incompleteSymbols:[...new Set([...series.incompleteSymbols,...startCoverageGaps])], unavailable, staleSymbols, sources, asOf, method: 'الربح المحقق + غير المحقق ÷ إجمالي تكلفة المشتريات حتى كل تاريخ' });
     if (identity.cookie) response.headers.set('Set-Cookie', identity.cookie);
     return response;
   } catch (error) { return json({ error: error instanceof Error ? error.message : 'تعذّر بناء تاريخ المحفظة.' }, 503); }
