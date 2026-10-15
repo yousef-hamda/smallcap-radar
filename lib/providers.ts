@@ -586,37 +586,35 @@ export async function historicalMarketData(symbol: string, asOf = new Date().toI
   const to = asOf.slice(0, 10), from = dateOffset(asOf, -days);
   const period1=Math.floor(Date.parse(`${from}T00:00:00Z`)/1000),period2=Math.floor(Date.parse(`${to}T00:00:00Z`)/1000)+86400;
   const yahooQuery=`period1=${period1}&period2=${period2}&interval=1d&events=div%2Csplits&includeAdjustedClose=true`;
-  let yahooNoData=false,cboeNoData=false;
+  let yahooNotFound=false,cboeNotFound=false;
   try{
    const result=await yahooChartPayload(symbol,yahooQuery),parsed=parseYahooDaily(result.payload,asOf);
    if(parsed.history.length){
     const retrievedAt=new Date().toISOString(),lastDate=parsed.history.at(-1)!.date;
     return {url:result.url,...parsed,meta:result.payload?.chart?.result?.[0]?.meta,source:'Yahoo Finance chart API · split-adjusted daily history and split events',retrievedAt,availableAt:`${lastDate}T21:00:00.000Z`};
    }
-   yahooNoData=true;
-  }catch(error){yahooNoData=error instanceof HistoricalSessionsUnavailableError;recordProviderIssue(`${symbol}: Yahoo daily history unavailable: ${error instanceof Error?error.message:String(error)}; trying Cboe`);}
+  }catch(error){yahooNotFound=error instanceof HistoricalSessionsUnavailableError;recordProviderIssue(`${symbol}: Yahoo daily history unavailable: ${error instanceof Error?error.message:String(error)}; trying Cboe`);}
   const cboeUrl=`${CBOE_BASE}/charts/historical/${encodeURIComponent(symbol.toUpperCase())}.json`;
   try {
    const payload=await fetchJson(cboeUrl,5_000,86_400_000,2) as {data?:Array<Record<string,unknown>>};
    const history=parseCboeDaily(payload,from,to);
    if(history.length){const retrievedAt=new Date().toISOString();return {url:cboeUrl,history,splits:null,source:'Cboe delayed historical API · independent no-key fallback',retrievedAt,availableAt:`${history.at(-1)!.date}T21:00:00.000Z`};}
-   cboeNoData=true;
    throw Error('Cboe returned no usable sessions');
-  } catch(error) { cboeNoData ||= error instanceof Error&&/\bHTTP 404\b/.test(error.message);recordProviderIssue(`${symbol}: Cboe historical unavailable: ${error instanceof Error?error.message:'provider request failed'}; trying Nasdaq`); }
+  } catch(error) { cboeNotFound=error instanceof Error&&/\bHTTP 404\b/.test(error.message);recordProviderIssue(`${symbol}: Cboe historical unavailable: ${error instanceof Error?error.message:'provider request failed'}; trying Nasdaq`); }
   const url = `https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/historical?assetclass=stocks&fromdate=${from}&todate=${to}&limit=5000`;
   let payload: { data?: { tradesTable?: { rows?: Array<Record<string, string>> } } };
   try { payload = await fetchJson(url,3000,300_000,1) as typeof payload; }
   catch(error) {
    const nasdaqNoData=error instanceof Error&&/\bHTTP 404\b/.test(error.message);
-   if(!cached?.history?.length){if(yahooNoData&&cboeNoData&&nasdaqNoData)throw new HistoricalSessionsUnavailableError(symbol);throw error;}
+   if(!cached?.history?.length){if(yahooNotFound&&cboeNotFound&&nasdaqNoData)throw new HistoricalSessionsUnavailableError(symbol);throw error;}
    recordProviderIssue(`${symbol}: historical API unavailable; dated bundled history fallback`);
    const history=cached.history.filter(row=>row.date>=from&&row.date<=to);
-   if(!history.length){if(yahooNoData&&cboeNoData&&nasdaqNoData)throw new HistoricalSessionsUnavailableError(symbol);throw Error(`${symbol}: provider history unavailable and dated bundled fallback has no sessions in the requested range`);}
+   if(!history.length){if(yahooNotFound&&cboeNotFound&&nasdaqNoData)throw new HistoricalSessionsUnavailableError(symbol);throw Error(`${symbol}: provider history unavailable and dated bundled fallback has no sessions in the requested range`);}
    return {url,history,splits:null,source:'Nasdaq historical · bundled dated fallback',retrievedAt:quickCache.generatedAt,availableAt:quickCache.generatedAt};
   }
   const history = (payload.data?.tradesTable?.rows ?? []).map((row) => ({ date: isoDate(row.date), close: numeric(row.close), open: numeric(row.open), high: numeric(row.high), low: numeric(row.low), volume: numeric(row.volume) }))
     .filter((row) => row.date && row.date<=to && row.date>=from && row.close != null && row.close > 0 && row.low != null && row.low > 0).sort((a, b) => a.date.localeCompare(b.date));
-  if(!history.length)throw yahooNoData&&cboeNoData?new HistoricalSessionsUnavailableError(symbol):Error(`${symbol}: no historical sessions returned after earlier provider failures`);
+  if(!history.length)throw Error(`${symbol}: no historical sessions returned; successful empty responses may reflect temporary upstream or schema failures`);
   return { url, history:history as MarketBar[], splits:null,source:'Nasdaq historical API · corporate actions unavailable',retrievedAt:new Date().toISOString(),availableAt:`${history.at(-1)!.date}T21:00:00.000Z` };
 }
 

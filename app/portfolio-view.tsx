@@ -103,6 +103,7 @@ export function PerformanceChart({ history }: { history: HistoryData | null }) {
     </div>
     {!!history?.unavailable.length && <p className="portfolio-warning"><AlertTriangle size={16}/> التاريخ غير متاح حاليًا لـ {history.unavailable.join('، ')}؛ لم تُحوّل البيانات الناقصة إلى صفر.</p>}
     {!!history?.staleSymbols?.length && <p className="portfolio-warning"><AlertTriangle size={16}/> تعذّر تحديث تاريخ {history.staleSymbols.join('، ')}؛ استُخدمت بيانات سابقة مؤرخة حتى يعود مصدر الأسعار.</p>}
+    {!!history?.incompleteSymbols?.length && <p className="portfolio-warning"><AlertTriangle size={16}/> تاريخ الأسعار غير مكتمل منذ أول صفقة لـ {history.incompleteSymbols.join('، ')}؛ قد لا يعرض الرسم أداء المحفظة الكامل.</p>}
   </section>;
 }
 

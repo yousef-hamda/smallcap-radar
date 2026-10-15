@@ -37,7 +37,8 @@ async function canonicalChartHistory(symbol:string):Promise<CanonicalChart|null>
     if(history.length<2)continue;
     const retrievedAt=value.retrievedAt||row.retrieved_at;
     fallback={history,source:value.source||row.source,availableAt:value.availableAt||`${history.at(-1)!.date}T21:00:00.000Z`,retrievedAt,stale:true};
-    if(Date.now()-Math.min(Date.parse(row.retrieved_at),Date.parse(retrievedAt))<24*3_600_000)return {...fallback,stale:false};
+    const recentSession=Date.now()-Date.parse(`${history.at(-1)!.date}T21:00:00.000Z`)<7*86_400_000;
+    if(recentSession&&Date.now()-Math.min(Date.parse(row.retrieved_at),Date.parse(retrievedAt))<24*3_600_000)return {...fallback,stale:false};
     break;
    }
    catch{/* a damaged chart cache must not hide the saved company file */}
@@ -46,7 +47,8 @@ async function canonicalChartHistory(symbol:string):Promise<CanonicalChart|null>
  try{
   const result=await historicalMarketData(symbol,now,1900),history=validBars(result);
   const retrievedAt=Date.parse(result.retrievedAt);
-  return history.length>=2?{history,source:result.source,availableAt:result.availableAt,retrievedAt:result.retrievedAt,stale:!Number.isFinite(retrievedAt)||Date.now()-retrievedAt>=24*3_600_000}:fallback;
+  const recentSession=history.length>=2&&Date.now()-Date.parse(`${history.at(-1)!.date}T21:00:00.000Z`)<7*86_400_000;
+  return history.length>=2?{history,source:result.source,availableAt:result.availableAt,retrievedAt:result.retrievedAt,stale:!recentSession||!Number.isFinite(retrievedAt)||Date.now()-retrievedAt>=24*3_600_000}:fallback;
  }catch{return fallback;}
 }
 

@@ -101,6 +101,16 @@ test('radar exposes one opportunity category, favorites and portfolio without bo
  assert.doesNotMatch(html,/bottom-nav|terminal-shell|sidebar-head/);
 });
 
+test('a dated saved profile cannot replace a newer completed-session quote',async()=>{
+ const {mergeRecentQuote}=await vite.ssrLoadModule('/app/page.tsx');
+ const source=(periodEnd,availableAt)=>({source:'fixture',periodEnd,availableAt,retrievedAt:availableAt,confidence:'high'});
+ const current={symbol:'TEST',name:'Test',asOf:'2026-10-15T00:00:00Z',price:18,dailyChange:.03,provenance:{price:source('2026-10-14','2026-10-14T21:00:00Z'),dailyChange:source('2026-10-14','2026-10-14T21:00:00Z')}};
+ const older={...current,price:12,dailyChange:-.07,provenance:{price:source('2026-10-13','2026-10-13T21:00:00Z'),dailyChange:source('2026-10-13','2026-10-13T21:00:00Z')}};
+ assert.equal(mergeRecentQuote(older,current).price,18);
+ assert.equal(mergeRecentQuote(current,older).price,18);
+ assert.equal(mergeRecentQuote(current,older).dailyChange,.03);
+});
+
 test('company profile consumes only the canonical Opportunity evaluation',async()=>{
  const source=await readFile(path.join(root,'app/company-sheet.tsx'),'utf8');
  const route=await readFile(path.join(root,'app/api/company/route.ts'),'utf8');
@@ -164,7 +174,9 @@ test('empty chart keeps all seven period controls',async()=>{
 
 test('historical chart filters duplicate, future and nonfinite bars and displays actual extrema',async()=>{
  const {default:Chart}=await vite.ssrLoadModule('/app/price-chart.tsx');
- const html=renderToStaticMarkup(React.createElement(Chart,{snapshot:{symbol:'TEST',name:'Synthetic chart fixture',asOf:'2025-01-03',provenance:{},history:[{date:'2025-01-01',close:10},{date:'2025-01-01',close:10},{date:'2025-01-02',close:12},{date:'2025-01-04',close:99999},{date:'2025-01-02',close:NaN}]}}));
+ const date=offset=>new Date(Date.now()+offset*86_400_000).toISOString().slice(0,10);
+ const older=date(-2),latest=date(-1),future=date(1);
+ const html=renderToStaticMarkup(React.createElement(Chart,{snapshot:{symbol:'TEST',name:'Synthetic chart fixture',asOf:older,provenance:{},history:[{date:older,close:10},{date:older,close:10},{date:latest,close:12},{date:future,close:99999},{date:latest,close:NaN}]}}));
  assert.match(html,/10\.00/);assert.match(html,/12\.00/);assert.doesNotMatch(html,/99999|NaN|Infinity/);
  assert.match(html,/polyline/);
 });
@@ -356,7 +368,8 @@ test('company and portfolio-history reads retain dated fallback without writing 
  assert.match(company,/remember\(cacheKey,snapshot\)/);
  assert.match(company,/cached:true,stale:true/);
  assert.match(history,/rememberHistory\(symbol,payload\)/);
- assert.match(history,/const fallback=eligible\(local\?\.payload\)/);
+ assert.match(history,/const fallback=valid\(local\?\.payload\)/);
+ assert.match(history,/startCoverageGaps\.add\(symbol\)/);
  for(const route of [company,history])assert.doesNotMatch(route,/\b(?:INSERT|UPDATE|DELETE|REPLACE)\s+(?:OR\s+\w+\s+)?(?:INTO|FROM)?\s*raw_cache/i);
 });
 

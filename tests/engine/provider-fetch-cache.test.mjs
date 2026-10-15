@@ -21,3 +21,14 @@ test('mixed timeout and no-data responses stay retryable',async()=>{
   await assert.rejects(historicalMarketData('NOT-A-QUICK-SYMBOL','2035-01-02T00:00:00Z',3),error=>!(error instanceof HistoricalSessionsUnavailableError));
  }finally{globalThis.fetch=original;}
 });
+
+test('three successful empty provider responses stay retryable',async()=>{
+ const original=globalThis.fetch;
+ globalThis.fetch=async url=>new Response(JSON.stringify(
+  String(url).includes('finance.yahoo.com')?{chart:{result:[],error:null}}:
+  String(url).includes('cdn.cboe.com')?{data:[]}:{data:{tradesTable:{rows:[]}}}
+ ),{status:200,headers:{'content-type':'application/json'}});
+ try{
+  await assert.rejects(historicalMarketData('NOT-A-QUICK-SYMBOL','2035-01-02T00:00:00Z',3),error=>!(error instanceof HistoricalSessionsUnavailableError));
+ }finally{globalThis.fetch=original;}
+});
