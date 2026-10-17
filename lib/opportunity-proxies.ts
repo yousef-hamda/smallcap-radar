@@ -6,6 +6,7 @@ import { compatibleSnapshotMetrics, commercialObservationKind, operatingIssuerMe
 import {peerObservation,peerContext,uniqueIssuerPeers} from './opportunity-peers';
 import {buildOpportunityThesis,intrinsicValuationGrade} from './opportunity-thesis';
 import {MODEL_DEPENDENCIES,conflictAffectsKeys,modelFactorConflicts} from './opportunity-conflicts';
+import {hasVerifiedShareRatio} from './research';
 export {conflictAffectsKeys,modelFactorConflicts} from './opportunity-conflicts';
 
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
@@ -27,7 +28,7 @@ export function proxyOpportunityEvidence(snapshot: Snapshot,horizonMonths:number
     ||Date.parse(derivedGrowth.source.periodEnd)>=Date.parse(oldGrowthSource!.periodEnd));
   const growthTrace = useDerivedGrowth?derivedGrowth!.inputs:[];
   const observation = (key: string): number | null => {
-    if (key === 'dilution' && snapshot.splitAdjusted !== true) return null;
+    if (key === 'dilution' && !hasVerifiedShareRatio(snapshot)) return null;
     if (['ps','evSales','fcfYield'].includes(key) && !commonPerShareMetricsApplicable(snapshot)) return null;
     if (!operatingIssuerMetricsApplicable(snapshot) && !['price','ma30w','low52w','high52w','return12m','nextEarnings'].includes(key)) return null;
     const value = key==='revenueGrowth'&&useDerivedGrowth ? derivedGrowth?.value : snapshot[key as keyof Snapshot];
@@ -121,10 +122,10 @@ export function proxyOpportunityEvidence(snapshot: Snapshot,horizonMonths:number
     &&(snapshot.provenance.backlog.scope??'consolidated')==='consolidated'
     &&(snapshot.provenance.revenue?.scope??'consolidated')==='consolidated'
     &&auditableUrl(snapshot.provenance.backlog.url);
-  set('catalysts', 'Observed growth and disclosed backlog approximate business momentum; a scheduled earnings event earns only limited timing credit, not positive impact.', [
-    component('growth-momentum', 50, ['revenueGrowth'], value => clamp(value * 25)),
-    { name: 'backlog', weight: 30, grade: backlogEligible ? clamp(backlog!.amount! / revenue! * 5) : null, keys: ['backlog','revenue'], values: [backlog?.amount ?? 'missing', revenue ?? 'missing'] },
-    { name: 'earnings-window', weight: 20, grade: inHorizon ? 2 : null, keys: ['nextEarnings'], values: [snapshot.nextEarnings ?? 'missing'] },
+  set('catalysts', 'Historical growth, disclosed backlog and an earnings date are discovery signals only. Their 50/30/20 input coverage is traced, but none establishes a source-reviewed material future event or earns catalyst points.', [
+    component('growth-momentum', 50, ['revenueGrowth'], () => 0),
+    { name: 'backlog', weight: 30, grade: backlogEligible ? 0 : null, keys: ['backlog','revenue'], values: [backlog?.amount ?? 'missing', revenue ?? 'missing'] },
+    { name: 'earnings-window', weight: 20, grade: inHorizon ? 0 : null, keys: ['nextEarnings'], values: [snapshot.nextEarnings ?? 'missing'] },
   ]);
   set('competitivePosition', 'Margins and growth approximate business quality; they do not establish a durable competitive moat.', [
     component('gross-margin', 30, ['grossMargin'], value => value * 15),

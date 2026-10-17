@@ -6,6 +6,7 @@ import {completeSnapshotSchema,importSchema} from '@/lib/validation';
 import {resolveVisitor} from '@/lib/visitor';
 import {env} from 'cloudflare:workers';
 import {secUserAgentCacheVersion} from '@/lib/sec-user-agent';
+import {scanCapacityPaused} from '@/lib/scan-capacity';
 
 const tokenPattern=/^[a-f0-9]{48}$/;
 async function tokenHash(token:string){const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(token));return [...new Uint8Array(bytes)].map(value=>value.toString(16).padStart(2,'0')).join('');}
@@ -16,7 +17,8 @@ export async function GET(req:Request){
   if(url.searchParams.get('status')==='1'){
    await ensureSchema();
    const row=await db().prepare("SELECT id,status,source,stage,offset,processed,total,failed,created_at,updated_at,error,lease_until,universe_total,quote_coverage,fundamental_coverage,sec_failed,sec_success,sec_requests,json_array_length(retry_queue) AS retryPending FROM strategy_runs WHERE strategy_hash=? ORDER BY CASE WHEN source LIKE 'Bulk Quotes/%' AND status IN ('running','partial') AND stage<13 THEN 0 ELSE 1 END,updated_at DESC,created_at DESC LIMIT 1").bind(currentHash()).first();
-   return json({run:row});
+   const active=!!row&&['running','partial'].includes(String((row as any).status))&&Number((row as any).stage)<13;
+   return json({run:row,pausedForCapacity:active?await scanCapacityPaused():false});
   }
   const strategy=url.searchParams.get('strategy'),limit=Number(url.searchParams.get('limit')||40),offset=Number(url.searchParams.get('offset')||0);
   const requestedState=url.searchParams.get('state');
@@ -25,7 +27,9 @@ export async function GET(req:Request){
   // send core/bounce are routed to the unified result set during migration;
   // favorites remains a separate saved-items view.
   const activeStrategy=strategy==='favorites'?'favorites':'opportunity';
-  const response=json(await readState({strategy:activeStrategy,opportunityState,owner:identity.owner,query:url.searchParams.get('q')||'',limit:Number.isFinite(limit)?limit:40,offset:Number.isFinite(offset)?offset:0,...requestedRankRelease(url.searchParams),...(url.searchParams.get('view')==='compact'?{view:'compact' as const}:{})}));
+  const state=await readState({strategy:activeStrategy,opportunityState,researchFit:activeStrategy==='opportunity'&&url.searchParams.get('fit')==='research',owner:identity.owner,query:url.searchParams.get('q')||'',limit:Number.isFinite(limit)?limit:40,offset:Number.isFinite(offset)?offset:0,...requestedRankRelease(url.searchParams),...(url.searchParams.get('view')==='compact'?{view:'compact' as const}:{})});
+  const active=!!state.run&&['running','partial'].includes(String(state.run.status))&&Number(state.run.stage)<13;
+  const response=json({...state,pausedForCapacity:active?await scanCapacityPaused():false});
   if(identity.cookie)response.headers.set('Set-Cookie',identity.cookie);
   return response;
  }catch(error){

@@ -5,7 +5,7 @@ import {simulateForwardReturn,horizonDate,pointInTime,firmHoldout,firmBootstrap,
 import {trailingAnnual,insiderPurchases,latestInstant,REVENUE_TAGS} from '../../.test-build/sec.mjs';
 import {preliminarySnapshot,parseCompanyFacts,needsCompanyFacts,fetchCompanyFactsFallback,fetchBulkFundamentals} from '../../.test-build/bulk.mjs';
 import {yahooPercentAsRatio,parseYahooDaily,parseCboeDaily,yahooSymbol,yahooBulkQuotes,parseSecFilingNews,parseSecFilingIndex,parseSec8KItemReferences,fetchSec8KItemIndex,selectRecentForm4Filings,fetchInsiderPurchases,fetchJson,enrichSnapshotsWithSecOpportunity,resolveCompanyBySymbol,searchListedCompanies} from '../../.test-build/providers.mjs';
-import {reviewShareSplits} from '../../.test-build/research.mjs';
+import {reviewShareSplits,hasVerifiedShareRatio,shareReviewHistoryDays} from '../../.test-build/research.mjs';
 import {enrichFinancials} from '../../.test-build/financials.mjs';
 import {derivedEvidence} from '../../.test-build/evidence.mjs';
 import {parseYahooIntraday} from '../../.test-build/chart-data.mjs';
@@ -22,6 +22,10 @@ import {DATA_FIELD_REGISTRY,sourceRegistrySummary} from '../../.test-build/sourc
 import {parseEcbDailyCsv,convertFlowToUsd,convertInstantToUsd,translateSourcedValue,convertEarningsPeriodsToUsd,convertFinancialMetricsToUsd,fetchEcbDailySeries} from '../../.test-build/ecb-fx.mjs';
 process.env.SEC_USER_AGENT??='SmallCapRadar/2.2 (contact: tests@example.com)';
 const base=fixtures[0];const gate=(s,id,strategy='core')=>evaluateStrategy(strategy,s).checks.find(c=>c.id===id).status;
+const withReviewedShareRatio=ratio=>{
+ const [raw,market]=base.provenance.shareCountRatio.dependencies;
+ return reviewShareSplits({...base,shareCountRatio:ratio,dilution:ratio-1,splitAdjusted:false,provenance:{...base.provenance,shareCountRatio:raw,dilution:raw}},[],'2025-06-01','2026-08-31',market);
+};
 const opportunityAsOf='2026-09-30T12:00:00.000Z';
 const opportunityProvenance={source:'Official source fixture',url:'https://example.test/filing',periodStart:'2026-01-01',periodEnd:'2026-06-30',availableAt:'2026-08-01T12:00:00.000Z',retrievedAt:'2026-09-30T11:00:00.000Z',currency:'USD',rightsStatus:'redistribution-permitted',confidence:'high'};
 const freshMarketEvidence={...opportunityProvenance,periodStart:'2026-09-02',periodEnd:'2026-09-29',availableAt:'2026-09-29T20:00:00.000Z'};
@@ -47,7 +51,10 @@ test('profitability OR and missing data semantics',()=>{assert.equal(gate({...ba
 test('unresolved death spiral never passes without evidence',()=>{assert.equal(gate({...base,deathSpiral:'unknown'},'deathSpiral'),'UNKNOWN');assert.equal(gate({...base,riskEvidence:undefined},'deathSpiral'),'UNKNOWN');assert.equal(gate({...base,deathSpiral:'severe'},'deathSpiral'),'FAIL')});
 test('financing risk review turns complete SEC solvency evidence into a usable Core gate',()=>{
  const p={source:'SEC test',url:'https://example.test/financing',currency:'USD',periodEnd:'2026-06-30',availableAt:'2026-08-01T00:00:00Z',retrievedAt:base.asOf,confidence:'high'};
- const reviewed=applyFinancingRisk({...base,cash:20e6,debt:5e6,provenance:{...base.provenance,cash:p,debt:p,revenue:{...p,periodStart:'2025-07-01'},netIncome:{...p,periodStart:'2025-07-01'},fcf:{...p,periodStart:'2025-07-01'}}});
+ const raw={...p,source:'SEC reported share ratio; corporate actions unverified',url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0000000001.json',periodStart:'2025-06-30'};
+ const yahoo={...p,source:'Yahoo Finance chart API · split-adjusted daily history and split events',url:'https://query1.finance.yahoo.com/v8/finance/chart/TEST?events=div%2Csplits',periodEnd:'2026-08-31',availableAt:'2026-08-31T21:00:00Z'};
+ const withShares=reviewShareSplits({...base,cash:20e6,debt:5e6,splitAdjusted:false,shareCountRatio:1,dilution:0,provenance:{...base.provenance,cash:p,debt:p,revenue:{...p,periodStart:'2025-07-01'},netIncome:{...p,periodStart:'2025-07-01'},fcf:{...p,periodStart:'2025-07-01'},dilution:raw,shareCountRatio:raw}},[],'2025-06-01','2026-08-31',yahoo);
+ const reviewed=applyFinancingRisk(withShares);
  assert.equal(reviewed.deathSpiral,'clean');assert.match(reviewed.riskEvidence,/لا توجد إشارة/);assert.equal(gate(reviewed,'deathSpiral'),'PASS');
  const distressed=applyFinancingRisk({...reviewed,cash:1e6,debt:10e6,fcf:-2e6,provenance:{...reviewed.provenance,fcf:{...p,periodStart:'2025-07-01'}}});
  assert.equal(distressed.deathSpiral,'severe');assert.equal(gate(distressed,'deathSpiral'),'FAIL');
@@ -71,8 +78,8 @@ test('declared cap and liquidity universe limits are eligibility gates',()=>{
 });
 test('nonfinite and missing gate input become UNKNOWN',()=>{for(const marketCap of [null,undefined,NaN,Infinity])assert.equal(gate({...base,marketCap},'cap'),'UNKNOWN')});
 test('Bounce decline strict and size inclusive',()=>{assert.equal(gate({...base,return12m:-.35},'collapse','bounce'),'FAIL');assert.equal(gate({...base,return12m:-.3501},'collapse','bounce'),'PASS');for(const cap of [25e6,600e6])assert.equal(gate({...base,marketCap:cap},'cap','bounce'),'PASS')});
-test('Bounce low inclusive, MA and dilution strict',()=>{assert.equal(gate({...base,price:11,low52w:10},'low','bounce'),'PASS');assert.equal(gate({...base,price:10.5,ma30w:10},'reversal','bounce'),'FAIL');assert.equal(gate({...base,dilution:.25,shareCountRatio:1},'dilution','bounce'),'FAIL');assert.equal(gate({...base,splitAdjusted:false},'dilution','bounce'),'UNKNOWN')});
-test('Bounce dilution passes only after a stable share-count review',()=>{assert.equal(gate({...base,dilution:.10,shareCountRatio:1.08},'dilution','bounce'),'PASS');assert.equal(gate({...base,dilution:.10,shareCountRatio:2.1},'dilution','bounce'),'UNKNOWN')});
+test('Bounce low inclusive, MA and dilution strict',()=>{assert.equal(gate({...base,price:11,low52w:10},'low','bounce'),'PASS');assert.equal(gate({...base,price:10.5,ma30w:10},'reversal','bounce'),'FAIL');assert.equal(gate(withReviewedShareRatio(1.25),'dilution','bounce'),'FAIL');assert.equal(gate({...base,splitAdjusted:false},'dilution','bounce'),'UNKNOWN')});
+test('Bounce dilution passes only after a stable share-count review',()=>{assert.equal(gate(withReviewedShareRatio(1.10),'dilution','bounce'),'PASS');assert.equal(gate(withReviewedShareRatio(2.1),'dilution','bounce'),'UNKNOWN')});
 test('Bounce operating liquidity threshold is explicit',()=>{assert.equal(gate({...base,medianDollarVolume20d:150000},'liquidity','bounce'),'PASS');assert.equal(gate({...base,medianDollarVolume20d:149999},'liquidity','bounce'),'FAIL');assert.equal(gate({...base,medianDollarVolume20d:null},'liquidity','bounce'),'UNKNOWN')});
 test('Bounce thesis gates define membership before score ordering',()=>{const accepted=evaluateStrategy('bounce',base);assert(accepted.score>=0&&accepted.score<=100);assert.equal(accepted.scoreCoverage,100);assert.equal(accepted.factors.reduce((sum,f)=>sum+f.maxPoints,0),100);assert.equal(accepted.checks.find(c=>c.id==='reversal').role,'eligibility');assert.equal(accepted.screeningQualified,true);const weaker=evaluateStrategy('bounce',{...base,return12m:-.2});assert(weaker.score>=0&&weaker.score<=100);assert.equal(weaker.checks.find(c=>c.id==='collapse').role,'eligibility');assert.equal(weaker.screeningQualified,false);assert.equal(weaker.status,'FAIL');assert.equal(weaker.factorStatus,'FAIL');assert(weaker.score<accepted.score)});
 test('future evidence is excluded',()=>{const s={...base,provenance:{...base.provenance,marketCap:{...base.provenance.marketCap,availableAt:'2027-01-01T00:00:00Z'}}};assert.equal(gate(s,'provenance'),'UNKNOWN')});
@@ -97,19 +104,36 @@ test('last session is always the same completed close pair',()=>{
  assert.equal(completedSessionQuote([{date:'2026-01-05',close:12}]),null);
 });
 test('split review is evidence-based, interval-bound and idempotent',()=>{
- const p={...base.provenance.dilution,periodStart:'2025-06-30',periodEnd:'2026-06-30'};
+ const p={...base.provenance.dilution,source:'SEC reported share ratio; corporate actions unverified',url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0001846832.json',periodStart:'2025-06-30',periodEnd:'2026-06-30'};
  const s={...base,splitAdjusted:false,shareCountRatio:2.2,dilution:1.2,provenance:{...base.provenance,dilution:p,shareCountRatio:p}};
- const h={...p,source:'TEST ONLY SPLIT EVENTS'};
+ const h={...p,source:'Yahoo Finance chart API · split-adjusted daily history and split events',url:'https://query1.finance.yahoo.com/v8/finance/chart/TEST?events=div%2Csplits',periodStart:undefined,periodEnd:'2026-08-28',availableAt:'2026-08-29T00:00:00Z'};
  const events=[{date:'2025-08-01',factor:2},{date:'2025-08-01',factor:2}];
  const result=reviewShareSplits(s,events,'2025-06-01','2026-08-28',h);
  assert.equal(result.splitAdjusted,true);assert(Math.abs(result.dilution-.1)<1e-9);assert.equal(result.shareCountRatio,1.1);
+ assert.equal(hasVerifiedShareRatio(result),true);
  assert.deepEqual(reviewShareSplits(result,events,'2025-06-01','2026-08-28',h),result);
  assert.equal(reviewShareSplits(s,null,'2025-06-01','2026-08-28',h).splitAdjusted,false);
  assert.equal(reviewShareSplits(s,[],'2025-07-01','2026-08-28',h).splitAdjusted,false);
  assert.equal(reviewShareSplits(s,[],'2025-06-01','2026-05-01',h).splitAdjusted,false);
  assert.equal(reviewShareSplits(s,[{date:'2025-08-01',factor:0}],'2025-06-01','2026-08-28',h).splitAdjusted,false);
  assert.equal(reviewShareSplits(s,events,'2025-06-01','2026-08-28',{...h,availableAt:'2028-01-01'}).splitAdjusted,false);
+ assert.equal(reviewShareSplits(s,events,'2025-06-01','2026-08-28',{...h,source:'Unrelated data provider'}).splitAdjusted,false);
+ assert.equal(hasVerifiedShareRatio(reviewShareSplits(s,events,'2025-06-01','2026-08-28',{...h,url:h.url.replace('query1','query2')})),true);
  assert.equal(reviewShareSplits(s,[],'2025-06-01','2026-08-28',h).splitAdjusted,true);
+});
+test('raw SEC share ratios cannot inherit credit from a split-adjusted chart flag',()=>{
+ const p={...base.provenance.dilution,source:'SEC reported share ratio; corporate actions unverified',url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0001846832.json',periodStart:'2024-12-31',periodEnd:'2025-12-31'};
+ const stale={...base,asOf:'2026-10-13T00:00:00Z',splitAdjusted:true,shareCountRatio:1.03,dilution:.03,provenance:{...base.provenance,dilution:p,shareCountRatio:p}};
+ const yahoo={...p,source:'Yahoo Finance chart API · split-adjusted daily history and split events',url:'https://query1.finance.yahoo.com/v8/finance/chart/DLO?events=div%2Csplits',availableAt:'2026-10-12T21:00:00Z',retrievedAt:'2026-10-12T21:00:00Z',periodStart:undefined,periodEnd:'2026-10-12'};
+ assert.equal(hasVerifiedShareRatio(stale),false);
+ assert(shareReviewHistoryDays(stale,stale.asOf)>550);
+ assert.equal(reviewShareSplits(stale,[],'2025-04-12','2026-10-12',yahoo),stale,'a 550-day response cannot cover the SEC observation');
+ const reviewed=reviewShareSplits(stale,[],'2024-12-15','2026-10-12',yahoo);
+ assert.equal(hasVerifiedShareRatio(reviewed),true);
+ assert(Math.abs(reviewed.dilution-.03)<1e-12);
+ assert.equal(hasVerifiedShareRatio({...reviewed,provenance:{...reviewed.provenance,dilution:p}}),false,'share and dilution lineage must agree');
+ assert.equal(hasVerifiedShareRatio({...reviewed,provenance:{...reviewed.provenance,shareCountRatio:{...reviewed.provenance.shareCountRatio,dependencies:[]}}}),false,'SEC and split-event dependencies are required');
+ assert.equal(shareReviewHistoryDays({...stale,provenance:{...stale.provenance,shareCountRatio:{...p,periodStart:'2020-12-31'}}},stale.asOf),550,'ancient intervals stay unresolved within bounded provider budget');
 });
 test('opportunity horizons clamp month ends and cover the requested 1/3/6/12-month periods',()=>{
  assert.deepEqual([1,3,6,12].map(months=>horizonDate('2026-01-31',months)),['2026-02-28','2026-04-30','2026-07-31','2027-01-31']);
@@ -506,9 +530,39 @@ test('investment thesis catalyst gate requires a reviewed material future event,
   assert.equal(gate({...review,catalysts:scoreCatalysts(catalystInput({events}))}),'UNKNOWN');
  }
  assert.equal(gate({...review,catalysts:{...scoreCatalysts(catalystInput()),proxy:true}}),'UNKNOWN','a supplied proxy trace cannot satisfy a reviewed thesis gate');
- const financed=evaluateOpportunity({...opportunitySnapshot,deathSpiral:'clean'},review);
+ const financingSource={...opportunityProvenance,source:'Reviewed financing risk',tag:'financing-risk-v2; clean'};
+ const financed=evaluateOpportunity({...opportunitySnapshot,deathSpiral:'clean',provenance:{...opportunitySnapshot.provenance,deathSpiral:financingSource}},review);
  assert.equal(financed.checks.find(check=>check.id==='thesis-financing').status,'PASS');
+ assert.equal(evaluateOpportunity({...opportunitySnapshot,deathSpiral:'clean'},review).checks.find(check=>check.id==='thesis-financing').status,'UNKNOWN','a financing label without current provenance is not a reviewed finding');
+ assert.equal(evaluateOpportunity({...opportunitySnapshot,deathSpiral:'clean',provenance:{...opportunitySnapshot.provenance,deathSpiral:{...financingSource,tag:'financing-risk-v2; severe'}}},review).checks.find(check=>check.id==='thesis-financing').status,'UNKNOWN','the saved level must agree with its dated financing review');
+ assert.equal(evaluateOpportunity({...opportunitySnapshot,deathSpiral:'clean',provenance:{...opportunitySnapshot.provenance,deathSpiral:{...financingSource,periodEnd:'2024-01-01'}}},review).checks.find(check=>check.id==='thesis-financing').status,'UNKNOWN');
+ assert.equal(evaluateOpportunity({...opportunitySnapshot,deathSpiral:'clean',sourceConflicts:['cash: 1 (frames) مقابل 2 (Company Facts) في 2026-06-30; same fiscal window/unit/scope; symmetric difference 50.000000% > 1%'],provenance:{...opportunitySnapshot.provenance,deathSpiral:financingSource}},review).checks.find(check=>check.id==='thesis-financing').status,'UNKNOWN');
  assert.equal(evaluateOpportunity({...opportunitySnapshot,deathSpiral:'unknown'},review).checks.find(check=>check.id==='thesis-financing').status,'UNKNOWN');
+});
+test('catalyst review rejects inflated, mismatched and unauditable traces while crediting only the strongest material event',()=>{
+ const scored=scoreCatalysts(catalystInput());
+ const factor=evidence=>evaluateOpportunity(opportunitySnapshot,{catalysts:evidence}).factors.find(item=>item.id==='catalysts');
+ for(const altered of [
+  {...scored,score:9.5},
+  {...scored,sources:[{...opportunityProvenance,url:'http://unverifiable.test/filing'}]},
+  {...scored,calculation:{...scored.calculation,inputs:scored.calculation.inputs.map(input=>input.name.endsWith(':impact')?{...input,value:4.99}:input)}},
+  {...scored,calculation:{...scored.calculation,inputs:scored.calculation.inputs.map(input=>input.name.endsWith(':certainty')?{...input,value:10}:input)}},
+ ]){assert.equal(factor(altered).score,0);assert.equal(factor(altered).coveragePct,0);assert.equal(factor(altered).confidence,'low');}
+ const binding={...catalystInput().events[0],expectedAt:'2027-02-01T00:00:00Z',impactAsPctTtmRevenue:{...catalystInput().events[0].impactAsPctTtmRevenue,value:5}};
+ const operational={...binding,id:'milestone-2',classification:'operational',expectedAt:'2026-10-10T00:00:00Z',impactAsPctTtmRevenue:{...binding.impactAsPctTtmRevenue,value:50}};
+ const mixed=scoreCatalysts(catalystInput({events:[binding,operational]}));
+ const eligible=mixed.eventScores.find(item=>item.id==='contract-1').score;
+ assert.ok(mixed.score>eligible);
+ const result=evaluateOpportunity(opportunitySnapshot,{catalysts:mixed});
+ assert.equal(result.factors.find(item=>item.id==='catalysts').score,eligible);
+ assert.equal(result.checks.find(item=>item.id==='thesis-catalyst').status,'PASS');
+});
+test('model input coverage reports actual observed component inputs separately from numeric and reviewed coverage',()=>{
+ const snapshot={...opportunitySnapshot,revenueGrowth:.2,provenance:{...opportunitySnapshot.provenance,revenueGrowth:opportunityProvenance}};
+ const result=evaluateOpportunity(snapshot),catalysts=result.factors.find(item=>item.id==='catalysts');
+ assert.equal(result.algorithmicCoveragePct,100);assert.equal(result.coveragePct,0);
+ assert.equal(catalysts.score,0);assert.equal(catalysts.modelInputCoveragePct,50);assert.equal(catalysts.coveragePct,0);
+ assert.equal(result.modelInputCoveragePct,Math.round(result.factors.reduce((sum,item)=>sum+item.modelInputCoveragePct*item.weight/100,0)*100)/100);
 });
 test('catalyst rubric distinguishes a documented empty search from missing search and handles nonbinding and priced events conservatively',()=>{
  assert.equal(scoreCatalysts(catalystInput({events:[]})).score,1);
@@ -652,7 +706,7 @@ test('recent SEC filing metadata is surfaced for catalyst research without creat
  const filing={providerStatus:'retrieved',items:[{form:'8-K',filed:'2026-09-20',accession:'0000000001-26-000001',title:'SEC filing: 8-K filed 2026-09-20',url:'https://www.sec.gov/Archives/edgar/data/1/000000000126000001/current.htm'}],source:opportunityProvenance,limitations:['Metadata only; review the filing body.']};
  const snapshot={...opportunitySnapshot,opportunityResearch:{secFilings:filing}},dossier=opportunityDossierFromSnapshot(snapshot),evaluation=evaluateOpportunityDossier(snapshot,dossier);
  assert.equal(dossier.catalysts,undefined);assert.match(dossier.researchNotes.catalysts,/discovery aid only/);
- const factor=evaluation.factors.find(item=>item.id==='catalysts');assert.equal(factor.score,0);assert.equal(factor.proxy,true);assert.match(factor.rationale,/(No catalyst score may be inferred|No dated growth or catalyst inputs are available)/);
+ const factor=evaluation.factors.find(item=>item.id==='catalysts');assert.equal(factor.score,0);assert.equal(factor.proxy,true);assert.match(factor.rationale,/(No catalyst score may be inferred|No dated growth or catalyst inputs are available|no catalyst points are awarded)/);
 });
 test('qualitative competitive and management factors require five sourced dimensions and expose analyst judgment',()=>{
  const competitiveIds=['product-differentiation','customer-evidence','switching-advantage','competitive-durability','substitution-risk'];const assessments=competitiveIds.map((id,index)=>({id,score:6+index%3,rationale:`Reviewed source-backed assessment: ${id}`,sources:[opportunityProvenance]}));
@@ -667,15 +721,15 @@ test('qualitative review leaves factors unscored for missing dimensions, stale e
  assert.equal(scoreQualitativeFactor('management',opportunityAsOf,[...assessments,assessments[0]]).score,null);
  assert.equal(scoreQualitativeFactor('management',opportunityAsOf,[{...assessments[0],sources:[{...opportunityProvenance,url:'http://bad'}]},...assessments.slice(1)]).score,null);
 });
-test('unified opportunity scores on the fixed denominator and ranks only with material evidence',()=>{
+test('unified opportunity retains fixed denominator while unsupported reviewed catalyst grades earn zero',()=>{
  const evaluation=evaluateOpportunity(opportunitySnapshot,opportunityEvidence());
- assert.equal(evaluation.state,'ranked');assert.equal(evaluation.rankingEligible,true);assert.equal(evaluation.score,100);assert.equal(evaluation.coveragePct,100);assert.equal(evaluation.evidencedWeight,100);
+ assert.equal(evaluation.state,'ranked');assert.equal(evaluation.rankingEligible,true);assert.equal(evaluation.score,80);assert.equal(evaluation.coveragePct,80);assert.equal(evaluation.evidencedWeight,80);
  const materialOnly=Object.fromEntries(['valuation','catalysts','financialStrength','earningsQuality','downsideRisk'].map(id=>[id,opportunityEvidence()[id]]));
  const partial=evaluateOpportunity(opportunitySnapshot,materialOnly);
- assert.equal(partial.researchState,'needs-research');assert.equal(partial.coveragePct,82);assert.equal(partial.score,82);assert.equal(partial.confidence,'low');
+ assert.equal(partial.researchState,'needs-research');assert.equal(partial.coveragePct,62);assert.equal(partial.score,62);assert.equal(partial.confidence,'low');
  const partialValuation=opportunityEvidence();partialValuation.valuation.coveragePct=40;
  const quantified=evaluateOpportunity(opportunitySnapshot,partialValuation);
- assert.equal(quantified.factors.find(factor=>factor.id==='valuation').points,10);assert.equal(quantified.coveragePct,85);assert.equal(quantified.score,85);assert.equal(quantified.sourceEligible,false);assert.equal(quantified.factors.find(factor=>factor.id==='valuation').complete,false);
+ assert.equal(quantified.factors.find(factor=>factor.id==='valuation').points,10);assert.equal(quantified.coveragePct,65);assert.equal(quantified.score,65);assert.equal(quantified.sourceEligible,false);assert.equal(quantified.factors.find(factor=>factor.id==='valuation').complete,false);
 });
 test('SEC operating research priorities use only issuer-linked dated facts and expose missing history',()=>{
  const annual=(year,revenue,income,cash,capex,rightsStatus='redistribution-permitted')=>{const end=`${year}-12-31`,source={source:'SEC Company Facts · annual fixture',url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0000000001.json',periodEnd:end,availableAt:`${Number(year)+1}-02-01T00:00:00Z`,retrievedAt:`${Number(year)+1}-02-02T00:00:00Z`,rightsStatus,confidence:'high'};const value=n=>({value:n,unit:'USD',source});return{start:`${year}-01-01`,end,metrics:{revenue:value(revenue),netIncome:value(income),operatingCashFlow:value(cash),capitalExpenditure:value(capex)}}};
@@ -726,7 +780,7 @@ test('a numeric factor score without a reproducible calculation trace earns no p
  assert.equal(valuation.evidenced,false);assert.equal(valuation.score,0);assert.equal(valuation.points,0);assert.equal(result.researchState,'needs-research');
 });
 test('overall confidence cannot be high if a ranked factor has no confidence assessment',()=>{
- const evidence=opportunityEvidence();delete evidence.valuation.confidence;
+ const evidence=opportunityEvidence();evidence.catalysts=scoreCatalysts(catalystInput());delete evidence.valuation.confidence;
  const result=evaluateOpportunity(opportunitySnapshot,evidence);
  assert.equal(result.state,'ranked');assert.equal(result.confidence,'medium');
 });
@@ -768,7 +822,7 @@ test('source registry covers every factor and distinguishes public FINRA short i
 });
 test('old Core profitability/EV-S and Bounce drawdown/MA30W conditions do not gate the unified category',()=>{
  const result=evaluateOpportunity({...opportunitySnapshot,revenue:0,evSales:99,netIncome:-1,fcf:-1,return12m:0,low52w:9,ma30w:20,dilution:1},opportunityEvidence());
- assert.equal(result.state,'ranked');assert.equal(result.score,100);
+ assert.equal(result.state,'ranked');assert.equal(result.score,80);
 });
 test('conflicts hold affected evidence for review without fabricating points',()=>{
  const evidence=opportunityEvidence();evidence.valuation.conflicts=['SEC and company IR value disagree'];
@@ -1199,7 +1253,9 @@ test('partial review grade is reduced once and its displayed grade exactly deter
 });
 
 test('missing qualitative review dimensions do not suppress observable business and alignment model grades',()=>{
- const snapshot={...opportunitySnapshot,grossMargin:.4,dilution:.02,splitAdjusted:true,provenance:{...opportunitySnapshot.provenance,grossMargin:opportunityProvenance,dilution:opportunityProvenance}};
+ const raw={...opportunityProvenance,source:'SEC reported share ratio; corporate actions unverified',url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0000000001.json',periodStart:'2025-06-30'};
+ const yahoo={...freshMarketEvidence,source:'Yahoo Finance chart API · split-adjusted daily history and split events',url:'https://query1.finance.yahoo.com/v8/finance/chart/SYNTH?events=div%2Csplits'};
+ const snapshot=reviewShareSplits({...opportunitySnapshot,grossMargin:.4,shareCountRatio:1.02,dilution:.02,splitAdjusted:false,provenance:{...opportunitySnapshot.provenance,grossMargin:opportunityProvenance,shareCountRatio:raw,dilution:raw}},[],'2025-06-01','2026-09-29',yahoo);
  const result=evaluateOpportunityDossier(snapshot,opportunityDossierFromSnapshot(snapshot));
  assert.ok(result.factors.find(factor=>factor.id==='competitivePosition').score>0);
  assert.ok(result.factors.find(factor=>factor.id==='management').score>0);
@@ -1235,7 +1291,7 @@ test('growth model derives comparable observed revenue growth with source values
  const asOf='2026-10-03T12:00:00Z';
  const period=(end,value)=>{const start=end.slice(0,4)+'-01-01';return {start,end,metrics:{revenue:{value,unit:'USD',source:{...opportunityProvenance,periodStart:start,periodEnd:end,availableAt:'2026-08-01T00:00:00Z',retrievedAt:asOf}}}};};
  const snapshot={symbol:'GROWTH',securityType:'common',name:'Observed growth fixture',asOf,provenance:{},opportunityResearch:{earnings:{annual:[period('2024-12-31',100),period('2025-12-31',140)],quarterly:[],conflicts:[]}}};
- const result=evaluateOpportunity(snapshot),factor=result.factors.find(item=>item.id==='catalysts');assert.ok(factor.score>0);assert.equal(factor.calculation.inputs.find(input=>input.name==='derived-observed-revenue-growth').value,140/100-1);
+ const result=evaluateOpportunity(snapshot),factor=result.factors.find(item=>item.id==='catalysts');assert.equal(factor.score,0);assert.equal(factor.modelInputCoveragePct,50);assert.equal(factor.calculation.inputs.find(input=>input.name==='derived-observed-revenue-growth').value,140/100-1);
  const conflicted={...snapshot,opportunityResearch:{earnings:{...snapshot.opportunityResearch.earnings,conflicts:['revenue concepts disagree']}}};assert.equal(evaluateOpportunity(conflicted).factors.find(item=>item.id==='catalysts').score,0);
  const mixed={...snapshot,opportunityResearch:{earnings:{...snapshot.opportunityResearch.earnings,annual:[period('2024-12-31',100),{metrics:{revenue:{...period('2025-12-31',140).metrics.revenue,unit:'EUR'}}}]}}};assert.equal(evaluateOpportunity(mixed).factors.find(item=>item.id==='catalysts').score,0);
 });

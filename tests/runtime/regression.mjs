@@ -6,12 +6,14 @@ import {visitor} from '../../.test-build/visitor.mjs';
 import {body as parseBody} from '../../.test-build/http.mjs';
 import {numeric,parseNews,fetchJson} from '../../.test-build/providers.mjs';
 import {reconcile} from '../../.test-build/reconcile.mjs';
-import {setHistoryResult,setOpportunityResearchResult,setUniverse,setBulkQuoteTransform,universeCalls,setIntradayResult,opportunityCalls,resetOpportunityCalls} from './providers.mjs';
+import {setHistoryResult,setOpportunityResearchResult,setUniverse,setBulkQuoteTransform,universeCalls,setIntradayResult,opportunityCalls,resetOpportunityCalls,historyRequests,setObservedCompanyDescription,HistoricalSessionsUnavailableError} from './providers.mjs';
 import {evaluateStrategy} from '../../.test-build/engine.mjs';
 import {proxyOpportunityEvidence} from '../../.test-build/opportunity-proxies.mjs';
 import {fixtures} from '../../.test-build/fixtures.mjs';
 import {ensureSchema,db,currentHash,readState,insertSnapshot,invalidateStateCache,readResearchConflictCount,migrateCompatibleAcquisitionRuns} from '../../.test-build/storage.mjs';
 import {processScanBatch,startScan,historyCandidate,preliminaryCandidates} from '../../.test-build/scanner.mjs';
+import {decodeHistoryCache} from '../../.test-build/history-cache.mjs';
+import {hasVerifiedShareRatio} from '../../.test-build/research.mjs';
 import {GET,POST} from '../../.test-build/radar-api.mjs';
 import {GET as recoverGET} from '../../.test-build/recover-api.mjs';
 import {GET as reportGET} from '../../.test-build/scan-report-api.mjs';
@@ -23,6 +25,7 @@ import {scheduledScanTick} from '../../.test-build/scheduled-scan.mjs';
 import {archivedWriteStatements,restoreArchivedRow} from '../../.test-build/snapshot-archive.mjs';
 import {GET as favoriteQuotesGET} from '../../.test-build/favorite-quotes-api.mjs';
 import {GET as chartGET} from '../../.test-build/chart-api.mjs';
+import {createEphemeralCache} from '../../.test-build/ephemeral-cache.mjs';
 import worker from '../../.test-build/worker.mjs';
 import {validPushSubscription} from '../../.test-build/push-validation.mjs';
 import {createECDH,randomBytes} from 'node:crypto';
@@ -246,15 +249,30 @@ test('newest finished full universe remains canonical despite partial provider c
  const created=new Date(Date.now()+86400000).toISOString(),id='partial-test';
  await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe_total,stage,strategy_hash) VALUES(?,?,?,'partial','Bulk Quotes/SEC Frames · full',2,2,13,?)").bind(id,created,created,currentHash()).run();
  try{
+  const description='شركة اختبار تقدم خدمات دفع محلية لعملاء تجاريين.';
+  setObservedCompanyDescription({description,source:{source:'Nasdaq company profile fixture',url:'https://api.nasdaq.com/api/company/PARTIAL-A/company-profile',periodEnd:created.slice(0,10),availableAt:created,retrievedAt:created,confidence:'medium'}});
   await insertSnapshot(id,{...base,symbol:'PARTIAL-A'}).run();await insertSnapshot(id,{symbol:'PARTIAL-Z',name:'Missing provider data',asOf:base.asOf,securityType:'unknown',provenance:{}}).run();
   invalidateStateCache();const current=await readState({limit:10});assert.equal(current.dataRunId,id);assert.equal(current.summary.opportunityRanked,2);assert.equal(current.summary.missingFinalGrades,0);
   const report=await(await reportGET(new Request('https://radar.test/api/scan-report?runId='+id))).json();assert.equal(report.counts.passed,2);
   for(const [index,snapshot]of current.snapshots.entries()){
    const expected=current.storedEvaluations[index].opportunity;
-   const company=await(await companyGET(new Request('https://radar.test/api/company?symbol='+snapshot.symbol))).json();assert.deepEqual(company.evaluation,expected);assert.equal(company.ranking.runId,id);assert.equal(company.ranking.position,current.rankPositions[index]);
+   const company=await(await companyGET(new Request('https://radar.test/api/company?symbol='+snapshot.symbol))).json();assert.deepEqual(company.evaluation,expected);assert.equal(company.ranking.runId,id);assert.equal(company.ranking.position,current.rankPositions[index]);assert.equal(company.profileDescription.description,description);assert.equal(company.snapshot.description,snapshot.description,'current profile prose never mutates the archived rating snapshot');
    const row=report.rows.find(row=>row.symbol===snapshot.symbol);assert.deepEqual(row.evaluation,expected);assert.equal(row.rank,current.rankPositions[index]);
   }
- }finally{await db().prepare('DELETE FROM fundamental_snapshots WHERE run_id=?').bind(id).run();await db().prepare('DELETE FROM strategy_runs WHERE id=?').bind(id).run();invalidateStateCache();}
+  const prior=new Date(Date.now()-4*86_400_000).toISOString().slice(0,10),last=new Date(Date.now()-3*86_400_000).toISOString().slice(0,10);
+  const savedBefore=await db().prepare('SELECT payload,evaluation FROM fundamental_snapshots WHERE run_id=? AND symbol=?').bind(id,'PARTIAL-A').first();
+  setHistoryResult({history:[{date:prior,close:20},{date:last,close:22}],splits:[],source:'TEST_CHART_HISTORY',url:'https://example.test/chart-history',retrievedAt:new Date().toISOString(),availableAt:`${last}T21:00:00Z`});
+  try{
+   const chart=await(await companyGET(new Request('https://radar.test/api/company?symbol=PARTIAL-A&includeHistory=1'))).json();
+   assert.equal(chart.snapshot.asOf,current.snapshots.find(row=>row.symbol==='PARTIAL-A').asOf);
+   assert.deepEqual(chart.evaluation,current.storedEvaluations[current.snapshots.findIndex(row=>row.symbol==='PARTIAL-A')].opportunity);
+   assert.deepEqual(chart.snapshot.history.map(row=>row.date),[prior,last]);
+   assert.equal(chart.snapshot.provenance.history.periodEnd,last);
+   assert.equal(chart.chartHistory.source,'TEST_CHART_HISTORY');assert.equal(chart.chartHistory.stale,false);
+   const savedAfter=await db().prepare('SELECT payload,evaluation FROM fundamental_snapshots WHERE run_id=? AND symbol=?').bind(id,'PARTIAL-A').first();
+   assert.deepEqual(savedAfter,savedBefore,'display chart fetch must not mutate saved rating or snapshot');
+  }finally{setHistoryResult(null);}
+ }finally{setObservedCompanyDescription(null);await db().prepare('DELETE FROM fundamental_snapshots WHERE run_id=?').bind(id).run();await db().prepare('DELETE FROM strategy_runs WHERE id=?').bind(id).run();invalidateStateCache();}
 });
 test('API personal favorites start at zero, writes are idempotent and isolated',async()=>{
  await db().prepare("INSERT INTO watchlist(symbol,created_at) VALUES('OLD_SHARED','2026-01-01')").run();
@@ -279,10 +297,24 @@ test('radar cards reuse the canonical completed-session value from a refreshed p
  await db().prepare('INSERT INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind('deep:v11:CANONICAL','test',now,JSON.stringify(deep)).run();
  const result=await readState({strategy:'favorites',owner});assert.equal(result.snapshots[0].price,12);assert.equal(result.snapshots[0].dailyChange,.25);assert.match(result.snapshots[0].provenance.dailyChange.tag,/completed close/);assert.equal(Object.hasOwn(result.snapshots[0],'__cacheKey'),false);
 });
-test('favorite quote refresh returns the cached completed-session pair used by profile cards',async()=>{
- const now=new Date().toISOString(),quote={symbol:'FAVQUOTE',price:22,dailyChange:.1,periodEnd:'2026-09-28',provenance:{price:{source:'test',periodEnd:'2026-09-28',tag:'last completed session close'},dailyChange:{source:'test',periodEnd:'2026-09-28',tag:'last completed close / previous completed close - 1'}}};
- await db().prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind('favorite-quote:v1:FAVQUOTE','test',now,JSON.stringify(quote)).run();
- const response=await favoriteQuotesGET(new Request('https://radar.test/api/favorite-quotes?symbols=FAVQUOTE'));assert.equal(response.status,200);const payload=await response.json();assert.equal(payload.quotes.FAVQUOTE.price,22);assert.equal(payload.quotes.FAVQUOTE.dailyChange,.1);assert.equal(payload.errors.length,0);
+test('display-only quote refresh coalesces reads and does not write to the database',async()=>{
+ setHistoryResult({history:[{date:'2026-09-24',close:20},{date:'2026-09-25',close:22}],source:'TEST_ONLY',url:'https://example.test/history',retrievedAt:new Date().toISOString()});
+ try{
+  const request=new Request('https://radar.test/api/favorite-quotes?symbols=FAVQUOTE');
+  const first=await favoriteQuotesGET(request);assert.equal(first.status,200);const payload=await first.json();assert.equal(payload.quotes.FAVQUOTE.price,22);assert(Math.abs(payload.quotes.FAVQUOTE.dailyChange-.1)<1e-12);assert.equal(payload.errors.length,0);
+  assert.equal(await db().prepare("SELECT key FROM raw_cache WHERE key='favorite-quote:v1:FAVQUOTE'").first(),null);
+  setHistoryResult(null);
+  const second=await favoriteQuotesGET(request);assert.equal(second.status,200);assert.equal((await second.json()).quotes.FAVQUOTE.price,22);
+ }finally{setHistoryResult(null)}
+});
+test('display cache shares pending work, expires and evicts old entries',async()=>{
+ let clock=0,calls=0;const cache=createEphemeralCache(10,2,()=>clock);
+ const load=()=>{calls++;return Promise.resolve(calls)};
+ assert.deepEqual(await Promise.all([cache.get('A',load),cache.get('A',load)]),[1,1]);assert.equal(calls,1);
+ await cache.get('B',load);await cache.get('C',load);assert.equal(cache.has('A'),false);
+ assert.equal(await cache.get('A',load),4);clock=11;assert.equal(cache.has('A'),false);assert.equal(await cache.get('A',load),5);
+ await assert.rejects(cache.get('FAIL',()=>Promise.reject(Error('outage'))));
+ assert.equal(cache.has('FAIL'),false);
 });
 test('portfolio API persists isolated trades, validates balances and supports update/delete',async()=>{
  const initial=await portfolioGET(new Request('https://radar.test/api/portfolio'));assert.equal(initial.status,200);const cookie=initial.headers.get('set-cookie').split(';')[0];assert.deepEqual((await initial.json()).transactions,[]);
@@ -308,6 +340,20 @@ test('portfolio history endpoint persists owner scope and returns sourced aggreg
  try{
   const response=await portfolioHistoryGET(new Request('https://radar.test/api/portfolio-history',{headers:{cookie}}));assert.equal(response.status,200);const payload=await response.json();assert(payload.points.length>=2);assert.equal(payload.points.find(point=>point.date==='2026-01-02').returnPct,.2);assert.equal(payload.sources[0].source,'TEST_HISTORY');
   const stranger=await portfolioHistoryGET(new Request('https://radar.test/api/portfolio-history'));assert.deepEqual((await stranger.json()).points,[]);
+ }finally{setHistoryResult(null);}
+});
+test('portfolio history reports a partial range from actual bars and keeps the saved fallback dated',async()=>{
+ const initial=await portfolioGET(new Request('https://radar.test/api/portfolio')),cookie=initial.headers.get('set-cookie').split(';')[0];
+ const saved=await portfolioPOST(new Request('https://radar.test/api/portfolio',{method:'POST',headers:{origin:'https://radar.test',cookie,'content-type':'application/json'},body:JSON.stringify({symbol:'TEST',side:'buy',quantity:2,price:10,fees:0,tradeDate:'2025-12-20',note:''})}));assert.equal(saved.status,200);
+ const before=await db().prepare("SELECT COUNT(*) AS n FROM raw_cache WHERE key='portfolio-history:v1:TEST'").first();
+ setHistoryResult({history:[{date:'2026-01-01',close:10},{date:'2026-01-02',close:12}],splits:[],source:'TEST_PARTIAL_HISTORY',url:'https://example.test/history',availableAt:'2026-01-02T21:00:00Z',retrievedAt:new Date().toISOString()});
+ try{
+  const response=await portfolioHistoryGET(new Request('https://radar.test/api/portfolio-history',{headers:{cookie}}));assert.equal(response.status,200);
+  const payload=await response.json();assert.deepEqual(payload.incompleteSymbols,['TEST']);assert.equal(payload.sources[0].source,'TEST_PARTIAL_HISTORY');
+  assert.equal((await db().prepare("SELECT COUNT(*) AS n FROM raw_cache WHERE key='portfolio-history:v1:TEST'").first()).n,before.n);
+  setHistoryResult(Error('Injected history outage'));
+  const fallback=await portfolioHistoryGET(new Request('https://radar.test/api/portfolio-history',{headers:{cookie}}));assert.equal(fallback.status,200);
+  const dated=await fallback.json();assert.deepEqual(dated.incompleteSymbols,['TEST']);assert.deepEqual(dated.staleSymbols,['TEST']);
  }finally{setHistoryResult(null);}
 });
 test('portfolio logo endpoint rejects malformed symbols before any provider call',async()=>{
@@ -365,6 +411,7 @@ test('intraday chart API validates symbols, returns JSON and reuses its short ca
  assert.equal((await chartGET(new Request('https://radar.test/api/chart?symbol=BAD!'))).status,400);
  assert.equal((await chartGET(new Request('https://radar.test/api/chart?symbol=NONE'))).status,404);
  const first=await chartGET(new Request('https://radar.test/api/chart?symbol=TEST'));assert.equal(first.status,200);assert.equal((await first.json()).points.length,2);
+ assert.equal(await db().prepare("SELECT key FROM raw_cache WHERE key='chart:v1:TEST:1D'").first(),null);
  setIntradayResult(Error('provider should not be called while cached'));
  try{const cached=await chartGET(new Request('https://radar.test/api/chart?symbol=TEST'));const payload=await cached.json();assert.equal(cached.status,200);assert.equal(payload.cached,true);}finally{setIntradayResult({points:[{t:1,c:10},{t:2,c:11}],baseline:9,changePct:2/9,baselineLabel:'TEST',source:'TEST_ONLY',availableAt:'2026-09-08T00:00:00Z'});}
 });
@@ -394,17 +441,38 @@ test('full history stage can qualify marketable candidates while unverified fact
  for(let days=550;days>=1;days--){const day=date(days);const weekday=new Date(day).getUTCDay();if(weekday===0||weekday===6)continue;const close=days>250?26:days<5?12:8;history.push({date:day,close,open:close,high:close,low:close,volume:100000});}
  const latest=history.at(-1).date;
  const p={...base.provenance.price,availableAt:now,retrievedAt:now,periodEnd:latest};
- const shares={...p,periodStart:date(400),periodEnd:date(30)};
+ const shares={...p,source:'SEC reported share ratio; corporate actions unverified',url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0000000001.json',periodStart:date(400),periodEnd:date(30)};
  const snapshot={...base,symbol:'REBOUND',asOf:now,marketCap:100e6,price:12,return12m:-.5,low52w:8,ma30w:null,medianDollarVolume20d:null,splitAdjusted:false,shareCountRatio:1.05,dilution:.05,deathSpiral:'unknown',riskEvidence:undefined,provenance:{...base.provenance,price:p,marketCap:p,dilution:shares,shareCountRatio:shares}};
  await db().prepare('INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,strategy_hash) VALUES(?,?,?,?,?,?,?,?,?)').bind('rebound-evidence',now,now,'running','Bulk Quotes/SEC Frames v9 · full',1,JSON.stringify([{ticker:'REBOUND'}]),10,currentHash()).run();
  await insertSnapshot('rebound-evidence',snapshot).run();
- setHistoryResult({history,splits:[],source:'SYNTHETIC TEST ONLY',url:'https://example.test/splits',retrievedAt:now,availableAt:now});
+ setHistoryResult({history,splits:[],source:'Yahoo Finance chart API · split-adjusted daily history and split events',url:'https://query1.finance.yahoo.com/v8/finance/chart/REBOUND?events=div%2Csplits',retrievedAt:now,availableAt:now});
  try{
   const transition=await processScanBatch('rebound-evidence');assert.equal(transition.done,false);assert.equal(transition.run.stage,11);
   const result=await processScanBatch('rebound-evidence');assert.equal(result.done,true);
   const stored=sqlite.prepare("SELECT payload,evaluation FROM fundamental_snapshots WHERE run_id='rebound-evidence'").get();
   const e=JSON.parse(stored.evaluation);assert.equal(e.opportunity.researchState,'needs-research');assert(e.opportunity.factors.some(factor=>!factor.evidenced));
   assert.equal(JSON.parse(stored.payload).splitAdjusted,true);assert.equal(JSON.parse(stored.payload).history,undefined);
+ }finally{setHistoryResult(null);}
+});
+
+test('history stage extends only the needed share interval and caches recent bars with full split coverage',async()=>{
+ const now=new Date().toISOString(),date=days=>new Date(Date.parse(now)-days*864e5).toISOString().slice(0,10);
+ const history=[];
+ for(let days=710;days>=1;days--){const day=date(days),weekday=new Date(day).getUTCDay();if(weekday>0&&weekday<6)history.push({date:day,close:10,volume:100000});}
+ const raw={source:'SEC reported share ratio; corporate actions unverified',url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0001846832.json',periodStart:date(650),periodEnd:date(280),availableAt:now,retrievedAt:now,currency:'USD',confidence:'low'};
+ const snapshot={...base,symbol:'LONG-SHARES',cik:1846832,asOf:now,marketCap:100e6,price:10,splitAdjusted:true,shareCountRatio:1.03,dilution:.03,provenance:{...base.provenance,dilution:raw,shareCountRatio:raw}};
+ const company={ticker:snapshot.symbol,cik:snapshot.cik};
+ await db().prepare('INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,strategy_hash) VALUES(?,?,?,?,?,?,?,?,?)').bind('long-share-interval',now,now,'running','Bulk Quotes/SEC Frames · full',1,JSON.stringify([company]),10,currentHash()).run();
+ await insertSnapshot('long-share-interval',snapshot).run();
+ const before=historyRequests.length;
+ setHistoryResult({history,splits:[],source:'Yahoo Finance chart API · split-adjusted daily history and split events',url:'https://query1.finance.yahoo.com/v8/finance/chart/LONG-SHARES?events=div%2Csplits',retrievedAt:now,availableAt:now});
+ try{
+  const transition=await processScanBatch('long-share-interval');assert.equal(transition.run.stage,11);
+  const requested=historyRequests.slice(before).find(([symbol])=>symbol==='LONG-SHARES');assert(requested);assert(requested[2]>=664&&requested[2]<=1100);
+  const row=await db().prepare("SELECT payload FROM fundamental_snapshots WHERE run_id='long-share-interval' AND symbol='LONG-SHARES'").first();
+  assert.equal(hasVerifiedShareRatio(JSON.parse(row.payload)),true);
+  const cache=await db().prepare('SELECT payload FROM raw_cache WHERE key=?').bind(`scan-history:v3:LONG-SHARES:${now.slice(0,10)}`).first();
+  const saved=await decodeHistoryCache(cache.payload);assert.equal(saved.splitReviewCoverageStart,history[0].date);assert(saved.history.length<history.length);assert(saved.history.every(bar=>Date.parse(bar.date)>=Date.parse(now)-550*864e5));
  }finally{setHistoryResult(null);}
 });
 
@@ -417,6 +485,35 @@ test('history retries recover without double-counting failures or retaining stal
   const transition=await processScanBatch('outage');assert.equal(transition.run.stage,11);assert.equal(transition.done,false);
   const r=await processScanBatch('outage');assert.equal(r.done,true);assert.equal(r.run.failed,0);assert.equal(r.run.status,'complete');assert.equal(r.run.error,null);
   const row=await db().prepare("SELECT payload,evaluation FROM fundamental_snapshots WHERE id='outage:OUTAGE'").first();assert(!row.payload.includes('Injected provider outage'));assert.equal(JSON.parse(row.evaluation).opportunity.researchState,'needs-research');
+ }finally{setHistoryResult(null);}
+});
+test('same-day empty history cache is refetched and cannot count as successful acquisition',async()=>{
+ const now=new Date().toISOString(),company={ticker:'CACHE-BAD',cik:0};
+ await db().prepare('INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,strategy_hash) VALUES(?,?,?,?,?,?,?,?,?)').bind('bad-history-cache',now,now,'running','Bulk Quotes/SEC Frames · full',1,JSON.stringify([company]),10,currentHash()).run();
+ await insertSnapshot('bad-history-cache',{...base,symbol:company.ticker,cik:0,asOf:now,price:10,provenance:{...base.provenance}}).run();
+ const key=`scan-history:v3:${company.ticker}:${now.slice(0,10)}`;
+ await db().prepare('INSERT INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(key,'corrupt test cache',now,JSON.stringify({history:[],source:'TEST_ONLY',url:'https://example.test',retrievedAt:now,availableAt:now})).run();
+ const before=historyRequests.length;
+ setHistoryResult({history:[{date:now.slice(0,10),close:11,volume:100}],splits:[],source:'TEST_ONLY',url:'https://example.test',retrievedAt:now,availableAt:now});
+ try{
+  const result=await processScanBatch('bad-history-cache');
+  assert.equal(result.run.stage,11);assert.equal(result.run.failed,0);
+  assert(historyRequests.slice(before).some(([symbol])=>symbol===company.ticker));
+  const stored=await decodeHistoryCache((await db().prepare('SELECT payload FROM raw_cache WHERE key=?').bind(key).first()).payload);
+  assert.equal(stored.history.length,1);
+ }finally{setHistoryResult(null);}
+});
+test('terminal no-session instruments retain missing coverage without repeated history retries',async()=>{
+ const now=new Date().toISOString(),company={ticker:'NO-SESSIONS',cik:0};
+ await db().prepare('INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,strategy_hash) VALUES(?,?,?,?,?,?,?,?,?)').bind('terminal-history',now,now,'running','Bulk Quotes/SEC Frames · full',1,JSON.stringify([company]),10,currentHash()).run();
+ await insertSnapshot('terminal-history',{...base,symbol:company.ticker,cik:0,asOf:now,price:10,provenance:{...base.provenance}}).run();
+ setHistoryResult(new HistoricalSessionsUnavailableError(company.ticker));
+ try{
+  const before=historyRequests.length,result=await processScanBatch('terminal-history');
+  assert.equal(result.run.stage,11);assert.equal(result.run.failed,1);assert.equal(result.run.retryPending,0);
+  assert.equal(historyRequests.slice(before).filter(([symbol])=>symbol===company.ticker).length,1);
+  const stored=(await db().prepare("SELECT payload FROM fundamental_snapshots WHERE run_id='terminal-history'").first()).payload;
+  assert.match(stored,/no historical sessions returned/);
  }finally{setHistoryResult(null);}
 });
 test('history completion queues all CIK-linked common stocks for SEC research and recovered SEC retries complete cleanly',async()=>{
@@ -606,6 +703,50 @@ test('unified opportunity pages keep incomplete companies in research and never 
  assert.deepEqual(all.rankPositions,[1,2,3,4,5,6,7]);
 });
 
+test('research-fit pages retain canonical scores and ranks while requiring current operating evidence',async()=>{
+ const runId='research-fit-pages',asOf='2026-10-10T20:00:00.000Z',marketDay='2026-10-09';
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES(?,?,?,'complete','Research fit · full',8,8,13,?)").bind(runId,'2100-01-01','2100-01-01',currentHash()).run();
+ const market={source:'Market fixture with unresolved reuse rights',url:'https://example.com/market',periodEnd:marketDay,availableAt:'2026-10-09T21:00:00.000Z',retrievedAt:'2026-10-10T18:00:00.000Z',rightsStatus:'unknown',confidence:'high',currency:'USD'};
+ const official={source:'Official listing fixture',url:'https://www.nasdaqtrader.com/symbol-directory',periodEnd:marketDay,availableAt:'2026-10-09T21:00:00.000Z',retrievedAt:'2026-10-10T18:00:00.000Z',rightsStatus:'public-domain',confidence:'high'};
+ const sec={source:'SEC Company Facts fixture',url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0000000001.json',periodStart:'2025-01-01',periodEnd:'2025-12-31',availableAt:'2026-02-01T00:00:00.000Z',retrievedAt:'2026-10-10T18:00:00.000Z',rightsStatus:'redistribution-permitted',confidence:'high',currency:'USD',scope:'consolidated'};
+ const balance={...sec,periodStart:undefined};
+ const annualMetric=value=>({value,unit:'USD',source:sec});
+ const researched={earnings:{providerStatus:'retrieved',coverage:{annualPeriodsFound:1,quarterlyPeriodsFound:0,selectedUnit:'USD'},annual:[{start:'2025-01-01',end:'2025-12-31',metrics:{revenue:annualMetric(100_000_000)}}],quarterly:[],missing:[],conflicts:[],limitations:[],readyForScoring:false},financialStrength:{providerStatus:'retrieved',industryModel:'industrial-operating-company',metrics:{},missing:[],conflicts:[],limitations:[],readyForScoring:false}};
+ const make=(symbol,overrides={})=>({...base,symbol,asOf,cik:1,listingStatus:'current',securityType:'common',exchange:'Nasdaq',price:10,marketCap:100_000_000,medianDollarVolume20d:250_000,revenue:100_000_000,netIncome:10_000_000,fcf:12_000_000,cash:30_000_000,debt:1_000_000,ps:1,evSales:1,dilution:0,splitAdjusted:true,opportunityResearch:researched,provenance:{...base.provenance,securityType:official,exchange:official,price:market,marketCap:market,medianDollarVolume20d:market,revenue:sec,netIncome:sec,fcf:sec,cash:balance,debt:balance,ps:market,evSales:market,dilution:market},...overrides});
+ const wrongIssuerResearch=structuredClone(researched);
+ wrongIssuerResearch.earnings.annual[0].metrics.revenue.source.url='https://data.sec.gov/api/xbrl/companyfacts/CIK0000000002.json';
+ const cases=[make('FIT-A'),make('FIT-MICRO',{marketCap:5_000_000}),make('FIT-B',{marketCap:4_500_000_000}),make('FIT-MEGA',{marketCap:5_000_000_001}),make('FIT-WARRANT',{securityType:'warrant'}),make('FIT-RISK',{debt:300_000_000}),make('FIT-LIQUIDITY',{medianDollarVolume20d:100_000}),make('FIT-ISSUER',{opportunityResearch:wrongIssuerResearch})];
+ for(const snapshot of cases)await insertSnapshot(runId,snapshot).run();
+ invalidateStateCache();
+ const full=await readState({runId,limit:20});
+ const fullBySymbol=new Map(full.snapshots.map((row,index)=>[row.symbol,{rank:full.rankPositions[index],score:full.storedEvaluations[index].opportunity.score}]));
+ const firstResponse=await GET(new Request('https://radar.test/api/radar?fit=research&limit=1'));
+ assert.equal(firstResponse.status,200);const first=await firstResponse.json();
+ assert.equal(first.page.hasMore,true);assert.equal(first.snapshots.length,1);
+ assert.equal(first.storedEvaluations[0].opportunity.checks.find(check=>check.id==='market-cap').status,'UNKNOWN','a provisional research result must retain the unresolved market-rights badge');
+ const pin=`runId=${encodeURIComponent(first.release.runId)}&release=${encodeURIComponent(first.release.token)}`;
+ const secondResponse=await GET(new Request(`https://radar.test/api/radar?fit=research&limit=1&offset=1&${pin}`));
+ assert.equal(secondResponse.status,200);const second=await secondResponse.json();
+ const third=await (await GET(new Request(`https://radar.test/api/radar?fit=research&limit=1&offset=2&${pin}`))).json();
+ const rows=[...first.snapshots,...second.snapshots,...third.snapshots];
+ assert.deepEqual(new Set(rows.map(row=>row.symbol)),new Set(['FIT-A','FIT-B','FIT-MICRO']));
+ assert.equal(third.page.hasMore,false);
+ for(const page of [first,second,third]){
+  assert.equal(page.summary.total,8);
+  const symbol=page.snapshots[0].symbol,original=fullBySymbol.get(symbol);
+  assert.equal(page.rankPositions[0],original.rank);
+  assert.equal(page.storedEvaluations[0].opportunity.score,original.score);
+  assert.equal(page.release.token,full.release.token);
+ }
+ const searched=await (await GET(new Request(`https://radar.test/api/radar?fit=research&q=FIT-MICRO&${pin}`))).json();
+ assert.deepEqual(searched.snapshots.map(row=>row.symbol),['FIT-MICRO']);
+ assert.equal(searched.rankPositions[0],fullBySymbol.get('FIT-MICRO').rank);
+ await db().prepare('DELETE FROM fundamental_snapshots WHERE run_id=?').bind(runId).run();
+ await db().prepare('DELETE FROM opportunity_rankings WHERE run_id=?').bind(runId).run();
+ await db().prepare('DELETE FROM opportunity_rank_versions WHERE run_id=?').bind(runId).run();
+ await db().prepare('DELETE FROM strategy_runs WHERE id=?').bind(runId).run();invalidateStateCache();
+});
+
 
 test('radar preserves canonical scored quotes when a deep cache is newer',async()=>{
  const now='2101-01-01T00:00:00.000Z',symbols=Array.from({length:20},(_,index)=>`PAGE${index}`);
@@ -630,12 +771,14 @@ test('latest scan report uses the same recomputed factor coverage as opportunity
  invalidateStateCache();
  const response=await reportGET(new Request('https://radar.test/api/scan-report?runId=report-current&strategy=opportunity'));
  assert.equal(response.status,200);const payload=await response.json();
- assert.equal(payload.run.id,'report-current');assert.equal(payload.counts.total,1);assert.equal(payload.counts.withEvidence,1);
+ assert.equal(payload.run.id,'report-current');assert.equal(payload.counts.total,1);assert.equal(payload.counts.withEvidence,0);
  assert.equal(payload.rows[0].symbol,'REPORT-CURRENT');assert.equal(payload.blockers.filter(blocker=>!blocker.id.startsWith('eligibility-')&&!blocker.id.startsWith('evidence-')).length,8);
  const eligibility=payload.blockers.filter(blocker=>blocker.id.startsWith('eligibility-'));
  assert.equal(eligibility.length,payload.rows[0].evaluation.checks.filter(check=>check.role==='eligibility'&&check.status!=='PASS').length);assert(eligibility.every(blocker=>blocker.count===1&&blocker.status==='UNKNOWN'));
  for(const factor of payload.rows[0].evaluation.factors)assert.equal(payload.blockers.find(blocker=>blocker.id===factor.id)?.count,factor.complete?0:1);
- assert.equal(payload.rows[0].evaluation.factors[0].evidenced,true);assert.equal(payload.rows[0].evaluation.factors[0].complete,false);
+ assert.equal(payload.rows[0].evaluation.factors[0].evidenced,false);assert.equal(payload.rows[0].evaluation.factors[0].complete,false);
+ assert.equal(payload.rows[0].evaluation.coveragePct,0);
+ assert(payload.rows[0].evaluation.modelInputCoveragePct>=0&&payload.rows[0].evaluation.modelInputCoveragePct<=100);
 });
 
 test('all listings retain canonical saved grades, full-universe ranks, reports and profiles across reloads',async()=>{
@@ -772,6 +915,15 @@ test('production scheduler requires native capacity and never queries prohibited
  assert.throws(()=>db().prepare('PRAGMA freelist_count'),/not authorized/);
  const missing=await worker.fetch(new Request('https://radar.test/__radar-scheduled',{method:'POST',headers:{'X-Radar-Background':'capacity-secret'}}),{BACKGROUND_SCAN_SECRET:'capacity-secret',RAILWAY_VOLUME_MOUNT_PATH:'/app/data'},{waitUntil:()=>{}});assert.equal(missing.status,503);
  const malformed=await worker.fetch(new Request('https://radar.test/__radar-scheduled',{method:'POST',headers:{'X-Radar-Background':'capacity-secret','X-Radar-Reusable-Bytes':'-1','X-Radar-Filesystem-Free-Bytes':'Infinity'}}),{BACKGROUND_SCAN_SECRET:'capacity-secret',RAILWAY_VOLUME_MOUNT_PATH:'/app/data'},{waitUntil:()=>{}});assert.equal(malformed.status,503);
+});
+
+test('low physical storage pauses the scheduler before archive maintenance writes',async()=>{
+ const originalPrepare=runtimeEnv.DB.prepare;let archiveQueries=0;
+ runtimeEnv.DB.prepare=sql=>{if(String(sql).includes('snapshot_archives'))archiveQueries++;return originalPrepare(sql)};
+ try{
+  const result=await scheduledScanTick(Date.now(),{reusableBytes:2*1024**3,filesystemFreeBytes:128*1024**2});
+  assert.equal(result.pausedForCapacity,true);assert.equal(archiveQueries,0);
+ }finally{runtimeEnv.DB.prepare=originalPrepare;}
 });
 
 
@@ -914,17 +1066,72 @@ test('stable-identity migration retains active v14 acquisition progress and date
 
 
 test('low or stale filesystem capacity pauses active scans and batons without changing source checkpoints',async()=>{
- const {recordScanCapacity}=await import('../../.test-build/scan-capacity.mjs');const id='capacity-paused-active',now=Date.now();
+ const {recordScanCapacity}=await import('../../.test-build/scan-capacity.mjs');const id=crypto.randomUUID(),now=Date.now();
  await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,offset,strategy_hash,retry_queue) VALUES(?,?,?,'running','Bulk Quotes/SEC Frames + Opportunity SEC v14 · full',7506,5,1104,?,'[]')").bind(id,new Date(now).toISOString(),new Date(now).toISOString(),currentHash()).run();
  const before=await db().prepare('SELECT * FROM strategy_runs WHERE id=?').bind(id).first();runtimeEnv.RAILWAY_VOLUME_MOUNT_PATH='/synthetic';
  try{
   await recordScanCapacity({reusableBytes:2*1024**3,filesystemFreeBytes:128*1024**2},now);
   const result=await processScanBatch(id);assert.equal(result.pausedForCapacity,true);assert.equal(result.done,false);assert.deepEqual(await db().prepare('SELECT * FROM strategy_runs WHERE id=?').bind(id).first(),before);
+  const pending=[];const originalFetch=globalThis.fetch;let forwarded=0;
+  globalThis.fetch=async()=>{forwarded++;throw Error('A paused scan must not schedule another baton');};
+  try{
+   const response=await worker.fetch(new Request('https://radar.test/__radar-background',{method:'POST',headers:{'X-Radar-Background':'capacity-secret','Content-Type':'application/json'},body:JSON.stringify({runId:id})}),{BACKGROUND_SCAN_SECRET:'capacity-secret',RAILWAY_VOLUME_MOUNT_PATH:'/app/data'},{waitUntil:promise=>pending.push(promise)});
+   assert.equal(response.status,202);await Promise.all(pending);assert.equal(forwarded,0);
+   assert.equal((await db().prepare('SELECT COUNT(*) AS n FROM diag WHERE run_id=? AND stage=?').bind(id,'background').first()).n,0);
+  }finally{globalThis.fetch=originalFetch;}
   await recordScanCapacity({reusableBytes:2*1024**3,filesystemFreeBytes:1024**3},now-6*60_000);assert.equal((await processScanBatch(id)).pausedForCapacity,true);
   await recordScanCapacity({reusableBytes:2*1024**3,filesystemFreeBytes:1024**3},now);const {scanCapacityPaused}=await import('../../.test-build/scan-capacity.mjs');assert.equal(await scanCapacityPaused(now),false);
+  await db().prepare('UPDATE strategy_runs SET lease_until=? WHERE id=?').bind(now+60_000,id).run();
+  const nativePending=[];const nativeResponse=await worker.fetch(new Request('https://radar.test/__radar-background',{method:'POST',headers:{'X-Radar-Background':'capacity-secret','Content-Type':'application/json'},body:JSON.stringify({runId:id})}),{BACKGROUND_SCAN_SECRET:'capacity-secret',RAILWAY_VOLUME_MOUNT_PATH:'/app/data'},{waitUntil:promise=>nativePending.push(promise)});
+  assert.equal(nativeResponse.status,202);await Promise.all(nativePending);assert.equal((await db().prepare('SELECT COUNT(*) AS n FROM diag WHERE run_id=? AND stage=?').bind(id,'background').first()).n,0);
  }finally{delete runtimeEnv.RAILWAY_VOLUME_MOUNT_PATH;await db().prepare('DELETE FROM strategy_runs WHERE id=?').bind(id).run();}
 });
 
+
+test('stage 10 resumes its saved cursor and retry queue after physical capacity is restored',async()=>{
+ const {recordScanCapacity}=await import('../../.test-build/scan-capacity.mjs');
+ const id='history-capacity-resume',now=Date.now(),date=new Date(now).toISOString();
+ const displayDate='9999-12-31T23:59:59.999Z';
+ const first={ticker:'CAPACITY-RETRY',cik:0},second={ticker:'CAPACITY-NEXT',cik:0};
+ const queue=JSON.stringify([{company:first,attempt:1}]);
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,failed,stage,offset,universe,strategy_hash,retry_queue) VALUES(?,?,?,'running','Bulk Quotes/SEC Frames + Opportunity SEC v14 · full',2,2,1,10,1,?,?,?)").bind(id,displayDate,displayDate,JSON.stringify([first,second]),currentHash(),queue).run();
+ for(const company of [first,second])await insertSnapshot(id,{...base,symbol:company.ticker,cik:0,asOf:date,price:10,provenance:{...base.provenance}}).run();
+ runtimeEnv.RAILWAY_VOLUME_MOUNT_PATH='/synthetic';
+ try{
+  await recordScanCapacity({reusableBytes:2*1024**3,filesystemFreeBytes:255*1024**2},now);
+  const before=await db().prepare('SELECT * FROM strategy_runs WHERE id=?').bind(id).first();
+  const paused=await processScanBatch(id);
+  assert.equal(paused.pausedForCapacity,true);
+  assert.deepEqual(await db().prepare('SELECT * FROM strategy_runs WHERE id=?').bind(id).first(),before);
+  const pausedStatus=await (await GET(new Request('https://radar.test/api/radar?status=1'))).json();
+  assert.equal(pausedStatus.run.id,id);
+  assert.equal(pausedStatus.pausedForCapacity,true);
+
+  await recordScanCapacity({reusableBytes:0,filesystemFreeBytes:1024**3},Date.now());
+  const resumedStatus=await (await GET(new Request('https://radar.test/api/radar?status=1'))).json();
+  assert.equal(resumedStatus.run.id,id);
+  assert.equal(resumedStatus.pausedForCapacity,false);
+  setHistoryResult(new HistoricalSessionsUnavailableError(second.ticker));
+  const resumed=await processScanBatch(id);
+  assert.equal(resumed.pausedForCapacity,undefined);
+  assert.equal(resumed.run.stage,10);
+  assert.equal(resumed.run.offset,2);
+  assert.equal(resumed.run.retryPending,1);
+  assert.equal(resumed.run.failed,2);
+
+  const recent=new Date().toISOString();
+  setHistoryResult({history:[{date:recent.slice(0,10),close:10,volume:100}],splits:[],source:'TEST_ONLY',url:'https://example.test',retrievedAt:recent,availableAt:recent});
+  const replayed=await processScanBatch(id);
+  assert.equal(replayed.run.stage,11);
+  assert.equal(replayed.run.retryPending,0);
+  assert.equal(replayed.run.failed,1);
+ }finally{
+  setHistoryResult(null);
+  delete runtimeEnv.RAILWAY_VOLUME_MOUNT_PATH;
+  await db().prepare('DELETE FROM fundamental_snapshots WHERE run_id=?').bind(id).run();
+  await db().prepare('DELETE FROM strategy_runs WHERE id=?').bind(id).run();
+ }
+});
 
 test('archive summaries bound duplicate trace storage while restoring exact evidence and grades',async()=>{
  const id='archive-rich-summary',snapshot={...base,symbol:'ARCHIVE-RICH',description:'source description '.repeat(1000)},value={opportunity:{...(await import('../../.test-build/opportunity-dossier.mjs')).evaluateOpportunityDossier(snapshot,{asOf:snapshot.asOf})}};
@@ -933,4 +1140,8 @@ test('archive summaries bound duplicate trace storage while restoring exact evid
  const rowId=id+':'+snapshot.symbol,payload=JSON.stringify(snapshot),evaluation=JSON.stringify(value);await db().batch(await archivedWriteStatements(rowId,payload,evaluation));
  const row=await db().prepare('SELECT id,payload,evaluation FROM fundamental_snapshots WHERE id=?').bind(rowId).first();assert(Buffer.byteLength(row.payload)+Buffer.byteLength(row.evaluation)<7000);assert.equal(JSON.parse(row.payload).__archiveSummaryVersion,2);
  const restored=await restoreArchivedRow(row);assert.equal(restored.payload,payload);assert.equal(restored.evaluation,evaluation);assert.deepEqual(JSON.parse(row.evaluation).opportunity.factors.map(f=>f.score),value.opportunity.factors.map(f=>f.score));assert.equal(JSON.parse(row.evaluation).opportunity.evaluationHash,value.opportunity.evaluationHash);
+ const inlineGrade=JSON.parse(row.evaluation).opportunity;
+ assert.equal(inlineGrade.modelInputCoveragePct,value.opportunity.modelInputCoveragePct);
+ assert.deepEqual(inlineGrade.factors.map(f=>f.modelInputCoveragePct),value.opportunity.factors.map(f=>f.modelInputCoveragePct));
+ assert.equal((await import('../../.test-build/opportunity-engine.mjs')).isCurrentOpportunityEvaluation(inlineGrade),true);
 });

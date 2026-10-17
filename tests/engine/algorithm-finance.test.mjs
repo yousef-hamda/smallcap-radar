@@ -4,6 +4,7 @@ import {scoreCatalysts,scoreFinancialStrength,scoreFinancialStrengthPartial,scor
 import {assessFinancingRisk,applyFinancingRisk} from '../../.test-build/financing-risk.mjs';
 import {buildOpportunityThesis} from '../../.test-build/opportunity-thesis.mjs';
 import {peerObservation,peerContext} from '../../.test-build/opportunity-peers.mjs';
+import {reviewShareSplits} from '../../.test-build/research.mjs';
 
 const asOf='2026-10-03T12:00:00Z';
 const source=(start='2025-07-01',end='2026-06-30')=>({source:'SEC fixture',url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0000000001.json',periodStart:start,periodEnd:end,availableAt:'2026-08-01T00:00:00Z',retrievedAt:asOf,currency:'USD',rightsStatus:'redistribution-permitted',confidence:'high'});
@@ -56,7 +57,12 @@ const knownEvent=(overrides={})=>event({impactAsPctTtmRevenue:impact(20,'percent
    const input=finance();mutate(input);assert.equal(scoreFinancialStrength(input).score,null);assert(scoreFinancialStrengthPartial(input).coveragePct<100);
   }
  });
- const snapshot=()=>({symbol:'FIN',name:'Finance fixture',asOf,securityType:'common',cash:100,debt:20,revenue:100,fcf:12,netIncome:10,splitAdjusted:true,dilution:0,provenance:{cash:instant(),debt:instant(),revenue:source(),fcf:source(),netIncome:source(),dilution:source()}});
+ const snapshot=()=>{
+  const raw={...source('2025-06-30','2026-06-30'),source:'SEC reported share ratio; corporate actions unverified'};
+  const yahoo={...instant(),source:'Yahoo Finance chart API · split-adjusted daily history and split events',url:'https://query1.finance.yahoo.com/v8/finance/chart/FIN?events=div%2Csplits',periodEnd:'2026-10-02',availableAt:'2026-10-02T21:00:00Z'};
+  const input={symbol:'FIN',name:'Finance fixture',asOf,securityType:'common',cash:100,debt:20,revenue:100,fcf:12,netIncome:10,splitAdjusted:false,shareCountRatio:1,dilution:0,provenance:{cash:instant(),debt:instant(),revenue:source(),fcf:source(),netIncome:source(),dilution:raw,shareCountRatio:raw}};
+  return reviewShareSplits(input,[],'2025-06-01','2026-10-02',yahoo);
+ };
  test('loss-making issuers retain evidenced severe leverage, burn and dilution findings',()=>{
   const s={...snapshot(),cash:1,debt:20,fcf:-20,netIncome:-20,dilution:.8};
   assert.equal(assessFinancingRisk(s).level,'severe');
@@ -84,6 +90,7 @@ const knownEvent=(overrides={})=>event({impactAsPctTtmRevenue:impact(20,'percent
  const intrinsic=()=>{
   const s=snapshot();s.cik=1;s.price=10;s.marketCap=100;s.issuerCommonListingCount=1;
   s.provenance.price={...instant(),periodEnd:'2026-10-02',availableAt:'2026-10-02'};s.provenance.marketCap=s.provenance.price;
+  s.equityCapitalizationReview={economicCommonClassCount:1,totalCommonShares:10,source:{source:'Reviewed SEC filing equity capitalization',url:'https://www.sec.gov/Archives/edgar/data/1/000000000126000001/report.htm',accession:'0000000001-26-000001',contentHash:'a'.repeat(64),tag:'One economic common class; 10 total shares',periodEnd:'2026-09-30',availableAt:'2026-10-02T00:00:00Z',retrievedAt:asOf,rightsStatus:'redistribution-permitted',confidence:'high'}};
   s.opportunityResearch={financialStrength:{industryModel:'industrial-operating-company'},earnings:{conflicts:[],annual:[2023,2024,2025].map(y=>({start:y+'-01-01',end:y+'-12-31',metrics:Object.fromEntries(Object.entries({revenue:100,netIncome:20,operatingCashFlow:30,capitalExpenditure:5,stockBasedCompensation:5}).map(([k,v])=>[k,sv(v,source(y+'-01-01',y+'-12-31'))]))})),quarterly:[]}};return s;
  };
  const recentQuarters=(income=1)=>[['2025-07-01','2025-09-30'],['2025-10-01','2025-12-31'],['2026-01-01','2026-03-31'],['2026-04-01','2026-06-30']].map(([start,end])=>({start,end,metrics:Object.fromEntries(Object.entries({operatingCashFlow:4,capitalExpenditure:1,stockBasedCompensation:1,netIncome:income}).map(([key,value])=>[key,sv(value,source(start,end))]))}));

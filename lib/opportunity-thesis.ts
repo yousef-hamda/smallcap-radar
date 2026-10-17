@@ -1,6 +1,8 @@
 import type {Snapshot,Provenance} from './engine';
 import {commonPerShareMetricsApplicable,compatibleFinancialSources,modelEvidenceAvailable} from './financial-integrity';
 import {conflictAffectsKeys} from './opportunity-conflicts';
+import {hasVerifiedShareRatio} from './research';
+import {evidenceTimestamp,usableEvidence} from './evidence';
 
 export const INTRINSIC_POLICY = Object.freeze({version:'normalized-owner-cashflow-v3-current-period',years:5,bearReturn:.18,baseReturn:.14,bullReturn:.10,terminalGrowth:.02,maxGrowth:.15,minGrowth:-.10,earningsMultiples:[8,12,16]});
 export type IntrinsicScenario={name:'bear'|'base'|'bull';requiredReturn:number;initialGrowth:number;terminalGrowth:number;cashflowValue:number;earningsValue:number;equityValue:number;valuePerSecurity:number;upside:number;discount:number};
@@ -8,6 +10,38 @@ export type OpportunityThesis={modelVersion:string;horizonMonths:number;probabil
 const median=(values:number[])=>{const sorted=[...values].sort((a,b)=>a-b),i=Math.floor(sorted.length/2);return sorted.length%2?sorted[i]:(sorted[i-1]+sorted[i])/2;};
 const finite=(value:unknown):value is number=>typeof value==='number'&&Number.isFinite(value);
 const clamp=(value:number,low:number,high:number)=>Math.min(high,Math.max(low,value));
+
+/** A one-symbol SEC/Nasdaq directory match does not establish one economic
+ * common share class: unlisted voting classes can exist. An intrinsic equity
+ * ratio needs a reviewed filing disclosure and an independently observed
+ * capitalization whose implied share count agrees with that disclosure. */
+export function hasReviewedEquityCapitalization(snapshot:Snapshot):boolean {
+ const review=snapshot.equityCapitalizationReview,source=review?.source;
+ if(snapshot.issuerCommonListingCount!==1||!review||review.economicCommonClassCount!==1
+  ||!finite(review.totalCommonShares)||review.totalCommonShares<=0
+  ||!finite(snapshot.price)||snapshot.price<=0||!finite(snapshot.marketCap)||snapshot.marketCap<=0
+  ||!source||source.source!=='Reviewed SEC filing equity capitalization'
+  ||!usableEvidence(source,snapshot.asOf)||!Number.isFinite(evidenceTimestamp(source.retrievedAt))
+  ||evidenceTimestamp(source.retrievedAt)>evidenceTimestamp(snapshot.asOf)
+  ||!source.accession||!/^\d{10}-\d{2}-\d{6}$/.test(source.accession)
+  ||!source.contentHash||!(/^[a-f0-9]{64}$/.test(source.contentHash))
+  ||!snapshot.provenance.price||!snapshot.provenance.marketCap
+  ||snapshot.provenance.price.periodEnd!==snapshot.provenance.marketCap.periodEnd
+  ||snapshot.provenance.price.currency!=='USD'||snapshot.provenance.marketCap.currency!=='USD'
+  ||!usableEvidence(snapshot.provenance.price,snapshot.asOf)||!usableEvidence(snapshot.provenance.marketCap,snapshot.asOf)
+  ||(evidenceTimestamp(snapshot.asOf)-evidenceTimestamp(source.periodEnd))/86_400_000>400)return false;
+ try {
+  const url=new URL(source.url??'');
+  const match=url.pathname.match(/^\/Archives\/edgar\/data\/(\d+)\/(\d{18})\/.+/);
+  // Exact canonical URL also rules out credentials, ports and URL suffixes in
+  // a supplied provenance link.
+  if(url.href!==`https://www.sec.gov${url.pathname}`
+   ||!match||Number(match[1])!==snapshot.cik
+   ||match[2]!==source.accession.replaceAll('-',''))return false;
+ }catch{return false;}
+ const impliedShares=snapshot.marketCap/snapshot.price;
+ return Math.abs(impliedShares/review.totalCommonShares-1)<=.02;
+}
 
 /** A model estimate with explicit policy assumptions. No analyst target, vendor
  * multiple or unsupported share count is described as an observed fair value. */
@@ -17,11 +51,11 @@ export function buildOpportunityThesis(snapshot:Snapshot,horizonMonths=6):Opport
  const required=['operatingCashFlow','capitalExpenditure','stockBasedCompensation','netIncome','revenue'] as const;
  const usable=(source:Provenance|undefined)=>!!source&&modelEvidenceAvailable(source,snapshot.asOf)&&source.currency==='USD';
  if(!commonPerShareMetricsApplicable(snapshot))gaps.push('Security payoff or ADR ratio is unverified.');
- if(snapshot.issuerCommonListingCount!==1)gaps.push('Single common equity class and observed capitalization scope are not reconciled.');
+ if(!hasReviewedEquityCapitalization(snapshot))gaps.push('Economic common share classes and observed capitalization scope are not reconciled to a reviewed SEC filing.');
  if(snapshot.opportunityResearch?.financialStrength?.industryModel!=='industrial-operating-company')gaps.push('A specialized or unverified industry requires a suitable independent valuation model.');
  if(!finite(snapshot.price)||snapshot.price<=0||!finite(snapshot.marketCap)||snapshot.marketCap<=0||!usable(snapshot.provenance.price)||!usable(snapshot.provenance.marketCap))gaps.push('USD price and equity capitalization are unavailable.');
  if(['price','marketCap'].some(key=>!snapshot.provenance[key]||(Date.parse(snapshot.asOf)-Date.parse(snapshot.provenance[key].periodEnd))/864e5>7))gaps.push('Price or capitalization is older than seven calendar days.');
- if(snapshot.splitAdjusted!==true)gaps.push('Corporate actions and dilution are not reconciled.');
+ if(!hasVerifiedShareRatio(snapshot))gaps.push('Corporate actions and dilution are not reconciled.');
  if(conflictAffectsKeys(snapshot.sourceConflicts,['price','marketCap','revenue','netIncome','ocf','capex','fcf','shares','priorShares','shareCountRatio'])
    ||snapshot.opportunityResearch?.earnings?.conflicts?.length)gaps.push('Valuation input source conflicts remain unresolved.');
  if(periods.length!==3||periods.some((period,index)=>{
@@ -74,7 +108,7 @@ export function buildOpportunityThesis(snapshot:Snapshot,horizonMonths=6):Opport
   }
  }
  if(valid&&(normalizedCashflow!<=0||normalizedEarnings!<=0||cashflows.some(value=>value<=0)))gaps.push('Sustained positive owner cash flow and positive normalized earnings are not established; no profitable-company DCF is assigned.');
- const sources=valid?[snapshot.provenance.price,snapshot.provenance.marketCap,...periods.flatMap(period=>required.map(key=>period.metrics[key]!.source)),...currentSources]:[];
+ const sources=valid?[snapshot.provenance.price,snapshot.provenance.marketCap,snapshot.equityCapitalizationReview!.source,...periods.flatMap(period=>required.map(key=>period.metrics[key]!.source)),...currentSources]:[];
  let scenarios:IntrinsicScenario[]=[];
  if(!gaps.length) {
   const revenues=periods.map(period=>period.metrics.revenue!.value);
@@ -114,12 +148,18 @@ export function buildOpportunityThesis(snapshot:Snapshot,horizonMonths=6):Opport
  const base=scenarios.find(item=>item.name==='base'),bear=scenarios.find(item=>item.name==='bear');
  const risk=snapshot.deathSpiral==='severe'||(runway!==null&&runway<12);
  const catalysts=(snapshot.opportunityResearch?.secFilings?.form8KItemIndex?.items??[]).flatMap(filing=>(filing.observations??[]).filter(item=>!!item.eventDate).map(item=>({id:`${filing.accession}:${item.id}`,date:item.eventDate!,title:item.text,status:'unreviewed' as const,source:filing.url}))).slice(0,20);
- return {modelVersion:INTRINSIC_POLICY.version,horizonMonths,probability:null,calibrationStatus:'unvalidated',valuation:{status:scenarios.length===3?'available':'unavailable',method:'Five-year normalized owner cash-flow sensitivity cross-checked against normalized earnings; equity-value ratios use observed capitalization, not claimed fully diluted shares.',normalizedCashflow,normalizedEarnings,scenarios,sources,gaps,assumptions:INTRINSIC_POLICY},sixMonthTarget:null,catalysts,funding:{cash,debt,cashCurrency:snapshot.provenance.cash?.currency??null,debtCurrency:snapshot.provenance.debt?.currency??null,cashRunwayMonths:runway,dilution:snapshot.splitAdjusted===true&&finite(snapshot.dilution)?snapshot.dilution:null},invalidation:['Verify senior claims, restricted cash, diluted capitalization and security terms before treating modeled equity value as investable.','Invalidate the thesis if filings contradict the normalized cash flow or financing cannot cover the research horizon.','Intrinsic scenarios are not six-month price targets; no probability is calibrated.'],action:risk?'risk-review':base&&bear&&base.upside>=.5&&bear.upside>=0?'candidate-review':'research-required'};
+ return {modelVersion:INTRINSIC_POLICY.version,horizonMonths,probability:null,calibrationStatus:'unvalidated',valuation:{status:scenarios.length===3?'available':'unavailable',method:'Five-year normalized owner cash-flow sensitivity cross-checked against normalized earnings; equity-value ratios use observed capitalization, not claimed fully diluted shares.',normalizedCashflow,normalizedEarnings,scenarios,sources,gaps,assumptions:INTRINSIC_POLICY},sixMonthTarget:null,catalysts,funding:{cash,debt,cashCurrency:snapshot.provenance.cash?.currency??null,debtCurrency:snapshot.provenance.debt?.currency??null,cashRunwayMonths:runway,dilution:hasVerifiedShareRatio(snapshot)&&finite(snapshot.dilution)?snapshot.dilution:null},invalidation:['Verify senior claims, restricted cash, diluted capitalization and security terms before treating modeled equity value as investable.','Invalidate the thesis if filings contradict the normalized cash flow or financing cannot cover the research horizon.','Intrinsic scenarios are not six-month price targets; no probability is calibrated.'],action:risk?'risk-review':base&&bear&&base.upside>=.5&&bear.upside>=0?'candidate-review':'research-required'};
 }
 
 export function intrinsicValuationGrade(thesis:OpportunityThesis) {
  if(thesis.valuation.status!=='available')return null;
  const bear=thesis.valuation.scenarios[0],base=thesis.valuation.scenarios[1];
- // 60% conservative protection / 40% base upside; no chance-of-success inference.
- return Math.round((clamp(bear.upside/.5,0,1)*6+clamp(base.upside,0,1)*4)*100)/100;
+ // A bear case at today's price already clears the bear scenario's required
+ // return, so it earns the full downside-protection component. A 50% bear loss
+ // earns none. The base-value hurdle scales both components continuously:
+ // downside protection alone cannot rank a stock with little modeled upside
+ // as a strong valuation. This is a valuation sensitivity, not a near-term
+ // return prediction.
+ const baseHurdle=clamp(base.upside/.5,0,1);
+ return Math.round((clamp(1+bear.upside/.5,0,1)*6+clamp(base.upside,0,1)*4)*baseHurdle*100)/100;
 }

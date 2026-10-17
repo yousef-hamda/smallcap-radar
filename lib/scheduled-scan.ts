@@ -8,11 +8,12 @@ import {processScanBatch,startScan} from './scanner';
 export async function scheduledScanTick(now=Date.now(),capacity?:{reusableBytes:number;filesystemFreeBytes:number}) {
  await ensureSchema();
  if(capacity)await recordScanCapacity(capacity,now);
- if(capacity&&capacity.filesystemFreeBytes<64*1024*1024)return {pausedForCapacity:true};
+ // Archive compaction and cache eviction also write SQLite pages and a WAL.
+ // Pause those writes at the same physical reserve as source acquisition.
+ if(capacity&&capacity.filesystemFreeBytes<MIN_SCAN_FILESYSTEM_BYTES)return {pausedForCapacity:true};
  const recoverable=await db().prepare("SELECT id FROM strategy_runs WHERE strategy_hash=? AND status='failed' AND stage=0 AND error LIKE 'Complete official listing inventory unavailable:%' ORDER BY updated_at DESC LIMIT 1").bind(currentHash()).first() as any;
  if(recoverable&&await readCompleteDirectory())await db().prepare("UPDATE strategy_runs SET status='running',error=NULL,retry_queue='[]',lease_until=0,updated_at=? WHERE id=? AND status='failed' AND stage=0").bind(new Date(now).toISOString(),recoverable.id).run();
  const maintenance=await maintainHistoricalStorage();
- if(capacity&&capacity.filesystemFreeBytes<MIN_SCAN_FILESYSTEM_BYTES)return {maintenance,pausedForCapacity:true};
  const active=await db().prepare("SELECT id FROM strategy_runs WHERE strategy_hash=? AND source LIKE 'Bulk Quotes/%' AND status IN ('running','partial') AND stage<13 ORDER BY updated_at DESC,created_at DESC LIMIT 1").bind(currentHash()).first() as any;
  let id=active?.id;
  if(!id) {

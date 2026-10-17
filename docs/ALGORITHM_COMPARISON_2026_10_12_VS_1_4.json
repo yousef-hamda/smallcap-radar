@@ -1,0 +1,1464 @@
+{
+  "status": "PASS",
+  "cutoffDate": "2026-10-09",
+  "input": {
+    "sha256": "eb3b2e0fb9f01d11f310539bd170f132aff08033de634c9c63df9569758d41ce",
+    "runId": "74a8e534-9912-4c31-bc64-3eba0ef8d4ad:ratings-v5",
+    "rows": 7517,
+    "asOf": {
+      "distinct": 1,
+      "first": "2026-10-09T15:58:28.220Z",
+      "last": "2026-10-09T15:58:28.220Z"
+    }
+  },
+  "baseline": {
+    "version": "1.4.0-scoped-conflicts-thesis-gates",
+    "savedParity": null,
+    "comparisonMode": "same-input-unsaved-reference"
+  },
+  "candidate": {
+    "version": "1.5.0-material-catalysts-model-coverage",
+    "rubricHash": "4e4b7cc4"
+  },
+  "weights": [
+    25,
+    20,
+    15,
+    12,
+    10,
+    10,
+    5,
+    3
+  ],
+  "acceptance": {
+    "numericFactors": 60136,
+    "missingFactors": 0,
+    "missingFinalGrades": 0,
+    "retainedListings": 7517,
+    "sortedListings": 7517,
+    "independentComponentChecks": 54428,
+    "normalizationAndIdentifierControls": 196,
+    "scoreSort": "descending, symbol BINARY ascending",
+    "predictiveClaim": false
+  },
+  "changes": {
+    "changed": 1367,
+    "unchanged": 6150,
+    "increased": 0,
+    "decreased": 1367,
+    "beforeZero": 929,
+    "afterZero": 929,
+    "factors": {
+      "valuation": {
+        "weight": 25,
+        "increased": 0,
+        "decreased": 0,
+        "unchanged": 7517,
+        "totalDelta": 0,
+        "beforePositive": 3888,
+        "afterPositive": 3888
+      },
+      "catalysts": {
+        "weight": 20,
+        "increased": 0,
+        "decreased": 1367,
+        "unchanged": 6150,
+        "totalDelta": -2974.64,
+        "beforePositive": 1367,
+        "afterPositive": 0
+      },
+      "financialStrength": {
+        "weight": 15,
+        "increased": 0,
+        "decreased": 0,
+        "unchanged": 7517,
+        "totalDelta": 0,
+        "beforePositive": 2392,
+        "afterPositive": 2392
+      },
+      "earningsQuality": {
+        "weight": 12,
+        "increased": 0,
+        "decreased": 0,
+        "unchanged": 7517,
+        "totalDelta": 0,
+        "beforePositive": 1480,
+        "afterPositive": 1480
+      },
+      "competitivePosition": {
+        "weight": 10,
+        "increased": 0,
+        "decreased": 0,
+        "unchanged": 7517,
+        "totalDelta": 0,
+        "beforePositive": 2703,
+        "afterPositive": 2703
+      },
+      "downsideRisk": {
+        "weight": 10,
+        "increased": 0,
+        "decreased": 0,
+        "unchanged": 7517,
+        "totalDelta": 0,
+        "beforePositive": 4238,
+        "afterPositive": 4238
+      },
+      "management": {
+        "weight": 5,
+        "increased": 0,
+        "decreased": 0,
+        "unchanged": 7517,
+        "totalDelta": 0,
+        "beforePositive": 3922,
+        "afterPositive": 3922
+      },
+      "technicalTiming": {
+        "weight": 3,
+        "increased": 0,
+        "decreased": 0,
+        "unchanged": 7517,
+        "totalDelta": 0,
+        "beforePositive": 6469,
+        "afterPositive": 6469
+      }
+    },
+    "reviewedFactorCountBefore": 2473,
+    "reviewedFactorCountAfter": 2473
+  },
+  "inputCoverage": {
+    "weightedMeanPct": 25.17,
+    "byFactor": {
+      "valuation": {
+        "zero": 3435,
+        "partial": 3718,
+        "full": 364,
+        "totalPct": 158980,
+        "meanPct": 21.15
+      },
+      "catalysts": {
+        "zero": 5648,
+        "partial": 1869,
+        "full": 0,
+        "totalPct": 93450,
+        "meanPct": 12.43
+      },
+      "financialStrength": {
+        "zero": 4684,
+        "partial": 2064,
+        "full": 769,
+        "totalPct": 181500,
+        "meanPct": 24.15
+      },
+      "earningsQuality": {
+        "zero": 3516,
+        "partial": 1777,
+        "full": 2224,
+        "totalPct": 276030,
+        "meanPct": 36.72
+      },
+      "competitivePosition": {
+        "zero": 4524,
+        "partial": 2993,
+        "full": 0,
+        "totalPct": 109880,
+        "meanPct": 14.62
+      },
+      "downsideRisk": {
+        "zero": 2994,
+        "partial": 3633,
+        "full": 890,
+        "totalPct": 237110,
+        "meanPct": 31.54
+      },
+      "management": {
+        "zero": 2168,
+        "partial": 5349,
+        "full": 0,
+        "totalPct": 327710,
+        "meanPct": 43.6
+      },
+      "technicalTiming": {
+        "zero": 669,
+        "partial": 749,
+        "full": 6099,
+        "totalPct": 643760,
+        "meanPct": 85.64
+      }
+    }
+  },
+  "topSets": {
+    "20": {
+      "overlap": 8,
+      "before": {
+        "count": 20,
+        "types": {
+          "common": 20
+        },
+        "sectors": {
+          "unknown": 20
+        },
+        "missingCapitalization": 0,
+        "below5B": 8,
+        "atLeast5B": 12
+      },
+      "after": {
+        "count": 20,
+        "types": {
+          "common": 20
+        },
+        "sectors": {
+          "unknown": 20
+        },
+        "missingCapitalization": 0,
+        "below5B": 9,
+        "atLeast5B": 11
+      }
+    },
+    "100": {
+      "overlap": 67,
+      "before": {
+        "count": 100,
+        "types": {
+          "common": 99,
+          "adr": 1
+        },
+        "sectors": {
+          "unknown": 100
+        },
+        "missingCapitalization": 0,
+        "below5B": 59,
+        "atLeast5B": 41
+      },
+      "after": {
+        "count": 100,
+        "types": {
+          "common": 100
+        },
+        "sectors": {
+          "unknown": 100
+        },
+        "missingCapitalization": 0,
+        "below5B": 61,
+        "atLeast5B": 39
+      }
+    },
+    "752": {
+      "overlap": 643,
+      "before": {
+        "count": 752,
+        "types": {
+          "common": 741,
+          "adr": 11
+        },
+        "sectors": {
+          "unknown": 752
+        },
+        "missingCapitalization": 0,
+        "below5B": 464,
+        "atLeast5B": 288
+      },
+      "after": {
+        "count": 752,
+        "types": {
+          "common": 742,
+          "adr": 10
+        },
+        "sectors": {
+          "unknown": 752
+        },
+        "missingCapitalization": 0,
+        "below5B": 472,
+        "atLeast5B": 280
+      }
+    }
+  },
+  "conflictSlices": {
+    "all": {
+      "rows": 7517,
+      "any": 2821,
+      "source": 6,
+      "earnings": 2764,
+      "factor": {
+        "valuation": 6,
+        "catalysts": 6,
+        "financialStrength": 378,
+        "earningsQuality": 2821,
+        "competitivePosition": 6,
+        "downsideRisk": 6,
+        "management": 6,
+        "technicalTiming": 6
+      }
+    },
+    "changed": {
+      "rows": 1367,
+      "any": 8,
+      "source": 0,
+      "earnings": 0,
+      "factor": {
+        "valuation": 0,
+        "catalysts": 0,
+        "financialStrength": 0,
+        "earningsQuality": 8,
+        "competitivePosition": 0,
+        "downsideRisk": 0,
+        "management": 0,
+        "technicalTiming": 0
+      }
+    },
+    "increased": {
+      "rows": 0,
+      "any": 0,
+      "source": 0,
+      "earnings": 0,
+      "factor": {
+        "valuation": 0,
+        "catalysts": 0,
+        "financialStrength": 0,
+        "earningsQuality": 0,
+        "competitivePosition": 0,
+        "downsideRisk": 0,
+        "management": 0,
+        "technicalTiming": 0
+      }
+    },
+    "decreased": {
+      "rows": 1367,
+      "any": 8,
+      "source": 0,
+      "earnings": 0,
+      "factor": {
+        "valuation": 0,
+        "catalysts": 0,
+        "financialStrength": 0,
+        "earningsQuality": 8,
+        "competitivePosition": 0,
+        "downsideRisk": 0,
+        "management": 0,
+        "technicalTiming": 0
+      }
+    },
+    "top20": {
+      "rows": 20,
+      "any": 0,
+      "source": 0,
+      "earnings": 0,
+      "factor": {
+        "valuation": 0,
+        "catalysts": 0,
+        "financialStrength": 0,
+        "earningsQuality": 0,
+        "competitivePosition": 0,
+        "downsideRisk": 0,
+        "management": 0,
+        "technicalTiming": 0
+      }
+    },
+    "top100": {
+      "rows": 100,
+      "any": 3,
+      "source": 0,
+      "earnings": 3,
+      "factor": {
+        "valuation": 0,
+        "catalysts": 0,
+        "financialStrength": 0,
+        "earningsQuality": 3,
+        "competitivePosition": 0,
+        "downsideRisk": 0,
+        "management": 0,
+        "technicalTiming": 0
+      }
+    }
+  },
+  "thesisReview": {
+    "definition": "Thesis-qualified requires candidate-review action, source eligibility, available intrinsic model, reviewed catalyst, clean or mild financing-risk state, and no factor conflict. It is an evidence audit, not a return probability or trade recommendation.",
+    "all": {
+      "rows": 7517,
+      "intrinsicAvailable": 374,
+      "reviewedCatalyst": 0,
+      "sourceEligible": 0,
+      "candidateReview": 0,
+      "thesisQualified": 0,
+      "fundingRisk": {
+        "clean": 214,
+        "mild": 395,
+        "elevated": 435,
+        "severe": 1070,
+        "unknown": 5403
+      },
+      "riskReview": 1248
+    },
+    "top20": {
+      "rows": 20,
+      "intrinsicAvailable": 12,
+      "reviewedCatalyst": 0,
+      "sourceEligible": 0,
+      "candidateReview": 0,
+      "thesisQualified": 0,
+      "fundingRisk": {
+        "clean": 16,
+        "mild": 2,
+        "elevated": 0,
+        "severe": 0,
+        "unknown": 2
+      },
+      "riskReview": 0
+    },
+    "top100": {
+      "rows": 100,
+      "intrinsicAvailable": 61,
+      "reviewedCatalyst": 0,
+      "sourceEligible": 0,
+      "candidateReview": 0,
+      "thesisQualified": 0,
+      "fundingRisk": {
+        "clean": 54,
+        "mild": 12,
+        "elevated": 8,
+        "severe": 8,
+        "unknown": 18
+      },
+      "riskReview": 8
+    }
+  },
+  "topRankAudit": {
+    "top20": [
+      {
+        "symbol": "DLO",
+        "rank": 1,
+        "intrinsicAvailable": false,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "clean",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "HRB",
+        "rank": 2,
+        "intrinsicAvailable": true,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "clean",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "CISS",
+        "rank": 3,
+        "intrinsicAvailable": true,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "unknown",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "B",
+        "rank": 4,
+        "intrinsicAvailable": true,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "clean",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "IAG",
+        "rank": 5,
+        "intrinsicAvailable": false,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "clean",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "WSE",
+        "rank": 6,
+        "intrinsicAvailable": true,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "clean",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "CELH",
+        "rank": 7,
+        "intrinsicAvailable": true,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "clean",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "CAAP",
+        "rank": 8,
+        "intrinsicAvailable": false,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "clean",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "GCO",
+        "rank": 9,
+        "intrinsicAvailable": false,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "clean",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "TJX",
+        "rank": 10,
+        "intrinsicAvailable": true,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "clean",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "AGI",
+        "rank": 11,
+        "intrinsicAvailable": true,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "clean",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "CGEN",
+        "rank": 12,
+        "intrinsicAvailable": false,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "unknown",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "DRS",
+        "rank": 13,
+        "intrinsicAvailable": true,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "clean",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "AKBA",
+        "rank": 14,
+        "intrinsicAvailable": false,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "clean",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "BBY",
+        "rank": 15,
+        "intrinsicAvailable": true,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "clean",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "AYTU",
+        "rank": 16,
+        "intrinsicAvailable": false,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "clean",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "DAKT",
+        "rank": 17,
+        "intrinsicAvailable": true,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "clean",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "COST",
+        "rank": 18,
+        "intrinsicAvailable": true,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "clean",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "PVH",
+        "rank": 19,
+        "intrinsicAvailable": false,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "mild",
+        "riskReview": false,
+        "unresolvedConflict": false
+      },
+      {
+        "symbol": "JNJ",
+        "rank": 20,
+        "intrinsicAvailable": true,
+        "reviewedCatalyst": false,
+        "sourceEligible": false,
+        "candidateReview": false,
+        "thesisQualified": false,
+        "fundingRisk": "mild",
+        "riskReview": false,
+        "unresolvedConflict": false
+      }
+    ],
+    "top100Counts": {
+      "rows": 100,
+      "intrinsicAvailable": 61,
+      "reviewedCatalyst": 0,
+      "sourceEligible": 0,
+      "candidateReview": 0,
+      "thesisQualified": 0,
+      "fundingRisk": {
+        "clean": 54,
+        "mild": 12,
+        "elevated": 8,
+        "severe": 8,
+        "unknown": 18
+      },
+      "riskReview": 8
+    }
+  },
+  "largestIncreases": [
+    {
+      "symbol": "AA",
+      "before": 16.32,
+      "after": 16.32,
+      "delta": 0,
+      "rankBefore": 1930,
+      "rankAfter": 1645,
+      "causes": []
+    },
+    {
+      "symbol": "AAC",
+      "before": 0.84,
+      "after": 0.84,
+      "delta": 0,
+      "rankBefore": 5846,
+      "rankAfter": 5845,
+      "causes": []
+    },
+    {
+      "symbol": "AAC.U",
+      "before": 0,
+      "after": 0,
+      "delta": 0,
+      "rankBefore": 6589,
+      "rankAfter": 6589,
+      "causes": []
+    },
+    {
+      "symbol": "AAC.W",
+      "before": 0,
+      "after": 0,
+      "delta": 0,
+      "rankBefore": 6590,
+      "rankAfter": 6590,
+      "causes": []
+    },
+    {
+      "symbol": "AACG",
+      "before": 23.11,
+      "after": 23.11,
+      "delta": 0,
+      "rankBefore": 1041,
+      "rankAfter": 846,
+      "causes": []
+    },
+    {
+      "symbol": "AACI",
+      "before": 1.27,
+      "after": 1.27,
+      "delta": 0,
+      "rankBefore": 5356,
+      "rankAfter": 5355,
+      "causes": []
+    },
+    {
+      "symbol": "AACIU",
+      "before": 0.65,
+      "after": 0.65,
+      "delta": 0,
+      "rankBefore": 6102,
+      "rankAfter": 6101,
+      "causes": []
+    },
+    {
+      "symbol": "AACIW",
+      "before": 0,
+      "after": 0,
+      "delta": 0,
+      "rankBefore": 6591,
+      "rankAfter": 6591,
+      "causes": []
+    },
+    {
+      "symbol": "AACO",
+      "before": 1.25,
+      "after": 1.25,
+      "delta": 0,
+      "rankBefore": 5377,
+      "rankAfter": 5376,
+      "causes": []
+    },
+    {
+      "symbol": "AACOU",
+      "before": 0.62,
+      "after": 0.62,
+      "delta": 0,
+      "rankBefore": 6139,
+      "rankAfter": 6139,
+      "causes": []
+    },
+    {
+      "symbol": "AACOW",
+      "before": 0.9,
+      "after": 0.9,
+      "delta": 0,
+      "rankBefore": 5732,
+      "rankAfter": 5731,
+      "causes": []
+    },
+    {
+      "symbol": "AACP",
+      "before": 1.2,
+      "after": 1.2,
+      "delta": 0,
+      "rankBefore": 5443,
+      "rankAfter": 5442,
+      "causes": []
+    },
+    {
+      "symbol": "AACPR",
+      "before": 0.68,
+      "after": 0.68,
+      "delta": 0,
+      "rankBefore": 6061,
+      "rankAfter": 6060,
+      "causes": []
+    },
+    {
+      "symbol": "AACPU",
+      "before": 0.82,
+      "after": 0.82,
+      "delta": 0,
+      "rankBefore": 5866,
+      "rankAfter": 5865,
+      "causes": []
+    },
+    {
+      "symbol": "AACPW",
+      "before": 0.9,
+      "after": 0.9,
+      "delta": 0,
+      "rankBefore": 5733,
+      "rankAfter": 5732,
+      "causes": []
+    },
+    {
+      "symbol": "AADX",
+      "before": 5.32,
+      "after": 5.32,
+      "delta": 0,
+      "rankBefore": 4373,
+      "rankAfter": 4360,
+      "causes": []
+    },
+    {
+      "symbol": "AAMI",
+      "before": 11.3,
+      "after": 11.3,
+      "delta": 0,
+      "rankBefore": 2885,
+      "rankAfter": 2750,
+      "causes": []
+    },
+    {
+      "symbol": "AAP",
+      "before": 0.55,
+      "after": 0.55,
+      "delta": 0,
+      "rankBefore": 6243,
+      "rankAfter": 6243,
+      "causes": []
+    },
+    {
+      "symbol": "AAPG",
+      "before": 3.57,
+      "after": 3.57,
+      "delta": 0,
+      "rankBefore": 4638,
+      "rankAfter": 4631,
+      "causes": []
+    },
+    {
+      "symbol": "AARD",
+      "before": 7.94,
+      "after": 7.94,
+      "delta": 0,
+      "rankBefore": 3667,
+      "rankAfter": 3625,
+      "causes": []
+    }
+  ],
+  "largestDecreases": [
+    {
+      "symbol": "AAOI",
+      "before": 31.1,
+      "after": 21.1,
+      "delta": -10,
+      "rankBefore": 425,
+      "rankAfter": 1048,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 5,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "AAON",
+      "before": 23.77,
+      "after": 13.77,
+      "delta": -10,
+      "rankBefore": 986,
+      "rankAfter": 2107,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 5,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "AAUC",
+      "before": 42.87,
+      "after": 32.87,
+      "delta": -10,
+      "rankBefore": 22,
+      "rankAfter": 136,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 5,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "ABAT",
+      "before": 17.81,
+      "after": 7.81,
+      "delta": -10,
+      "rankBefore": 1719,
+      "rankAfter": 3660,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 5,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "ABCL",
+      "before": 27.08,
+      "after": 17.08,
+      "delta": -10,
+      "rankBefore": 712,
+      "rankAfter": 1539,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 5,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "ABTC",
+      "before": 19.1,
+      "after": 9.1,
+      "delta": -10,
+      "rankBefore": 1538,
+      "rankAfter": 3371,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 5,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "ABUS",
+      "before": 25.19,
+      "after": 15.19,
+      "delta": -10,
+      "rankBefore": 863,
+      "rankAfter": 1828,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 5,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "ADAG",
+      "before": 26.6,
+      "after": 16.6,
+      "delta": -10,
+      "rankBefore": 758,
+      "rankAfter": 1610,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 5,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "AEVA",
+      "before": 21.86,
+      "after": 11.86,
+      "delta": -10,
+      "rankBefore": 1179,
+      "rankAfter": 2589,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 5,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "AG",
+      "before": 47.93,
+      "after": 37.93,
+      "delta": -10,
+      "rankBefore": 8,
+      "rankAfter": 29,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 5,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "AGCC",
+      "before": 17.89,
+      "after": 7.89,
+      "delta": -10,
+      "rankBefore": 1707,
+      "rankAfter": 3639,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 5,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "AGIO",
+      "before": 24.55,
+      "after": 14.55,
+      "delta": -10,
+      "rankBefore": 915,
+      "rankAfter": 1953,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 5,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "AIMD",
+      "before": 20.96,
+      "after": 10.96,
+      "delta": -10,
+      "rankBefore": 1285,
+      "rankAfter": 2861,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 5,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "ALAB",
+      "before": 37.39,
+      "after": 27.39,
+      "delta": -10,
+      "rankBefore": 111,
+      "rankAfter": 488,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 5,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "ALNY",
+      "before": 41.56,
+      "after": 31.56,
+      "delta": -10,
+      "rankBefore": 36,
+      "rankAfter": 185,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 5,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "ALT",
+      "before": 20.49,
+      "after": 10.49,
+      "delta": -10,
+      "rankBefore": 1347,
+      "rankAfter": 3027,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 5,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "ANAB",
+      "before": 27.44,
+      "after": 17.44,
+      "delta": -10,
+      "rankBefore": 682,
+      "rankAfter": 1480,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 5,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "ANTA",
+      "before": 22.43,
+      "after": 12.43,
+      "delta": -10,
+      "rankBefore": 1116,
+      "rankAfter": 2426,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 5,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "APP",
+      "before": 24.57,
+      "after": 14.57,
+      "delta": -10,
+      "rankBefore": 912,
+      "rankAfter": 1947,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 5,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "ARIS",
+      "before": 41.19,
+      "after": 31.19,
+      "delta": -10,
+      "rankBefore": 41,
+      "rankAfter": 214,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 5,
+          "after": 0
+        }
+      ]
+    }
+  ],
+  "top20": [
+    {
+      "symbol": "DLO",
+      "before": 59.48,
+      "after": 49.48,
+      "delta": -10,
+      "rankBefore": 1,
+      "rankAfter": 1,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 5,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "HRB",
+      "before": 44.7,
+      "after": 43.48,
+      "delta": -1.22,
+      "rankBefore": 15,
+      "rankAfter": 2,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 0.61,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "CISS",
+      "before": 43,
+      "after": 43,
+      "delta": 0,
+      "rankBefore": 21,
+      "rankAfter": 3,
+      "causes": []
+    },
+    {
+      "symbol": "B",
+      "before": 50.61,
+      "after": 42.81,
+      "delta": -7.8,
+      "rankBefore": 4,
+      "rankAfter": 4,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 3.9,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "IAG",
+      "before": 51.72,
+      "after": 41.72,
+      "delta": -10,
+      "rankBefore": 2,
+      "rankAfter": 5,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 5,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "WSE",
+      "before": 47.09,
+      "after": 41.47,
+      "delta": -5.62,
+      "rankBefore": 9,
+      "rankAfter": 6,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 2.81,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "CELH",
+      "before": 51,
+      "after": 41,
+      "delta": -10,
+      "rankBefore": 3,
+      "rankAfter": 7,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 5,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "CAAP",
+      "before": 42.43,
+      "after": 40.81,
+      "delta": -1.62,
+      "rankBefore": 26,
+      "rankAfter": 8,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 0.81,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "GCO",
+      "before": 41.15,
+      "after": 40.41,
+      "delta": -0.74,
+      "rankBefore": 42,
+      "rankAfter": 9,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 0.37,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "TJX",
+      "before": 41.64,
+      "after": 39.72,
+      "delta": -1.92,
+      "rankBefore": 35,
+      "rankAfter": 10,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 0.96,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "AGI",
+      "before": 48.25,
+      "after": 39.67,
+      "delta": -8.58,
+      "rankBefore": 6,
+      "rankAfter": 11,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 4.29,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "CGEN",
+      "before": 49.43,
+      "after": 39.43,
+      "delta": -10,
+      "rankBefore": 5,
+      "rankAfter": 12,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 5,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "DRS",
+      "before": 41.99,
+      "after": 39.37,
+      "delta": -2.62,
+      "rankBefore": 28,
+      "rankAfter": 13,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 1.31,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "AKBA",
+      "before": 41.24,
+      "after": 39.36,
+      "delta": -1.88,
+      "rankBefore": 40,
+      "rankAfter": 14,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 0.94,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "BBY",
+      "before": 39.59,
+      "after": 39.23,
+      "delta": -0.36,
+      "rankBefore": 61,
+      "rankAfter": 15,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 0.18,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "AYTU",
+      "before": 39.22,
+      "after": 39.22,
+      "delta": 0,
+      "rankBefore": 69,
+      "rankAfter": 16,
+      "causes": []
+    },
+    {
+      "symbol": "DAKT",
+      "before": 42.45,
+      "after": 38.95,
+      "delta": -3.5,
+      "rankBefore": 25,
+      "rankAfter": 17,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 1.75,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "COST",
+      "before": 41.37,
+      "after": 38.83,
+      "delta": -2.54,
+      "rankBefore": 39,
+      "rankAfter": 18,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 1.27,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "PVH",
+      "before": 39.16,
+      "after": 38.74,
+      "delta": -0.42,
+      "rankBefore": 73,
+      "rankAfter": 19,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 0.21,
+          "after": 0
+        }
+      ]
+    },
+    {
+      "symbol": "JNJ",
+      "before": 40.67,
+      "after": 38.65,
+      "delta": -2.02,
+      "rankBefore": 50,
+      "rankAfter": 20,
+      "causes": [
+        {
+          "factor": "catalysts",
+          "before": 1.01,
+          "after": 0
+        }
+      ]
+    }
+  ],
+  "limitations": [
+    "A single contemporary acquisition release cannot establish six-month realized outcomes or predictive improvement.",
+    "Source acquisition fixes are validated separately; this replay never invents newly acquired facts.",
+    "Complete numeric grades do not imply reviewed catalysts, fully diluted value, governance diligence or trading safety.",
+    "Composition by capitalization and sector is descriptive; no size or sector quota changes the ranking."
+  ]
+}

@@ -9,6 +9,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createServer } from "vite";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
+function completedChartDays(count){
+ const day=new Date(Date.now()-2*86_400_000),dates=[];
+ while(dates.length<count){if(day.getUTCDay()!==0&&day.getUTCDay()!==6)dates.push(day.toISOString().slice(0,10));day.setUTCDate(day.getUTCDate()-1);}
+ return dates.reverse();
+}
 const vite = await createServer({
   appType: "custom",
   configFile: false,
@@ -101,6 +106,16 @@ test('radar exposes one opportunity category, favorites and portfolio without bo
  assert.doesNotMatch(html,/bottom-nav|terminal-shell|sidebar-head/);
 });
 
+test('a dated saved profile cannot replace a newer completed-session quote',async()=>{
+ const {mergeRecentQuote}=await vite.ssrLoadModule('/app/page.tsx');
+ const source=(periodEnd,availableAt)=>({source:'fixture',periodEnd,availableAt,retrievedAt:availableAt,confidence:'high'});
+ const current={symbol:'TEST',name:'Test',asOf:'2026-10-15T00:00:00Z',price:18,dailyChange:.03,provenance:{price:source('2026-10-14','2026-10-14T21:00:00Z'),dailyChange:source('2026-10-14','2026-10-14T21:00:00Z')}};
+ const older={...current,price:12,dailyChange:-.07,provenance:{price:source('2026-10-13','2026-10-13T21:00:00Z'),dailyChange:source('2026-10-13','2026-10-13T21:00:00Z')}};
+ assert.equal(mergeRecentQuote(older,current).price,18);
+ assert.equal(mergeRecentQuote(current,older).price,18);
+ assert.equal(mergeRecentQuote(current,older).dailyChange,.03);
+});
+
 test('company profile consumes only the canonical Opportunity evaluation',async()=>{
  const source=await readFile(path.join(root,'app/company-sheet.tsx'),'utf8');
  const route=await readFile(path.join(root,'app/api/company/route.ts'),'utf8');
@@ -111,13 +126,41 @@ test('company profile consumes only the canonical Opportunity evaluation',async(
  assert.match(route,/evaluateOpportunityDossier\(snapshot,opportunityDossierFromSnapshot\(snapshot\)\)/);
 });
 
-test('radar displays numeric final grades, source coverage and stable database ranks',async()=>{
+test('radar displays numeric research scores, original ranks and separate session and snapshot dates',async()=>{
  const source=await readFile(path.join(root,'app/page.tsx'),'utf8');
  const storage=await readFile(path.join(root,'lib/storage.ts'),'utf8');
- assert.match(source,/e\.score\.toFixed\(2\)/);assert.match(source,/f\.points\.toFixed\(3\)/);
- assert.match(source,/تغطية المصادر/);assert.match(source,/rankBySymbol\[s\.symbol\]/);
+ assert.match(source,/e\.score\.toFixed\(2\)/);
+ assert.match(source,/درجة النموذج المطلقة/);assert.match(source,/rank:payload\.rankPositions\?\.\[index\]/);
+ assert.match(source,/في القائمة الكاملة/);assert.match(source,/مراجعة المصادر \{e\.coveragePct\.toFixed\(0\)\}%/);
+ assert.match(source,/تغير آخر جلسة/);assert.match(source,/لقطة البيانات <time dir="ltr">\{day\(s\.asOf\)\}/);
  assert.match(storage,/ROW_NUMBER\(\) OVER/);assert.match(storage,/symbol COLLATE BINARY ASC/);
  assert.match(storage,/ensureRunEvaluations/);
+});
+
+test('stock card keeps a newer verified close even when its daily change is missing',async()=>{
+ const {cardSession}=await vite.ssrLoadModule('/app/card-session.ts');
+ const source=(periodEnd,tag)=>({source:'market history',periodEnd,tag});
+ const snapshot={price:10,dailyChange:.05,provenance:{price:source('2026-10-13','last completed session close'),dailyChange:source('2026-10-13','last completed close / previous completed close - 1')}};
+ const laterPrice=source('2026-10-14','last completed session close');
+ assert.deepEqual(cardSession(snapshot,{price:12,provenance:{price:laterPrice}}),{price:12,priceDate:'2026-10-14',completedClose:true,dailyChange:null,changeDate:null,hasPrice:true});
+ assert.equal(cardSession(snapshot,{price:12,dailyChange:.2,provenance:{price:laterPrice,dailyChange:source('2026-10-13','last completed close / previous completed close - 1')}}).dailyChange,null,'a stale daily change must not be paired with the latest close');
+ assert.equal(cardSession(snapshot,{price:12,dailyChange:.2,provenance:{price:laterPrice,dailyChange:source('2026-10-14','last completed close / previous completed close - 1')}}).dailyChange,.2);
+ assert.equal(cardSession(snapshot,{price:11,provenance:{price:source('2026-10-13','last completed session close')}}).dailyChange,null,'a corrected close on the same date cannot reuse a change calculated from the old price');
+ assert.equal(cardSession(snapshot,{price:10,provenance:{price:source('2026-10-13','last completed session close')}}).dailyChange,.05,'an identical same-session quote may keep the saved change');
+ assert.equal(cardSession(snapshot,{price:8,dailyChange:-.2,provenance:{price:source('2026-10-12','last completed session close'),dailyChange:source('2026-10-12','last completed close / previous completed close - 1')}}).price,10,'a stale quote must not replace the saved close');
+});
+
+test('research-fit control keeps the full rank and names the evidence-limited view',async()=>{
+ const [page,route,storage]=await Promise.all(['app/page.tsx','app/api/radar/route.ts','lib/storage.ts'].map(file=>readFile(path.join(root,file),'utf8')));
+ assert.match(page,/\[researchFit,setResearchFit\]=useState\(true\)/);
+ assert.match(page,/fit=research/);
+ assert.match(page,/aria-pressed=\{researchFit\}/);
+ assert.match(page,/قائمة بحث أولية وليست فرص شراء مؤكدة/);
+ assert.match(page,/بيانات السوق قد تكون حقوق استخدامها غير محسومة/);
+ assert.match(page,/rank:payload\.rankPositions\?\.\[index\]/);
+ assert.match(route,/researchFit:activeStrategy==='opportunity'&&url\.searchParams\.get\('fit'\)==='research'/);
+ assert.match(storage,/INDEXED BY opportunity_rank_position_idx JOIN fundamental_snapshots/);
+ assert.match(storage,/ORDER BY CASE WHEN \$\{researchFitFinancingPassSql\} THEN 0 ELSE 1 END,r\.rank_position LIMIT \? OFFSET \?/);
 });
 
 test('profile renders sourced financial-strength gaps without filling missing figures with zero',async()=>{
@@ -159,12 +202,47 @@ test('empty chart keeps all seven period controls',async()=>{
  const {default:Chart}=await vite.ssrLoadModule('/app/price-chart.tsx');
  const html=renderToStaticMarkup(React.createElement(Chart,{snapshot:{symbol:'TEST',name:'Synthetic chart fixture',asOf:'2025-01-01',provenance:{},history:[]}}));
  assert.equal((html.match(/role="tab"/g)||[]).length,7);
- assert.match(html,/لا تتوفر جلستان موثقتان/);
+ assert.match(html,/جارٍ تحميل الرسم اليومي/);
+ assert.match(html,/لا تتوفر بيانات إغلاق جلستين/);
+});
+
+test('chart defaults to the daily session with clearly labeled close fallback',async()=>{
+ const {default:Chart}=await vite.ssrLoadModule('/app/price-chart.tsx');
+ const [previous,current]=completedChartDays(2);
+ const html=renderToStaticMarkup(React.createElement(Chart,{snapshot:{symbol:'TEST',name:'Synthetic chart fixture',asOf:`${current}T23:00:00Z`,provenance:{},history:[{date:previous,close:10},{date:current,close:12}]}}));
+ assert.match(html,/جلسة يومية/);
+ assert.ok(html.includes(`إغلاق آخر جلستين مكتملتين من لقطة ${current}`));
+ assert.ok(html.includes(`${current} · $12.00`));
+ assert.match(html,/data-state="active"[^>]*>يوم</);
+});
+
+test('daily chart includes a newer independently sourced completed close without changing the saved snapshot',async()=>{
+ const {default:Chart}=await vite.ssrLoadModule('/app/price-chart.tsx');
+ const [older,previous,current]=completedChartDays(3);
+ const snapshot={symbol:'TEST',name:'Synthetic chart fixture',asOf:`${previous}T23:00:00Z`,provenance:{},history:[{date:older,close:10},{date:previous,close:12}]};
+ const html=renderToStaticMarkup(React.createElement(Chart,{snapshot,completedClose:{price:13,periodEnd:current,source:'Completed daily bars'}}));
+ assert.ok(html.includes(`${current} · $13.00`));
+ assert.ok(html.includes(`إغلاق ${current} من Completed daily bars`));
+ assert.ok(html.includes(`مستقل عن لقطة التقييم ${previous}`));
+ assert.equal(snapshot.history.length,2);
+});
+
+test('saved rating date does not truncate independently fetched completed chart history',async()=>{
+ const {default:Chart}=await vite.ssrLoadModule('/app/price-chart.tsx');
+ const [older,previous,current]=completedChartDays(3);
+ const source={source:'Test daily history',periodEnd:current,availableAt:`${current}T21:00:00Z`,retrievedAt:new Date().toISOString(),tag:'display-only completed daily history; saved rating unchanged'};
+ const snapshot={symbol:'TEST',name:'Synthetic chart fixture',asOf:`${older}T23:00:00Z`,provenance:{history:source},history:[{date:older,close:10},{date:previous,close:11},{date:current,close:12}]};
+ const html=renderToStaticMarkup(React.createElement(Chart,{snapshot}));
+ assert.ok(html.includes(`${current} · $12.00`));
+ assert.ok(html.includes(`تاريخ حتى ${current} من Test daily history`));
+ assert.ok(html.includes(`مستقل عن لقطة التقييم ${older}`));
+ assert.equal(snapshot.asOf,`${older}T23:00:00Z`);
 });
 
 test('historical chart filters duplicate, future and nonfinite bars and displays actual extrema',async()=>{
  const {default:Chart}=await vite.ssrLoadModule('/app/price-chart.tsx');
- const html=renderToStaticMarkup(React.createElement(Chart,{snapshot:{symbol:'TEST',name:'Synthetic chart fixture',asOf:'2025-01-03',provenance:{},history:[{date:'2025-01-01',close:10},{date:'2025-01-01',close:10},{date:'2025-01-02',close:12},{date:'2025-01-04',close:99999},{date:'2025-01-02',close:NaN}]}}));
+ const [previous,current]=completedChartDays(2),future=new Date(Date.now()+2*86_400_000).toISOString().slice(0,10);
+ const html=renderToStaticMarkup(React.createElement(Chart,{snapshot:{symbol:'TEST',name:'Synthetic chart fixture',asOf:`${current}T23:00:00Z`,provenance:{},history:[{date:previous,close:10},{date:previous,close:10},{date:current,close:12},{date:future,close:99999},{date:current,close:NaN}]}}));
  assert.match(html,/10\.00/);assert.match(html,/12\.00/);assert.doesNotMatch(html,/99999|NaN|Infinity/);
  assert.match(html,/polyline/);
 });
@@ -289,13 +367,24 @@ test('unified opportunity view displays final grades and complete ranking',async
  assert.match(source,/state=\$\{opportunityState\}/);
  assert.match(source,/e\.state===opportunityState/);
  assert.match(source,/e\.score\.toFixed\(2\)/);
- assert.match(source,/\$\{f\.points\.toFixed\(3\)\} نقطة/);
- assert.match(source,/operatingCandidateSignals\(s\)/);
- assert.match(source,/candidate-signals/);
+ assert.match(source,/className="card-open"/);
+ assert.match(source,/className="copy-button"/);
+ assert.match(source,/className=\{`star-button/);
  assert.match(source,/الترتيب النهائي لجميع الأسهم/);assert.doesNotMatch(source,/ليست درجة نهائية|نقاط موثقة مؤقتة/);
  assert.match(source,/useState<OpportunityState>\('ranked'\)/);
- assert.match(source,/visibleEvaluated\.map\(\(\{s,e\},index\)=>/);
+ assert.match(source,/visibleEvaluated\.map\(\(\{s,e,rank\}\)=>/);
  assert.match(source,/visibleEvaluated\.length\} نتيجة معروضة/);
+});
+
+test('profile starts with the daily chart, then company description and research detail',async()=>{
+ const source=await readFile(path.join(root,'app/company-sheet.tsx'),'utf8');
+ const scroll=source.indexOf('className="sheet-scroll"');
+ const chart=source.indexOf('<PriceChart key={s.symbol}');
+ const description=source.indexOf('ماذا تفعل الشركة',chart);
+ const summary=source.indexOf('className="company-summary opportunity"',description);
+ const strategy=source.indexOf('className="detail-strategy opportunity"',summary);
+ assert.ok(scroll>0&&chart>scroll&&description>chart&&summary>description&&strategy>summary);
+ assert.match(source,/modelInputCoveragePct/);
 });
 
 test('opportunity report uses the unified evaluation and factor blockers',async()=>{
@@ -311,6 +400,60 @@ test('opening a profile synchronizes its completed-session quote back into the v
  const source=await readFile(path.join(root,'app/page.tsx'),'utf8');
  assert.match(source,/function syncCardQuote\(profile:Snapshot\)/);
  assert.match(source,/syncCardQuote\(p\.snapshot\);setSelected\(p\.snapshot\)/);
+ assert.match(source,/ratedRows\.slice\(0,80\).*favorite-quotes/s);
+ assert.match(source,/setCardQuotes\(current=>\(\{\.\.\.current,\.\.\.payload\.quotes\}\)\)/);
+});
+
+test('saved favorites render before the optional quote fetch, including when a provider fails',async()=>{
+ const source=await readFile(path.join(root,'app/page.tsx'),'utf8');
+ const savedRows=source.indexOf('setRatedRows(old=>append?');
+ const quoteFetch=source.indexOf('void request<{quotes:Record<string,CardQuote>;errors?:string[]}>');
+ assert.ok(savedRows>0&&quoteFetch>savedRows);
+ assert.match(source,/cardSession\(s,cardQuotes\[s\.symbol\]\)/);
+ assert.match(source,/if\(view==='favorites'&&result\.errors\?\.length&&!Object\.keys\(result\.quotes\)\.length\)setNotice/);
+ assert.doesNotMatch(source,/if\(view==='favorites'&&snapshots\.length\)\{\s*try\{const quotePayload=await request/);
+ assert.match(source,/listError\?<section className="empty-state" role="alert"/);
+});
+
+test('a portfolio profile retains a visible chart and retry when its canonical fetch fails',async()=>{
+ const source=await readFile(path.join(root,'app/company-sheet.tsx'),'utf8');
+ assert.match(source,/s&&!opportunityEvaluation&&<div className="sheet-scroll"/);
+ assert.match(source,/التقييم النهائي غير متاح في هذه اللقطة/);
+ assert.match(source,/ما زالت بيانات الشركة المحفوظة معروضة.*<button onClick=\{onRetry\}>إعادة المحاولة<\/button>/s);
+});
+
+test('a failed first portfolio fetch shows retry instead of claiming the wallet is empty',async()=>{
+ const source=await readFile(path.join(root,'app/portfolio-view.tsx'),'utf8');
+ assert.match(source,/if \(!data\) return <div className="portfolio-loading" role="alert"/);
+ assert.match(source,/onClick=\{\(\) => void refresh\(\)\}>إعادة المحاولة/);
+});
+
+test('portfolio quote refresh does not write display quotes into the database',async()=>{
+ const source=await readFile(path.join(root,'lib/portfolio-storage.ts'),'utf8');
+ assert.match(source,/for\(let offset=0;offset<keys\.length;offset\+=400\)/);
+ const start=source.indexOf('export async function readPortfolioQuotes(');
+ const end=source.indexOf('export async function canonicalPortfolioAsset(',start);
+ const body=source.slice(start,end);
+ assert.match(body,/rememberQuote\(quote,Date\.now\(\)\)/);
+ assert.match(body,/yahooBulkQuotes\(missing\)\.catch\(\(\) => \[\]\)/);
+ assert.doesNotMatch(body,/\b(?:INSERT|UPDATE|DELETE|REPLACE)\b/);
+});
+
+test('company and portfolio-history reads retain dated fallback without writing provider data',async()=>{
+ const [company,history]=await Promise.all([
+  readFile(path.join(root,'app/api/company/route.ts'),'utf8'),
+  readFile(path.join(root,'app/api/portfolio-history/route.ts'),'utf8'),
+ ]);
+ assert.match(company,/deepCache\.get\(cacheKey/);
+ assert.match(company,/cached:true,stale:true/);
+ assert.match(company,/params\.get\('includeHistory'\)==='1'\?displayHistory/);
+ assert.match(company,/const chartHistory=chart\?/);
+ assert.match(history,/rememberHistory\(symbol,payload\)/);
+ assert.match(history,/const fallback=hasBars\(local\?\.payload\)/);
+ assert.match(history,/firstTradeBySymbol\.get\(symbol\)/);
+ assert.match(history,/incompleteSymbols:\[\.\.\.new Set\(\[\.\.\.series\.incompleteSymbols,\.\.\.incompleteRange\]\)\]/);
+ assert.doesNotMatch(history,/requestedFrom:firstDate/);
+ for(const route of [company,history])assert.doesNotMatch(route,/\b(?:INSERT|UPDATE|DELETE|REPLACE)\s+(?:OR\s+\w+\s+)?(?:INTO|FROM)?\s*raw_cache/i);
 });
 
 test('screen refresh work is bounded while manual refresh remains available',async()=>{

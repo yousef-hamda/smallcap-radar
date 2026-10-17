@@ -40,7 +40,7 @@ type PortfolioData = {
 };
 
 type SearchResult = { symbol: string; name: string; nameAr?: string; exchange?: string; securityType?: string; price?: number | null; sector?: string; industry?: string };
-type HistoryData = { points: PortfolioPoint[]; unavailable: string[]; incompleteSymbols: string[]; sources: Array<{ symbol: string; source: string; availableAt: string }>; asOf: string; method?: string };
+type HistoryData = { points: PortfolioPoint[]; unavailable: string[]; staleSymbols?: string[]; incompleteSymbols: string[]; sources: Array<{ symbol: string; source: string; availableAt: string }>; asOf: string; method?: string };
 type FormState = { id?: string; symbol: string; side: 'buy' | 'sell'; quantity: string; price: string; fees: string; tradeDate: string; note: string };
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -79,7 +79,11 @@ export function PerformanceChart({ history }: { history: HistoryData | null }) {
   const x = (index: number) => 18 + index / Math.max(1, validRows.length - 1) * 684;
   const y = (value: number) => 210 - (value - low + padding) / Math.max(.0001, high - low + padding * 2) * 180;
   const path = validRows.map((point, index) => `${index ? 'L' : 'M'}${x(index).toFixed(2)},${y(point.returnPct).toFixed(2)}`).join(' ');
-  const last = validRows.at(-1), selected = hovered == null ? last : validRows[hovered];
+  const last = validRows.at(-1);
+  // A refreshed history can contain fewer points while the pointer is still
+  // over the chart. Keep the selected index inside the new series.
+  const selectedIndex = hovered == null ? validRows.length - 1 : Math.max(0, Math.min(hovered, validRows.length - 1));
+  const selected = validRows[selectedIndex];
   const color = (last?.returnPct ?? 0) < 0 ? '#fb7185' : '#14d9a4';
   const gradientId = useId().replaceAll(':', '');
   return <section className="portfolio-panel performance-panel">
@@ -92,12 +96,14 @@ export function PerformanceChart({ history }: { history: HistoryData | null }) {
           <defs><linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity=".28"/><stop offset="100%" stopColor={color} stopOpacity="0"/></linearGradient></defs>
           <line x1="18" x2="702" y1={y(0)} y2={y(0)} stroke="#6b7280" strokeDasharray="5 5"/>
           <path d={`${path} L702,220 L18,220 Z`} fill={`url(#${gradientId})`}/><path d={path} fill="none" stroke={color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
-          <line x1={x(hovered ?? validRows.length - 1)} x2={x(hovered ?? validRows.length - 1)} y1="15" y2="220" stroke="#818cf8" strokeDasharray="3 4"/><circle cx={x(hovered ?? validRows.length - 1)} cy={y(selected!.returnPct)} r="5" fill={color}/>
+          <line x1={x(selectedIndex)} x2={x(selectedIndex)} y1="15" y2="220" stroke="#818cf8" strokeDasharray="3 4"/><circle cx={x(selectedIndex)} cy={y(selected.returnPct)} r="5" fill={color}/>
         </svg>
         <div className="chart-dates" dir="ltr"><span>{validRows[0].date}</span><span dir="rtl">أدنى {pct(low)} · أعلى {pct(high)}</span><span>{last!.date}</span></div>
       </>}
     </div>
     {!!history?.unavailable.length && <p className="portfolio-warning"><AlertTriangle size={16}/> التاريخ غير متاح حاليًا لـ {history.unavailable.join('، ')}؛ لم تُحوّل البيانات الناقصة إلى صفر.</p>}
+    {!!history?.staleSymbols?.length && <p className="portfolio-warning"><AlertTriangle size={16}/> تعذّر تحديث تاريخ {history.staleSymbols.join('، ')}؛ استُخدمت بيانات سابقة مؤرخة حتى يعود مصدر الأسعار.</p>}
+    {!!history?.incompleteSymbols?.length && <p className="portfolio-warning"><AlertTriangle size={16}/> تاريخ الأسعار غير مكتمل منذ أول صفقة لـ {history.incompleteSymbols.join('، ')}؛ قد لا يعرض الرسم أداء المحفظة الكامل.</p>}
   </section>;
 }
 
@@ -262,6 +268,7 @@ export default function PortfolioView({ onOpenCompany, onCountChange }: { onOpen
   }).length ?? 0;
 
   if (loading && !data) return <div className="portfolio-loading" role="status"><BriefcaseBusiness/> جارٍ تحميل محفظتك المحفوظة…</div>;
+  if (!data) return <div className="portfolio-loading" role="alert"><BriefcaseBusiness/><span>{error || 'تعذّر تحميل محفظتك المحفوظة.'}</span><button className="portfolio-refresh" onClick={() => void refresh()}>إعادة المحاولة</button></div>;
   return <section className="portfolio-view" aria-label="محفظتي الاستثمارية">
     {(error || notice) && <div className={`message ${error ? 'error' : ''}`} role={error ? 'alert' : 'status'}><span>{error || notice}</span><button aria-label="إغلاق الرسالة" onClick={() => { setError(''); setNotice(''); }}><X size={16}/></button></div>}
     <div className="portfolio-hero"><div><span className="portfolio-kicker"><BriefcaseBusiness size={17}/> محفظتي</span><h2>متابعة قراراتك، لا أسعارك فقط</h2><p>سجّل الشراء والبيع، ثم راقب العائد والتوزيع والتركيز من بياناتك الحقيقية.</p></div><div className="portfolio-hero-actions"><button className="portfolio-refresh" onClick={() => void refresh(true)} disabled={loading} aria-label="تحديث أسعار المحفظة"><RefreshCw size={17} className={loading ? 'spin' : ''}/> {loading ? 'جارٍ التحديث…' : 'تحديث الأسعار'}</button><button className="portfolio-export" onClick={exportCsv} disabled={!data?.transactions.length}><Download size={17}/> تصدير CSV</button><button className="scan-button" onClick={openNewTransaction}><Plus size={17}/> إضافة عملية</button></div></div>

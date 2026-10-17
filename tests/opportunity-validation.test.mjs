@@ -38,6 +38,49 @@ test('future evidence and unsupported membership/actions cannot validate opportu
   assert.equal(report.status, 'BLOCKED'); assert.equal(report.counts.rejected, 1); assert.equal(report.probability, null);
 });
 
+test('explicit zero-credit missing factors stay in the historical cohort and retain coverage state', () => {
+  const sparse = row();
+  sparse.symbol = 'SPARSE'; sparse.issuerId = 'CIK-SPARSE';
+  for (const factor of Object.values(sparse.factors)) factor.score = 10;
+  sparse.factors.catalysts = { score: 0, sources: [], coverageState: 'missing' };
+  for (const bar of sparse.prices.bars) { bar.close = 20; bar.dividend = 0; }
+  const complete = row(); complete.symbol = 'COMPLETE'; complete.issuerId = 'CIK-COMPLETE';
+  for (const bar of complete.prices.bars) { bar.close = 10; bar.dividend = 0; }
+  const observed = validateObservation(sparse, cutoff);
+  assert.equal(observed.valid, true);
+  assert.equal(observed.score, 80);
+  assert.equal(observed.factorCoverage.catalysts, 'missing');
+  assert.equal(observed.factorCoverage.valuation, 'sourced');
+  const report = validateOpportunityDataset([complete, sparse], { cutoff });
+  assert.equal(report.counts.accepted, 2);
+  assert.equal(report.counts.rejected, 0);
+  assert.equal(report.metrics.all.missingFactorGrades, 1);
+  assert.equal(report.metrics.all.rowsWithMissingFactors, 1);
+  assert.equal(report.metrics.all.topDecile.rows, 1);
+  assert.equal(report.metrics.all.topDecile.majorUpsideRate, 1);
+  assert.equal(report.status, 'BLOCKED');
+  assert.equal(report.probability, null);
+});
+
+test('missing coverage cannot justify positive credit or silently bypass source lineage', () => {
+  const changes = [
+    factor => { factor.score = 1; factor.sources = []; factor.coverageState = 'missing'; },
+    factor => { factor.score = 0; factor.sources = []; },
+    factor => { factor.score = 0; factor.sources = []; factor.coverageState = 'sourced'; },
+    factor => { factor.score = 0; factor.coverageState = 'missing'; },
+    factor => { factor.score = 1; factor.sources[0].availableAt = '2020-02-01'; },
+  ];
+  for (const change of changes) {
+    const candidate = row(); change(candidate.factors.catalysts);
+    assert.equal(validateObservation(candidate, cutoff).valid, false);
+  }
+  const sourcedZero = row(); sourcedZero.factors.catalysts.score = 0;
+  sourcedZero.factors.catalysts.coverageState = 'sourced';
+  const result = validateObservation(sourcedZero, cutoff);
+  assert.equal(result.valid, true);
+  assert.equal(result.factorCoverage.catalysts, 'sourced');
+});
+
 test('terminal payoffs measure both bankruptcy losses and successful takeovers', () => {
   const failure = validateObservation(terminalRow(), cutoff);
   assert.equal(failure.valid, true); assert.equal(failure.censored, false); assert.equal(failure.totalReturn, -1.01); assert.equal(failure.maxDrawdown, -1); assert.equal(failure.majorUpside, false);

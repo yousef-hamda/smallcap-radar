@@ -1,5 +1,6 @@
 import type { Provenance, Snapshot } from './engine';
 import { derivedEvidence, usableEvidence,evidenceTimestamp,validEvidenceConversion } from './evidence';
+import {hasVerifiedShareRatio} from './research';
 
 /** Model observations retain unknown rights separately, but every dependency
  * must be auditable and actually available at the saved research cutoff. */
@@ -71,7 +72,7 @@ export function financialIntegrityFindings(snapshot: Snapshot) {
   }
   if (snapshot.backlog && commercialObservationKind(snapshot) === 'contract-liability')
     issues.push('Deferred revenue/contract liability is not backlog or a new growth catalyst.');
-  if (snapshot.dilution != null && snapshot.splitAdjusted !== true)
+  if (snapshot.dilution != null && !hasVerifiedShareRatio(snapshot))
     issues.push('Share-count change is not verified dilution until corporate actions are reconciled.');
   if (!operatingIssuerMetricsApplicable(snapshot))
     issues.push('Issuer operating metrics do not establish this security payoff; instrument terms require a separate model.');
