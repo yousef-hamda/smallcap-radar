@@ -14,6 +14,10 @@ const PROVIDER_CONCURRENCY = 6;
 const SCORE_BATCH_SIZE = 200;
 const COMPANY_FACTS_BATCH_SIZE = 12;
 const OPPORTUNITY_BATCH_SIZE = 8;
+// The durable SEC request queue caps aggregate traffic at 8 requests/sec,
+// below SEC's 10 requests/sec fair-access ceiling. Use its full bounded batch
+// concurrently rather than waiting through two groups of four issuer lookups.
+const OPPORTUNITY_PROVIDER_CONCURRENCY = 8;
 export const SCAN_SOURCE_VERSION = 'Bulk Quotes/SEC Frames + Opportunity SEC v14';
 const UNIVERSE_PAGE=100;
 const universePageSize=(run:any)=>run.universe==='paged-v2'?UNIVERSE_PAGE:1000;
@@ -435,7 +439,7 @@ export async function processScanBatch(runId: string) {
     const benchmarkRow=await latestScanHistory('SPY');
     if(benchmarkRow)benchmarkResearch=await cachedMarketHistory(benchmarkRow.payload);
     const outcomes:any[]=[];
-    for(let start=0;start<jobs.length;start+=4)outcomes.push(...await Promise.all(jobs.slice(start,start+4).map(async(job:any)=>{
+    for(let start=0;start<jobs.length;start+=OPPORTUNITY_PROVIDER_CONCURRENCY)outcomes.push(...await Promise.all(jobs.slice(start,start+OPPORTUNITY_PROVIDER_CONCURRENCY).map(async(job:any)=>{
       const issuerTickers=job.company.tickers ?? [job.company.ticker];
       const missing=issuerTickers.filter((ticker:string)=>!bySymbol.has(ticker));
       const snapshots=issuerTickers.map((ticker:string)=>bySymbol.get(ticker)).filter(Boolean).map((row:any)=>JSON.parse(row.payload));
