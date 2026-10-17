@@ -26,6 +26,13 @@ async function cachedMarketHistory(payload:string):Promise<Awaited<ReturnType<ty
   return value;
  }catch{return null;}
 }
+async function latestScanHistory(ticker:string){
+ const prefix=`scan-history:v3:${ticker}:`;
+ // `raw_cache.key` is the primary key. A LIKE prefix plus retrieved_at sort
+ // scans the multi-gigabyte cache; the bounded key range narrows the lookup
+ // through that index while preserving the existing retrieved_at ordering.
+ return db().prepare('SELECT payload FROM raw_cache WHERE key>=? AND key<? ORDER BY retrieved_at DESC LIMIT 1').bind(prefix,`${prefix}\uffff`).first() as Promise<any>;
+}
 async function saveUniverse(runId:string,companies:any[],kind='candidates',pageSize=UNIVERSE_PAGE){
  const statements=[];
  for(let offset=0;offset<companies.length;offset+=pageSize)statements.push(db().prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(`universe:${runId}:${kind}:${offset/pageSize}`,'scan directory checkpoint',new Date().toISOString(),JSON.stringify(companies.slice(offset,offset+pageSize))));
@@ -421,11 +428,11 @@ export async function processScanBatch(runId: string) {
     const bySymbol = new Map<string,any>(rows.map((row:any)=>[row.symbol,row]));
     const marketBySymbol=new Map<string,Awaited<ReturnType<typeof historicalMarketData>>>();
     for(const ticker of tickers){
-      const cached=await database.prepare("SELECT payload FROM raw_cache WHERE key LIKE ? ORDER BY retrieved_at DESC LIMIT 1").bind(`scan-history:v3:${ticker}:%`).first() as any;
+      const cached=await latestScanHistory(ticker);
       if(cached){const history=await cachedMarketHistory(cached.payload);if(history)marketBySymbol.set(ticker,history);}
     }
     let benchmarkResearch:Awaited<ReturnType<typeof historicalMarketData>>|null=null;
-    const benchmarkRow=await database.prepare("SELECT payload FROM raw_cache WHERE key LIKE 'scan-history:v3:SPY:%' ORDER BY retrieved_at DESC LIMIT 1").first() as any;
+    const benchmarkRow=await latestScanHistory('SPY');
     if(benchmarkRow)benchmarkResearch=await cachedMarketHistory(benchmarkRow.payload);
     const outcomes:any[]=[];
     for(let start=0;start<jobs.length;start+=4)outcomes.push(...await Promise.all(jobs.slice(start,start+4).map(async(job:any)=>{
