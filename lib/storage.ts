@@ -12,6 +12,16 @@ import {peerObservation,peerContext,uniqueIssuerPeers,type PeerObservation} from
 import {alignSnapshotFinancials} from './financial-integrity';
 export const db=()=>{const d=(env as any).DB;if(!d)throw Error('قاعدة البيانات غير متاحة');return d;};
 let schemaPromise:Promise<void>|null=null;
+async function ensureColumn(d:ReturnType<typeof db>,table:string,name:string,definition:string){
+ const hasColumn=async()=>((await d.prepare(`PRAGMA table_info(${table})`).all()).results as any[]).some(column=>column.name===name);
+ if(await hasColumn())return;
+ try{await d.prepare(`ALTER TABLE ${table} ADD COLUMN ${definition}`).run();}
+ catch(error){
+  // Separate Worker isolates can both pass the initial PRAGMA check. If the
+  // other isolate won the DDL race, treat the now-present column as success.
+  if(!await hasColumn())throw error;
+ }
+}
 type StateCacheEntry={expiresAt:number;value:any;bytes:number};
 const stateCache=new Map<string,StateCacheEntry>();
 const runSummaryCache=new Map<string,any>();
@@ -79,15 +89,19 @@ export async function ensureSchema(){
   d.prepare("CREATE INDEX IF NOT EXISTS idx_radar_sessions_expiry ON radar_sessions(expires_at)")
   ,d.prepare("CREATE TABLE IF NOT EXISTS bulk_fundamentals (run_id TEXT NOT NULL, cik INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(run_id,cik))")
  ]);
- const columns=(await d.prepare("PRAGMA table_info(strategy_runs)").all()).results as any[];
- if(!columns.some(c=>c.name==='directory_version'))await d.prepare("ALTER TABLE strategy_runs ADD COLUMN directory_version INTEGER NOT NULL DEFAULT 0").run();
- if(!columns.some(c=>c.name==='retry_queue'))await d.prepare("ALTER TABLE strategy_runs ADD COLUMN retry_queue TEXT NOT NULL DEFAULT '[]'").run();
- if(!columns.some(c=>c.name==='notification_sent_at'))await d.prepare("ALTER TABLE strategy_runs ADD COLUMN notification_sent_at TEXT").run();
- if(!columns.some(c=>c.name==='universe_total'))await d.prepare("ALTER TABLE strategy_runs ADD COLUMN universe_total INTEGER NOT NULL DEFAULT 0").run();
- if(!columns.some(c=>c.name==='screened_out'))await d.prepare("ALTER TABLE strategy_runs ADD COLUMN screened_out INTEGER NOT NULL DEFAULT 0").run();
- for(const name of ['quote_coverage','sec_requests','sec_success','sec_failed','fundamental_coverage'])if(!columns.some(c=>c.name===name))await d.prepare(`ALTER TABLE strategy_runs ADD COLUMN ${name} INTEGER NOT NULL DEFAULT 0`).run();
- const pushColumns=(await d.prepare("PRAGMA table_info(push_subscriptions)").all()).results as any[];
- if(!pushColumns.some(c=>c.name==='owner'))await d.prepare("ALTER TABLE push_subscriptions ADD COLUMN owner TEXT NOT NULL DEFAULT ''").run();
+ for(const [name,definition] of Object.entries({
+  directory_version:'directory_version INTEGER NOT NULL DEFAULT 0',
+  retry_queue:"retry_queue TEXT NOT NULL DEFAULT '[]'",
+  notification_sent_at:'notification_sent_at TEXT',
+  universe_total:'universe_total INTEGER NOT NULL DEFAULT 0',
+  screened_out:'screened_out INTEGER NOT NULL DEFAULT 0',
+  quote_coverage:'quote_coverage INTEGER NOT NULL DEFAULT 0',
+  sec_requests:'sec_requests INTEGER NOT NULL DEFAULT 0',
+  sec_success:'sec_success INTEGER NOT NULL DEFAULT 0',
+  sec_failed:'sec_failed INTEGER NOT NULL DEFAULT 0',
+  fundamental_coverage:'fundamental_coverage INTEGER NOT NULL DEFAULT 0',
+ }))await ensureColumn(d,'strategy_runs',name,definition);
+ await ensureColumn(d,'push_subscriptions','owner',"owner TEXT NOT NULL DEFAULT ''");
  const compacted=await d.prepare("SELECT id FROM diag WHERE stage='compact-history-v1' LIMIT 1").first();
  if(!compacted){
   await d.prepare("UPDATE fundamental_snapshots SET payload=json_remove(payload,'$.history') WHERE instr(payload,'\"history\"')>0").run();

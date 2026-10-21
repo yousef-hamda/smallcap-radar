@@ -51,13 +51,13 @@ export function reviewShareSplits(snapshot:Snapshot,events:{date:string;factor:n
  if(hasVerifiedShareRatio(snapshot))return snapshot;
  const shares=snapshot.provenance.shareCountRatio;
  if(!Array.isArray(events)||shares?.source!=='SEC reported share ratio; corporate actions unverified'||!shares.periodStart||!shares.periodEnd||!usableEvidence(shares,snapshot.asOf)||!usableEvidence(evidence,snapshot.asOf)||!yahooSplitEvidence(evidence))return snapshot;
+ if(!strictDate(coverageStart)||!strictDate(coverageEnd)||!strictDate(shares.periodStart)||!strictDate(shares.periodEnd)||coverageStart>coverageEnd)return snapshot;
  const start=Date.parse(shares.periodStart),end=Date.parse(shares.periodEnd);
  if(!Number.isFinite(start)||!Number.isFinite(end)||start>=end||!(Date.parse(coverageStart)<=start)||!(Date.parse(coverageEnd)>=end))return snapshot;
  if(!Number.isFinite(snapshot.shareCountRatio)||snapshot.shareCountRatio!<=0)return snapshot;
  const unique=new Map<string,number>();
  for(const event of events){
-  const date=Date.parse(event.date);
-  if(!Number.isFinite(date)||!Number.isFinite(event.factor)||event.factor<=0||date>Date.parse(snapshot.asOf))return snapshot;
+  if(!strictDate(event.date)||!Number.isFinite(event.factor)||event.factor<=0||!Number.isFinite(Date.parse(snapshot.asOf))||Date.parse(`${event.date}T00:00:00Z`)>Date.parse(snapshot.asOf))return snapshot;
   if(unique.has(event.date)&&unique.get(event.date)!==event.factor)return snapshot;
   unique.set(event.date,event.factor);
  }
@@ -72,6 +72,11 @@ export function reviewShareSplits(snapshot:Snapshot,events:{date:string;factor:n
 }
 export type OutcomeBar={date:string;close:number};
 export type CompletedSessionQuote={price:number;dailyChange:number;periodEnd:string};
+function strictDate(value:unknown):value is string {
+ if(typeof value!=='string'||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(value))return false;
+ const stamp=Date.parse(`${value}T00:00:00Z`);
+ return Number.isFinite(stamp)&&new Date(stamp).toISOString().slice(0,10)===value;
+}
 function dailyDate(value:string):number {
  if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(value))return NaN;
  const stamp=Date.parse(`${value}T00:00:00Z`);

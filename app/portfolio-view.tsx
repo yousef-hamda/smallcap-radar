@@ -53,6 +53,15 @@ const number = (value: number, digits = 4) => new Intl.NumberFormat('en-US', { m
 const post = (method: 'POST' | 'PUT' | 'DELETE', body: unknown) => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 const performanceRanges = { '1M': 31, '3M': 93, '6M': 186, '1Y': 366, MAX: Infinity } as const;
 
+export function portfolioCsvCell(value: unknown) {
+  const text = String(value ?? '');
+  // Spreadsheet apps may execute formulas even when a CSV cell is quoted.
+  // Prefix formula-like text (including cells with leading whitespace) so
+  // notes and company metadata remain plain text when the file is opened.
+  const safeText = typeof value === 'string' && /^[\s\u0000-\u001f\ufeff]*[=+\-@]/u.test(text) ? `'${text}` : text;
+  return `"${safeText.replaceAll('"', '""')}"`;
+}
+
 function CompanyLogo({ symbol, size = 44, eager = false }: { symbol: string; size?: number; eager?: boolean }) {
   const [failedFor, setFailedFor] = useState<string | null>(null);
   // Bump this when the resolver changes so a browser cannot keep an old
@@ -172,20 +181,36 @@ export default function PortfolioView({ onOpenCompany, onCountChange }: { onOpen
   const [dialogOpen, setDialogOpen] = useState(false), [detailLoading, setDetailLoading] = useState(false), [selected, setSelected] = useState<SearchResult | null>(null), [form, setForm] = useState<FormState>(emptyForm);
   const [deleteTransaction, setDeleteTransaction] = useState<PortfolioTransaction | null>(null);
   const companyRequest = useRef<AbortController | null>(null);
+  const portfolioRequest = useRef<AbortController | null>(null), historyRequest = useRef<AbortController | null>(null);
 
   const loadHistory = useCallback(async () => {
+    historyRequest.current?.abort();
+    const controller = new AbortController();
+    historyRequest.current = controller;
     setHistoryLoading(true);
-    try { setHistory(await apiJson<HistoryData>('/api/portfolio-history')); }
-    catch (error) { setError(error instanceof Error ? error.message : 'تعذّر تحميل تاريخ المحفظة.'); }
-    finally { setHistoryLoading(false); }
+    try { const value = await apiJson<HistoryData>('/api/portfolio-history', { signal: controller.signal }); if (!controller.signal.aborted) setHistory(value); }
+    catch (error) { if (!controller.signal.aborted) setError(error instanceof Error ? error.message : 'تعذّر تحميل تاريخ المحفظة.'); }
+    finally { if (!controller.signal.aborted) setHistoryLoading(false); }
   }, []);
   const refresh = useCallback(async (forceRefresh = false) => {
+    portfolioRequest.current?.abort();
+    const controller = new AbortController();
+    portfolioRequest.current = controller;
     setLoading(true);
-    try { const value = await apiJson<PortfolioData>(forceRefresh ? '/api/portfolio?refresh=1' : '/api/portfolio'); setData(value); onCountChange?.(value.positions.length); setError(''); if (value.transactions.length) void loadHistory(); else setHistory({ points: [], unavailable: [], incompleteSymbols: [], sources: [], asOf: value.asOf }); }
-    catch (error) { setError(error instanceof Error ? error.message : 'تعذّر تحميل المحفظة.'); }
-    finally { setLoading(false); }
+    try {
+      const value = await apiJson<PortfolioData>(forceRefresh ? '/api/portfolio?refresh=1' : '/api/portfolio', { signal: controller.signal });
+      if (controller.signal.aborted) return;
+      setData(value); onCountChange?.(value.positions.length); setError('');
+      if (value.transactions.length) void loadHistory();
+      else {
+        historyRequest.current?.abort(); historyRequest.current = null; setHistoryLoading(false);
+        setHistory({ points: [], unavailable: [], incompleteSymbols: [], sources: [], asOf: value.asOf });
+      }
+    }
+    catch (error) { if (!controller.signal.aborted) setError(error instanceof Error ? error.message : 'تعذّر تحميل المحفظة.'); }
+    finally { if (!controller.signal.aborted) setLoading(false); }
   }, [loadHistory, onCountChange]);
-  useEffect(() => { queueMicrotask(() => void refresh()); return () => companyRequest.current?.abort(); }, [refresh]);
+  useEffect(() => { queueMicrotask(() => void refresh()); return () => { companyRequest.current?.abort(); portfolioRequest.current?.abort(); historyRequest.current?.abort(); }; }, [refresh]);
   useEffect(() => {
     const hiddenAt = { value: null as number | null };
     const refreshWhenVisible = () => {
@@ -212,7 +237,7 @@ export default function PortfolioView({ onOpenCompany, onCountChange }: { onOpen
     companyRequest.current?.abort();
     const controller = new AbortController();
     companyRequest.current = controller;
-    setSelected(company); setForm({ ...emptyForm(), symbol: company.symbol, price: company.price ? String(company.price) : '' }); setDialogOpen(true); setDetailLoading(true); setQuery(''); setResults([]);
+    setSelected(company); setForm({ ...emptyForm(), symbol: company.symbol, price: company.price ? String(company.price) : '' }); setDialogOpen(true); setDetailLoading(true); setQuery(''); setResults([]); setSearching(false);
     try {
       const value = await apiJson<{ snapshot: Snapshot }>(`/api/company?symbol=${encodeURIComponent(company.symbol)}`, { signal: controller.signal });
       if (controller.signal.aborted) return;
@@ -230,7 +255,7 @@ export default function PortfolioView({ onOpenCompany, onCountChange }: { onOpen
     setSelected(null); setForm(emptyForm()); setQuery(''); setResults([]); setSearching(false); setDialogOpen(true);
   }
   async function saveTransaction(event: React.FormEvent) {
-    event.preventDefault(); setBusy(true); setError('');
+    event.preventDefault(); portfolioRequest.current?.abort(); portfolioRequest.current = null; setLoading(false); setBusy(true); setError('');
     try {
       const payload = { ...form, quantity: Number(form.quantity), price: Number(form.price), fees: Number(form.fees || 0) };
       const value = await apiJson<PortfolioData>('/api/portfolio', post(form.id ? 'PUT' : 'POST', payload));
@@ -240,7 +265,7 @@ export default function PortfolioView({ onOpenCompany, onCountChange }: { onOpen
   }
   async function removeTransaction() {
     if (!deleteTransaction) return;
-    setBusy(true); setError('');
+    portfolioRequest.current?.abort(); portfolioRequest.current = null; setLoading(false); setBusy(true); setError('');
     try { const value = await apiJson<PortfolioData>('/api/portfolio', post('DELETE', { id: deleteTransaction.id })); setData(value); onCountChange?.(value.positions.length); setDeleteTransaction(null); setNotice('حُذفت العملية وأُعيد حساب السجل كاملًا.'); void loadHistory(); }
     catch (error) { setError(error instanceof Error ? error.message : 'تعذّر حذف العملية.'); }
     finally { setBusy(false); }
@@ -252,7 +277,7 @@ export default function PortfolioView({ onOpenCompany, onCountChange }: { onOpen
   function exportCsv() {
     if (!data) return;
     const rows = [['symbol', 'company', 'side', 'quantity', 'price', 'fees', 'trade_date', 'note'], ...[...data.transactions].reverse().map(transaction => [transaction.symbol, transaction.companyName, transaction.side, transaction.quantity, transaction.price, transaction.fees, transaction.tradeDate, transaction.note || ''])];
-    const csv = '\ufeff' + rows.map(row => row.map(value => `"${String(value).replaceAll('"', '""')}"`).join(',')).join('\n');
+    const csv = '\ufeff' + rows.map(row => row.map(portfolioCsvCell).join(',')).join('\n');
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })), anchor = document.createElement('a'); anchor.href = url; anchor.download = `portfolio-${today()}.csv`; anchor.click(); URL.revokeObjectURL(url);
   }
   const editedTransaction = form.id ? data?.transactions.find(transaction => transaction.id === form.id) : null;
@@ -273,7 +298,7 @@ export default function PortfolioView({ onOpenCompany, onCountChange }: { onOpen
     {(error || notice) && <div className={`message ${error ? 'error' : ''}`} role={error ? 'alert' : 'status'}><span>{error || notice}</span><button aria-label="إغلاق الرسالة" onClick={() => { setError(''); setNotice(''); }}><X size={16}/></button></div>}
     <div className="portfolio-hero"><div><span className="portfolio-kicker"><BriefcaseBusiness size={17}/> محفظتي</span><h2>متابعة قراراتك، لا أسعارك فقط</h2><p>سجّل الشراء والبيع، ثم راقب العائد والتوزيع والتركيز من بياناتك الحقيقية.</p></div><div className="portfolio-hero-actions"><button className="portfolio-refresh" onClick={() => void refresh(true)} disabled={loading} aria-label="تحديث أسعار المحفظة"><RefreshCw size={17} className={loading ? 'spin' : ''}/> {loading ? 'جارٍ التحديث…' : 'تحديث الأسعار'}</button><button className="portfolio-export" onClick={exportCsv} disabled={!data?.transactions.length}><Download size={17}/> تصدير CSV</button><button className="scan-button" onClick={openNewTransaction}><Plus size={17}/> إضافة عملية</button></div></div>
 
-    <div className="portfolio-search"><Search size={19}/><input value={query} onChange={event => { const value = event.target.value; setQuery(value); if (!value.trim()) { setResults([]); setSearching(false); } }} placeholder="ابحث عن الشركة أو رمز السهم لإضافة عملية" aria-label="ابحث عن سهم لإضافته إلى المحفظة"/><span>{searching ? 'جارٍ البحث…' : query && !results.length ? 'لا نتائج' : ''}</span>{!!results.length && <div className="portfolio-search-results">{results.map(company => <button key={company.symbol} onClick={() => void chooseCompany(company)}><CompanyLogo symbol={company.symbol}/><span><b dir="ltr">{company.symbol}</b><small dir="auto">{company.name}</small></span><em>{[company.exchange,securityTypeLabel(company.securityType)].filter(Boolean).join(' · ') || 'سوق أمريكي'}</em></button>)}</div>}</div>
+    <div className="portfolio-search"><Search size={19}/><input value={query} onChange={event => { const value = event.target.value; setQuery(value); setResults([]); setSearching(!!value.trim()); }} placeholder="ابحث عن الشركة أو رمز السهم لإضافة عملية" aria-label="ابحث عن سهم لإضافته إلى المحفظة"/><span>{searching ? 'جارٍ البحث…' : query && !results.length ? 'لا نتائج' : ''}</span>{!!results.length && <div className="portfolio-search-results">{results.map(company => <button key={company.symbol} onClick={() => void chooseCompany(company)}><CompanyLogo symbol={company.symbol}/><span><b dir="ltr">{company.symbol}</b><small dir="auto">{company.name}</small></span><em>{[company.exchange,securityTypeLabel(company.securityType)].filter(Boolean).join(' · ') || 'سوق أمريكي'}</em></button>)}</div>}</div>
 
     {!data?.transactions.length ? <div className="portfolio-empty"><div className="empty-portfolio-icon"><BriefcaseBusiness/></div><h3>محفظتك فارغة</h3><p>ابحث عن أول شركة، أدخل عدد الأسهم وسعر الشراء والتاريخ، وسنبدأ حساب الأداء والتوزيع دون أرقام افتراضية.</p><button className="scan-button" onClick={openNewTransaction}><Plus size={17}/> إضافة أول عملية</button></div> : <>
       <div className="portfolio-metrics"><article><span>القيمة الحالية</span><strong dir="ltr">{usd(data.summary.marketValue)}</strong><small>{data.summary.missingQuoteCount ? `${data.summary.missingQuoteCount} مركز غير محسوب` : staleQuoteCount ? `${staleQuoteCount} سعر مؤرخ؛ راجع تاريخ السعر` : 'كل الأسعار حديثة'}</small></article><article className={data.summary.totalPnl >= 0 ? 'positive' : 'negative'}><span>الربح/الخسارة الكلية</span><strong dir="ltr">{usd(data.summary.totalPnl, true)}</strong><small dir="ltr">{pct(data.summary.totalReturnPct)}</small></article><article><span>غير المحقق</span><strong dir="ltr">{usd(data.summary.unrealizedPnl, true)}</strong><small>{data.summary.winners} رابحة · {data.summary.losers} خاسرة</small></article><article><span>المحقق من البيع</span><strong dir="ltr">{usd(data.summary.realizedPnl, true)}</strong><small>بعد العمولات المسجلة</small></article><article><span>تغير آخر جلسة</span><strong dir="ltr">{usd(data.summary.dailyPnl, true)}</strong><small>من المراكز ذات التغير المتاح</small></article></div>
@@ -286,7 +311,7 @@ export default function PortfolioView({ onOpenCompany, onCountChange }: { onOpen
     </>}
 
     <Dialog open={dialogOpen} onOpenChange={open => { setDialogOpen(open); if (!open) { companyRequest.current?.abort(); setDetailLoading(false); setSelected(null); setForm(emptyForm()); setQuery(''); setResults([]); setSearching(false); } }}><DialogContent className={`portfolio-dialog ${form.symbol ? 'has-form' : 'picker-dialog'}`} dir="rtl" showCloseButton={false}><DialogClose className="absolute top-4 left-4" aria-label="إغلاق نافذة العملية"><X size={20}/></DialogClose><DialogTitle>{form.id ? 'تعديل العملية' : form.symbol ? `إضافة ${form.side === 'buy' ? 'شراء' : 'بيع'}` : 'اختر الشركة'}</DialogTitle><DialogDescription>{form.symbol ? 'أدخل بيانات العملية كما تظهر في كشف الوسيط. الأرقام بالدولار الأمريكي.' : 'ابحث برمز السهم أو اسم الشركة، ثم اخترها من النتائج.'}</DialogDescription>
-      {!form.symbol ? <div className="dialog-search"><Search size={18}/><input autoFocus aria-label="ابحث عن شركة للعملية" value={query} onChange={event => { const value = event.target.value; setQuery(value); if (!value.trim()) { setResults([]); setSearching(false); } }} placeholder="مثال: SOFI أو Adobe"/>{!!results.length && <div className="portfolio-search-results in-dialog">{results.map(company => <button key={company.symbol} onClick={() => void chooseCompany(company)}><CompanyLogo symbol={company.symbol}/><span><b dir="ltr">{company.symbol}</b><small>{company.nameAr || company.name}</small></span></button>)}</div>}</div> : <form className="transaction-form" onSubmit={saveTransaction}><div className="transaction-company"><CompanyLogo symbol={form.symbol} size={52}/><div><b dir="ltr">{form.symbol}</b><p dir="auto">{selected?.nameAr || selected?.name || data?.quotes[form.symbol]?.nameAr || data?.quotes[form.symbol]?.name || form.symbol}</p><small>{detailLoading ? 'جارٍ تحديث بيانات الشركة…' : [selected?.exchange, selected?.sector].filter(Boolean).join(' · ')}</small></div></div><div className="side-toggle" role="group" aria-label="نوع العملية"><button type="button" aria-pressed={form.side === 'buy'} className={form.side === 'buy' ? 'active buy' : ''} onClick={() => setForm(value => ({ ...value, side: 'buy' }))}>شراء</button><button type="button" aria-pressed={form.side === 'sell'} className={form.side === 'sell' ? 'active sell' : ''} onClick={() => setForm(value => ({ ...value, side: 'sell' }))}>بيع</button></div>{form.side === 'sell' && <p className="available-shares">المتاح للبيع حاليًا: <b dir="ltr">{number(availableToSell)}</b> سهم</p>}<div className="form-grid"><label>عدد الأسهم<input required min="0.000001" step="any" inputMode="decimal" type="number" value={form.quantity} onChange={event => setForm(value => ({ ...value, quantity: event.target.value }))}/></label><label>السعر لكل سهم<input required min="0.000001" step="any" inputMode="decimal" type="number" value={form.price} onChange={event => setForm(value => ({ ...value, price: event.target.value }))}/></label><label>العمولة والرسوم<input min="0" step="any" inputMode="decimal" type="number" value={form.fees} onChange={event => setForm(value => ({ ...value, fees: event.target.value }))}/></label><label>تاريخ العملية<input required max={today()} type="date" value={form.tradeDate} onChange={event => setForm(value => ({ ...value, tradeDate: event.target.value }))}/></label></div><label>ملاحظة اختيارية<textarea maxLength={500} value={form.note} onChange={event => setForm(value => ({ ...value, note: event.target.value }))} placeholder="سبب الدخول، رقم الأمر، أو ملاحظة للمراجعة"/></label><div className="transaction-preview"><span>{form.side === 'buy' ? 'تكلفة العملية' : 'صافي البيع قبل حساب تكلفة المركز'}</span><b dir="ltr">{usd((Number(form.quantity) || 0) * (Number(form.price) || 0) + (form.side === 'buy' ? 1 : -1) * (Number(form.fees) || 0))}</b></div><button className="scan-button save-transaction" disabled={busy || !form.quantity || !form.price}>{busy ? 'جارٍ الحفظ…' : 'حفظ وإعادة الحساب'}</button></form>}
+      {!form.symbol ? <div className="dialog-search"><Search size={18}/><input autoFocus aria-label="ابحث عن شركة للعملية" value={query} onChange={event => { const value = event.target.value; setQuery(value); setResults([]); setSearching(!!value.trim()); }} placeholder="مثال: SOFI أو Adobe"/>{!!results.length && <div className="portfolio-search-results in-dialog">{results.map(company => <button key={company.symbol} onClick={() => void chooseCompany(company)}><CompanyLogo symbol={company.symbol}/><span><b dir="ltr">{company.symbol}</b><small>{company.nameAr || company.name}</small></span></button>)}</div>}</div> : <form className="transaction-form" onSubmit={saveTransaction}><div className="transaction-company"><CompanyLogo symbol={form.symbol} size={52}/><div><b dir="ltr">{form.symbol}</b><p dir="auto">{selected?.nameAr || selected?.name || data?.quotes[form.symbol]?.nameAr || data?.quotes[form.symbol]?.name || form.symbol}</p><small>{detailLoading ? 'جارٍ تحديث بيانات الشركة…' : [selected?.exchange, selected?.sector].filter(Boolean).join(' · ')}</small></div></div><div className="side-toggle" role="group" aria-label="نوع العملية"><button type="button" aria-pressed={form.side === 'buy'} className={form.side === 'buy' ? 'active buy' : ''} onClick={() => setForm(value => ({ ...value, side: 'buy' }))}>شراء</button><button type="button" aria-pressed={form.side === 'sell'} className={form.side === 'sell' ? 'active sell' : ''} onClick={() => setForm(value => ({ ...value, side: 'sell' }))}>بيع</button></div>{form.side === 'sell' && <p className="available-shares">المتاح للبيع حاليًا: <b dir="ltr">{number(availableToSell)}</b> سهم</p>}<div className="form-grid"><label>عدد الأسهم<input required min="0.000001" step="any" inputMode="decimal" type="number" value={form.quantity} onChange={event => setForm(value => ({ ...value, quantity: event.target.value }))}/></label><label>السعر لكل سهم<input required min="0.000001" step="any" inputMode="decimal" type="number" value={form.price} onChange={event => setForm(value => ({ ...value, price: event.target.value }))}/></label><label>العمولة والرسوم<input min="0" step="any" inputMode="decimal" type="number" value={form.fees} onChange={event => setForm(value => ({ ...value, fees: event.target.value }))}/></label><label>تاريخ العملية<input required max={today()} type="date" value={form.tradeDate} onChange={event => setForm(value => ({ ...value, tradeDate: event.target.value }))}/></label></div><label>ملاحظة اختيارية<textarea maxLength={500} value={form.note} onChange={event => setForm(value => ({ ...value, note: event.target.value }))} placeholder="سبب الدخول، رقم الأمر، أو ملاحظة للمراجعة"/></label><div className="transaction-preview"><span>{form.side === 'buy' ? 'تكلفة العملية' : 'صافي البيع قبل حساب تكلفة المركز'}</span><b dir="ltr">{usd((Number(form.quantity) || 0) * (Number(form.price) || 0) + (form.side === 'buy' ? 1 : -1) * (Number(form.fees) || 0))}</b></div><button className="scan-button save-transaction" disabled={busy || !form.quantity || !form.price}>{busy ? 'جارٍ الحفظ…' : 'حفظ وإعادة الحساب'}</button></form>}
     </DialogContent></Dialog>
 
     <AlertDialog open={!!deleteTransaction} onOpenChange={open => { if (!open) setDeleteTransaction(null); }}><AlertDialogContent dir="rtl"><AlertDialogHeader><AlertDialogTitle>حذف عملية {deleteTransaction?.symbol}؟</AlertDialogTitle><AlertDialogDescription>سيُعاد حساب كل المراكز والأرباح من السجل المتبقي. لن يتم الحذف إذا أدى إلى بيع أسهم أكثر من الرصيد.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>إلغاء</AlertDialogCancel><AlertDialogAction onClick={() => void removeTransaction()} disabled={busy}>حذف العملية</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>

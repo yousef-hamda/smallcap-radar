@@ -72,7 +72,7 @@ export default function RadarApp(){
    releaseRef.current=payload.release??null;setData(payload);if(version===favoriteVersion.current&&!favoritePending.current)setFavorites(payload.favorites);setPortfolioCount(payload.portfolioCount??0);setHasMore(payload.page.hasMore);cursor.current=offset+snapshots.length;setListError('');setError('');
    if(view!=='portfolio'){
     setRatedRows(old=>append?[...old,...pageRows.filter(row=>!old.some(previous=>previous.s.symbol===row.s.symbol))]:pageRows);
-    void saveOffline({savedAt:new Date().toISOString(),run:payload.dataRun,release:payload.release,snapshots:payload.snapshots,evaluations:payload.storedEvaluations,ranks:payload.rankPositions}).catch(()=>{});
+    void saveOffline({savedAt:new Date().toISOString(),view,query:search,offset,pageSize:40,hasMore:payload.page.hasMore,run:payload.dataRun,release:payload.release,snapshots:payload.snapshots,evaluations:payload.storedEvaluations,ranks:payload.rankPositions}).catch(()=>{});
     if(!append)setCardQuotes({});
     if(snapshots.length){
      // A slow market-data provider must never hold the saved list hostage.
@@ -177,10 +177,8 @@ export default function RadarApp(){
   setSearch(query.trim());
   if(!/^[A-Za-z][A-Za-z0-9.^-]{0,15}$/.test(query.trim()))return;
   const found=ratedRows.find(row=>row.s.symbol===query.trim().toUpperCase());if(found){await openCompany(found.s);return;}
-  selection.current?.abort();const controller=new AbortController();selection.current=controller;
-  setBusy(true);setError('');
-   try{const p=await request<{snapshot:Snapshot;evaluation:OpportunityEvaluation;profileDescription?:ProfileDescription|null;stale?:boolean;chartHistory?:{stale:boolean;availableAt:string}|null;historyUnavailable?:boolean}>(`/api/company?symbol=${encodeURIComponent(query.trim().toUpperCase())}&includeHistory=1`,{signal:controller.signal});if(!controller.signal.aborted){if(!p.stale)syncCardQuote(p.snapshot);setSelected(p.snapshot);setSelectedOpportunity(canonicalRating(p.snapshot,p.evaluation));setProfileDescription(p.profileDescription??null);setDetailError(p.stale?'تعذّر تحديث بيانات الشركة؛ هذه نسخة محفوظة بتاريخ سابق.':p.chartHistory?.stale?`تعذّر تحديث الرسم السعري؛ عُرض آخر تاريخ محفوظ حتى ${p.chartHistory.availableAt.slice(0,10)}.`:p.historyUnavailable?'تعذّر جلب التاريخ السعري الآن؛ أعد المحاولة.':'');setDetailLoading(false);}}
-  catch(e){if(!controller.signal.aborted)setError(e instanceof Error?e.message:'لا توجد بيانات لهذا الرمز')}finally{setBusy(false)}
+  const symbol=query.trim().toUpperCase();
+  await openCompany({symbol,name:symbol,asOf:new Date().toISOString(),provenance:{}});
  }
  async function notifications(testOnly=false){
   setNotificationBusy(true);setError('');

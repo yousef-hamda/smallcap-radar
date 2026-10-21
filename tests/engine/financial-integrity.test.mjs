@@ -144,6 +144,17 @@ test('unreviewed splits cannot earn alignment or dilution-protection points',()=
  s.splitAdjusted=false;assert.equal(factor(s,'management').score,0);
 });
 
+test('malformed corporate-action dates cannot verify or alter a reported share ratio',()=>{
+ const s=base();s.splitAdjusted=false;s.shareCountRatio=1.2;s.dilution=.2;
+ const raw={...source('2025-06-30','2026-06-30'),source:'SEC reported share ratio; corporate actions unverified'};
+ const yahoo={...source(undefined,'2026-10-02'),source:'Yahoo Finance chart API · split-adjusted daily history and split events',url:'https://query1.finance.yahoo.com/v8/finance/chart/SYNTH?events=div%2Csplits'};
+ s.provenance.shareCountRatio=raw;s.provenance.dilution=raw;
+ const invalidEvent=reviewShareSplits(s,[{date:'2026-02-30',factor:4}],'2025-06-01','2026-10-02',yahoo);
+ assert.equal(invalidEvent.splitAdjusted,false);assert.equal(invalidEvent.shareCountRatio,1.2);
+ const invalidCoverage=reviewShareSplits(s,[],'2025-02-30','2026-10-02',yahoo);
+ assert.equal(invalidCoverage.splitAdjusted,false);assert.equal(invalidCoverage.shareCountRatio,1.2);
+});
+
 test('every security type retains eight bounded grades without inheriting common-share valuation',()=>{
  for(const securityType of ['common','adr','preferred','warrant','right','unit','fund','debt','unknown']){
   const result=evaluateOpportunity({...base(),securityType});assert.equal(result.state,'ranked');assert.equal(result.rankingEligible,true);

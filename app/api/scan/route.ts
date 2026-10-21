@@ -5,6 +5,7 @@ export async function POST(request: Request) {
   try {
     sameOrigin(request);
     const input = await body(request,8_000);
+    if(!input||typeof input!=='object'||Array.isArray(input))return json({error:'الطلب غير صالح'},400);
     if (input.action === 'start') return json({ run: await startScan(input.mode) });
     if (input.action === 'step' && typeof input.runId === 'string') return json(await processScanBatch(input.runId));
     return json({ error: 'عملية غير صالحة' }, 400);

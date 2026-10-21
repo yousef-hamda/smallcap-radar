@@ -37,8 +37,13 @@ async function commitAtRevision(owner:string,revision:number,mutation:any){
 }
 
 function assertDate(date: string) {
-  const parsed = Date.parse(`${date}T12:00:00Z`);
-  if (!Number.isFinite(parsed)) throw Object.assign(Error('تاريخ العملية غير صالح.'), { status: 400 });
+  // Date.parse normalizes impossible calendar dates (for example, February 31)
+  // into a date in the following month. Validate the calendar components
+  // before comparing the date against supported bounds.
+  const parsed = new Date(`${date}T12:00:00.000Z`);
+  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date) {
+    throw Object.assign(Error('تاريخ العملية غير صالح.'), { status: 400 });
+  }
   if (date > new Date().toISOString().slice(0, 10)) throw Object.assign(Error('لا يمكن حفظ عملية بتاريخ مستقبلي.'), { status: 400 });
   if (date < '1970-01-01') throw Object.assign(Error('تاريخ العملية أقدم من النطاق المدعوم.'), { status: 400 });
 }

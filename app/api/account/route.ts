@@ -28,8 +28,13 @@ export async function POST(request: Request) {
     sameOrigin(request);
     await ensureSchema();
     const payload = await body(request, 20_000) as { action?: unknown; username?: unknown; password?: unknown };
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return json({ error: 'الطلب غير صالح.' }, 400);
     const action = String(payload.action || '');
-    const username = String(payload.username || '').trim();
+    const submittedUsername = String(payload.username || '').trim();
+    // Usernames are looked up case-insensitively. Store the same canonical
+    // spelling so SQLite's case-sensitive UNIQUE constraint cannot admit
+    // differently cased duplicates.
+    const username = submittedUsername.toLowerCase();
     const password = String(payload.password || '');
     const identity = await resolveVisitor(request);
 
@@ -47,8 +52,16 @@ export async function POST(request: Request) {
       const existing = await db().prepare('SELECT id FROM radar_accounts WHERE lower(username)=lower(?)').bind(username).first();
       if (existing) return json({ error: 'اسم المستخدم مستخدم بالفعل.' }, 409);
       const id = crypto.randomUUID(), now = new Date().toISOString(), credentials = await hashPassword(password);
-      await db().prepare('INSERT INTO radar_accounts(id,username,password_salt,password_hash,created_at,updated_at) VALUES(?,?,?,?,?,?)')
-        .bind(id, username, credentials.salt, credentials.hash, now, now).run();
+      try {
+        await db().prepare('INSERT INTO radar_accounts(id,username,password_salt,password_hash,created_at,updated_at) VALUES(?,?,?,?,?,?)')
+          .bind(id, username, credentials.salt, credentials.hash, now, now).run();
+      } catch (error) {
+        // The preflight check above is for a useful common-case response; the
+        // unique constraint remains the concurrency-safe authority.
+        const existing = await db().prepare('SELECT id FROM radar_accounts WHERE lower(username)=lower(?)').bind(username).first();
+        if (existing) return json({ error: 'اسم المستخدم مستخدم بالفعل.' }, 409);
+        throw error;
+      }
       account = { id, username };
     } else {
       account = await db().prepare('SELECT id,username,password_salt,password_hash FROM radar_accounts WHERE lower(username)=lower(?)').bind(username).first() as any;

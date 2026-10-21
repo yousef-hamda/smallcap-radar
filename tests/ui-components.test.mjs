@@ -399,7 +399,7 @@ test('opportunity report uses the unified evaluation and factor blockers',async(
 test('opening a profile synchronizes its completed-session quote back into the visible card',async()=>{
  const source=await readFile(path.join(root,'app/page.tsx'),'utf8');
  assert.match(source,/function syncCardQuote\(profile:Snapshot\)/);
- assert.match(source,/syncCardQuote\(p\.snapshot\);setSelected\(p\.snapshot\)/);
+ assert.match(source,/syncCardQuote\(p\.snapshot\);setSelected\(previous=>previous\?\.symbol===p\.snapshot\.symbol\?mergeRecentQuote\(p\.snapshot,previous\):p\.snapshot\)/);
  assert.match(source,/ratedRows\.slice\(0,80\).*favorite-quotes/s);
  assert.match(source,/setCardQuotes\(current=>\(\{\.\.\.current,\.\.\.payload\.quotes\}\)\)/);
 });
@@ -426,6 +426,32 @@ test('a failed first portfolio fetch shows retry instead of claiming the wallet 
  const source=await readFile(path.join(root,'app/portfolio-view.tsx'),'utf8');
  assert.match(source,/if \(!data\) return <div className="portfolio-loading" role="alert"/);
  assert.match(source,/onClick=\{\(\) => void refresh\(\)\}>إعادة المحاولة/);
+});
+
+test('portfolio search clears stale results and aborts superseded account reads',async()=>{
+ const source=await readFile(path.join(root,'app/portfolio-view.tsx'),'utf8');
+ assert.match(source,/setQuery\(value\); setResults\(\[\]\); setSearching\(!!value\.trim\(\)\)/);
+ assert.match(source,/portfolioRequest\.current\?\.abort\(\)/);
+ assert.match(source,/apiJson<PortfolioData>\([^;]+\{ signal: controller\.signal \}\)/);
+ assert.match(source,/historyRequest\.current\?\.abort\(\)/);
+ assert.match(source,/if \(controller\.signal\.aborted\) return;/);
+});
+
+test('direct ticker lookup opens the same loading and retryable profile flow as a ranked row',async()=>{
+ const source=await readFile(path.join(root,'app/page.tsx'),'utf8');
+ assert.match(source,/await openCompany\(\{symbol,name:symbol,asOf:new Date\(\)\.toISOString\(\),provenance:\{\}\}\)/);
+ assert.match(source,/setSelected\(s\);setSelectedOpportunity\(ratedRows\.find/);
+ assert.match(source,/setDetailLoading\(true\);setDetailError\(''\)/);
+});
+
+test('offline snapshot labels saved view, search, page and remaining results',async()=>{
+ const [page,offline]=await Promise.all([readFile(path.join(root,'app/page.tsx'),'utf8'),readFile(path.join(root,'public/offline.html'),'utf8')]);
+ assert.match(page,/saveOffline\(\{savedAt:new Date\(\)\.toISOString\(\),view,query:search,offset,pageSize:40,hasMore:payload\.page\.hasMore/);
+ assert.match(offline,/d\.view==='favorites'\?'المفضلة':d\.view==='opportunity'\?'قائمة الفرص':'القائمة'/);
+ assert.match(offline,/const query=d\.query\?' · البحث: '\+d\.query:''/);
+ assert.match(offline,/توجد نتائج أخرى لم تُحفظ في هذه اللقطة/);
+ assert.match(offline,/textContent=/);
+ assert.doesNotMatch(offline,/innerHTML/);
 });
 
 test('portfolio quote refresh does not write display quotes into the database',async()=>{
@@ -542,4 +568,13 @@ test('portfolio logo source uses the verified public stock-logo endpoint',async(
  assert.match(view,/\/api\/portfolio-logo\?symbol=\$\{encodeURIComponent\(symbol\)\}/);
  assert.match(view,/logoVersion = '5'/);
  assert.match(view,/loading=\{eager \? 'eager' : 'lazy'\}/);
+});
+
+test('portfolio CSV export neutralizes spreadsheet formulas in text cells',async()=>{
+ const {portfolioCsvCell}=await vite.ssrLoadModule('/app/portfolio-view.tsx');
+ assert.equal(portfolioCsvCell('=HYPERLINK("https://evil.test")'), `"'=HYPERLINK(""https://evil.test"")"`);
+ assert.equal(portfolioCsvCell('  @SUM(A1:A2)'), `"'  @SUM(A1:A2)"`);
+ assert.equal(portfolioCsvCell('\ufeff+CMD'), `"'\ufeff+CMD"`);
+ assert.equal(portfolioCsvCell('plain "quoted" note'), `"plain ""quoted"" note"`);
+ assert.equal(portfolioCsvCell(-12.5), `"-12.5"`);
 });

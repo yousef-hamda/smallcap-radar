@@ -44,6 +44,7 @@ export async function GET(req:Request){
 export async function POST(req:Request){
  try {
   sameOrigin(req);await ensureSchema();const b=await body(req);
+  if(!b||typeof b!=='object'||Array.isArray(b))return json({error:'الطلب غير صالح'},400);
   if(b.action==='favorite'){
    if(typeof b.symbol!=='string'||!/^[A-Z0-9.^-]{1,16}$/.test(b.symbol)||typeof b.saved!=='boolean')return json({error:'رمز أو حالة حفظ غير صالحة'},400);
    const identity=await resolveVisitor(req);

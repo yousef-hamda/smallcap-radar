@@ -15,7 +15,7 @@ import {processScanBatch,startScan,historyCandidate,preliminaryCandidates} from 
 import {decodeHistoryCache} from '../../.test-build/history-cache.mjs';
 import {hasVerifiedShareRatio} from '../../.test-build/research.mjs';
 import {GET,POST} from '../../.test-build/radar-api.mjs';
-import {GET as recoverGET} from '../../.test-build/recover-api.mjs';
+import {GET as recoverGET,POST as recoverPOST} from '../../.test-build/recover-api.mjs';
 import {GET as reportGET} from '../../.test-build/scan-report-api.mjs';
 import {GET as companyGET} from '../../.test-build/company-api.mjs';
 import {GET as exportGET} from '../../.test-build/export-api.mjs';
@@ -50,6 +50,18 @@ test('qualitative opportunity proxies produce auditable bounded grades without c
  assert.equal(evidence.valuation.coveragePct,25);assert.equal(evidence.valuation.confidence,'low');
 });
 test('an empty database is not mislabeled as a stale snapshot',async()=>{const state=await readState({strategy:'opportunity'});assert.equal(state.dataRun,null);assert.equal(state.summary.stale,false);});
+test('schema initialization tolerates another isolate winning a conditional column migration',async()=>{
+ await db().prepare('ALTER TABLE strategy_runs DROP COLUMN directory_version').run();
+ await db().prepare('ALTER TABLE push_subscriptions DROP COLUMN owner').run();
+ const original=runtimeEnv.DB,targets=new Map([['ALTER TABLE strategy_runs ADD COLUMN directory_version INTEGER NOT NULL DEFAULT 0','directory_version'],["ALTER TABLE push_subscriptions ADD COLUMN owner TEXT NOT NULL DEFAULT ''",'owner']]);
+ runtimeEnv.DB={prepare(sql){if(targets.has(sql))return{run:async()=>{await original.prepare(sql).run();throw Error(`duplicate column name: ${targets.get(sql)}`)}};return original.prepare(sql)},batch:statements=>original.batch(statements)};
+ try{
+  const cold=await import(`../../.test-build/storage.mjs?concurrent-migration=${Date.now()}`);
+  await cold.ensureSchema();
+  assert((await db().prepare('PRAGMA table_info(strategy_runs)').all()).results.some(column=>column.name==='directory_version'));
+  assert((await db().prepare('PRAGMA table_info(push_subscriptions)').all()).results.some(column=>column.name==='owner'));
+ }finally{runtimeEnv.DB=original;}
+});
 test('a running scan with partial rows does not replace the last completed full scan across rubric versions',async()=>{
  const old='2200-01-01T00:00:00.000Z',active='2201-01-01T00:00:00.000Z';
  await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES('prior-complete',?,?,'complete','Bulk Quotes/SEC Frames · full',1,1,13,'prior-rubric')").bind(old,old).run();
@@ -150,12 +162,22 @@ test('saving a favorite resolves the latest v15 company cache before older profi
  const saved=await db().prepare('SELECT payload FROM personal_watchlist WHERE symbol=?').bind('V11FAV').first();assert.equal(JSON.parse(saved.payload).name,'configured-cache');assert.equal(JSON.parse(saved.payload).opportunityResearch.earnings.providerStatus,'unavailable');await db().prepare('DELETE FROM personal_watchlist WHERE symbol=?').bind('V11FAV').run();await db().prepare("DELETE FROM raw_cache WHERE key='deep:v21:V11FAV'").run();
 });
 test('protected recovery restores one durable run and a one-time favorite claim',async()=>{
- const claimToken='a'.repeat(48),origin='https://example.test';
+ const claimToken='a'.repeat(48),origin='https://example.test',visitorId='12345678-1234-4234-8234-123456789abc',cookie=`radar-visitor=${visitorId}`,owner=`visitor:${visitorId}`;
  const unauthorized=await POST(new Request(`${origin}/api/radar`,{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({action:'restore',records:[base],final:true})}));assert.equal(unauthorized.status,401);
- const restored=await POST(new Request(`${origin}/api/radar`,{method:'POST',headers:{origin,'content-type':'application/json','x-radar-recovery':'TEST-ONLY-RECOVERY-SECRET'},body:JSON.stringify({action:'restore',records:[base],final:true,claimToken,favoriteSymbols:[base.symbol]})}));assert.equal(restored.status,200);assert.equal((await restored.json()).recovered,1);
- const claimed=await recoverGET(new Request(`${origin}/api/recover?token=${claimToken}`));assert.equal(claimed.status,302);assert.match(claimed.headers.get('set-cookie')||'',/radar-visitor=/);
- assert.equal(sqlite.prepare('SELECT COUNT(*) AS count FROM personal_watchlist').get().count,1);
- assert.equal((await recoverGET(new Request(`${origin}/api/recover?token=${claimToken}`))).status,410);
+ const archived={...base,symbol:'RECOVER-ARCHIVED',name:'Archived recovery fixture'};
+ const restored=await POST(new Request(`${origin}/api/radar`,{method:'POST',headers:{origin,'content-type':'application/json','x-radar-recovery':'TEST-ONLY-RECOVERY-SECRET'},body:JSON.stringify({action:'restore',records:[base,archived],final:true,claimToken,favoriteSymbols:[base.symbol,archived.symbol]})}));assert.equal(restored.status,200);const restoreResult=await restored.json();assert.equal(restoreResult.recovered,2);
+ const archivedRow=await db().prepare('SELECT id,payload,evaluation FROM fundamental_snapshots WHERE run_id=? AND symbol=?').bind(restoreResult.runId,archived.symbol).first();await db().batch(await archivedWriteStatements(archivedRow.id,archivedRow.payload,archivedRow.evaluation));
+ await db().prepare('INSERT INTO personal_watchlist(owner,symbol,created_at,payload) VALUES(?,?,?,?)').bind(owner,base.symbol,'2000-01-01','{"symbol":"ORIGINAL-FAVORITE","name":"Saved before recovery"}').run();
+ // Seed the per-owner radar response cache before the recovery mutation.
+ await GET(new Request(`${origin}/api/radar`,{headers:{cookie}}));
+ const claimedBefore=sqlite.prepare('SELECT COUNT(*) AS count FROM recovery_bundles WHERE claimed_at IS NOT NULL').get().count;
+ const link=await recoverGET(new Request(`${origin}/api/recover?token=${claimToken}`));assert.equal(link.status,200);assert.match(await link.text(),/method="post"/);assert.equal(sqlite.prepare('SELECT COUNT(*) AS count FROM recovery_bundles WHERE claimed_at IS NOT NULL').get().count,claimedBefore);
+ const claimed=await recoverPOST(new Request(`${origin}/api/recover`,{method:'POST',headers:{origin,'content-type':'application/x-www-form-urlencoded',cookie},body:`token=${claimToken}`}));assert.equal(claimed.status,302);assert.equal(claimed.headers.get('cache-control'),'no-store');
+ assert.deepEqual((await (await GET(new Request(`${origin}/api/radar`,{headers:{cookie}}))).json()).favorites.sort(),[archived.symbol,base.symbol].sort());
+ const originalFavorite=JSON.parse(sqlite.prepare('SELECT payload FROM personal_watchlist WHERE owner=? AND symbol=?').get(owner,base.symbol).payload);assert.equal(originalFavorite.name,'Saved before recovery');
+ const recoveredFavorite=JSON.parse(sqlite.prepare('SELECT payload FROM personal_watchlist WHERE owner=? AND symbol=?').get(owner,archived.symbol).payload);assert.equal(recoveredFavorite.name,archived.name);assert(!recoveredFavorite.__archiveId);
+ assert.equal((await recoverPOST(new Request(`${origin}/api/recover`,{method:'POST',headers:{origin,'content-type':'application/x-www-form-urlencoded',cookie},body:`token=${claimToken}`}))).status,410);
+ await db().prepare('DELETE FROM personal_watchlist WHERE owner=?').bind(owner).run();await db().prepare('DELETE FROM fundamental_snapshots WHERE run_id=?').bind(restoreResult.runId).run();await db().prepare('DELETE FROM strategy_runs WHERE id=?').bind(restoreResult.runId).run();invalidateStateCache();
 });
 test('JSON body parsing enforces the byte limit even without Content-Length',async()=>{
  const stream=new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode('{"value":"'));controller.enqueue(new Uint8Array(32).fill(97));controller.enqueue(new TextEncoder().encode('"}'));controller.close();}});
@@ -202,6 +224,20 @@ test('account sync moves anonymous wallet data and keeps it available on another
  const accountId=sqlite.prepare('SELECT id FROM radar_accounts WHERE username=?').get('sync-test-user').id,owner=`account:${accountId}`;
  assert.equal(sqlite.prepare('SELECT COUNT(*) AS count FROM portfolio_transactions WHERE owner=?').get(owner).count,1);assert.equal(sqlite.prepare('SELECT COUNT(*) AS count FROM personal_watchlist WHERE owner=?').get(owner).count,1);
  const secondDevice=await accountGET(new Request(`${origin}/api/account`,{headers:{cookie:session}}));assert.equal(secondDevice.status,200);assert.equal((await secondDevice.json()).account.username,'sync-test-user');
+});
+test('account usernames are canonical and duplicate signup races return a conflict',async()=>{
+ const origin='https://radar.test',signup=(username)=>accountPOST(new Request(`${origin}/api/account`,{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({action:'signup',username,password:'strong-password-123'})}));
+ const results=await Promise.all([signup('Case-Unique-User'),signup('case-unique-user')]);
+ assert.deepEqual(results.map(response=>response.status).sort(),[200,409]);
+ assert.equal(sqlite.prepare('SELECT COUNT(*) AS count FROM radar_accounts WHERE lower(username)=lower(?)').get('case-unique-user').count,1);
+ const login=await accountPOST(new Request(`${origin}/api/account`,{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({action:'login',username:'CASE-UNIQUE-USER',password:'strong-password-123'})}));
+ assert.equal(login.status,200);assert.equal((await login.json()).account.username,'case-unique-user');
+});
+test('account session database failures return a service error instead of anonymous identity',async()=>{
+ const originalPrepare=runtimeEnv.DB.prepare;
+ runtimeEnv.DB.prepare=sql=>{if(String(sql).includes('FROM radar_sessions s JOIN radar_accounts'))throw Error('Injected session database outage');return originalPrepare(sql);};
+ try{const response=await accountGET(new Request('https://radar.test/api/account',{headers:{cookie:'radar-session=valid-looking-token'}}));assert.equal(response.status,503);}
+ finally{runtimeEnv.DB.prepare=originalPrepare;}
 });
 test('portfolio average cost, partial sale, fees and realized profit are deterministic',()=>{
  const tx=(id,side,quantity,price,fees,tradeDate)=>({id,symbol:'TEST',companyName:'Synthetic',side,quantity,price,fees,tradeDate,createdAt:`${tradeDate}T12:00:00Z`,updatedAt:`${tradeDate}T12:00:00Z`});
@@ -289,6 +325,13 @@ test('API rejects cross-origin and malformed favorite writes',async()=>{
  const cross=await POST(new Request('https://radar.test/api/radar',{method:'POST',headers:{origin:'https://other.test'},body:'{}'}));assert.equal(cross.status,403);
  const invalid=await POST(new Request('https://radar.test/api/radar',{method:'POST',headers:{origin:'https://radar.test'},body:JSON.stringify({action:'favorite',symbol:'BAD!',saved:true})}));assert.equal(invalid.status,400);
 });
+test('JSON object endpoints reject null payloads as client errors',async()=>{
+ const origin='https://radar.test';
+ const radar=await POST(new Request(`${origin}/api/radar`,{method:'POST',headers:{origin,'content-type':'application/json'},body:'null'}));assert.equal(radar.status,400);
+ const account=await accountPOST(new Request(`${origin}/api/account`,{method:'POST',headers:{origin,'content-type':'application/json'},body:'null'}));assert.equal(account.status,400);
+ const start=await worker.fetch(new Request(`${origin}/api/background-scan/start`,{method:'POST',headers:{origin,'content-type':'application/json'},body:'null'}),{}, {waitUntil:()=>{}});assert.equal(start.status,400);
+ const baton=await worker.fetch(new Request(`${origin}/__radar-background`,{method:'POST',headers:{'X-Radar-Background':'capacity-secret','content-type':'application/json'},body:'null'}),{BACKGROUND_SCAN_SECRET:'capacity-secret'}, {waitUntil:()=>{}});assert.equal(baton.status,400);
+});
 test('radar cards reuse the canonical completed-session value from a refreshed profile',async()=>{
  const owner='overlay-owner',now=new Date().toISOString(),snapshot={...base,symbol:'CANONICAL',price:5,dailyChange:-.02,provenance:{...base.provenance,price:{...base.provenance.price,tag:'Yahoo bulk quote live'},dailyChange:{...base.provenance.price,tag:'Yahoo bulk quote live'}}},deep={...snapshot,asOf:now,price:12,dailyChange:.25,provenance:{...snapshot.provenance,price:{...base.provenance.price,tag:'last completed session close'},dailyChange:{...base.provenance.price,tag:'last completed close / previous completed close - 1'}}};
  await db().prepare('INSERT INTO personal_watchlist(owner,symbol,created_at,payload) VALUES(?,?,?,?)').bind(owner,'CANONICAL',now,JSON.stringify(snapshot)).run();
@@ -321,6 +364,8 @@ test('portfolio API persists isolated trades, validates balances and supports up
  const call=(handler,method,body,origin='https://radar.test')=>handler(new Request('https://radar.test/api/portfolio',{method,headers:{origin,cookie,'content-type':'application/json'},body:JSON.stringify(body)}));
  const buy={symbol:'TEST',side:'buy',quantity:10,price:10,fees:1,tradeDate:'2026-01-01',note:'synthetic test'};
  const saved=await call(portfolioPOST,'POST',buy);assert.equal(saved.status,200);const savedPayload=await saved.json();assert.equal(savedPayload.positions[0].quantity,10);assert.equal(savedPayload.positions[0].averageCost,10.1);
+ assert.equal((await call(portfolioPOST,'POST',{...buy,tradeDate:'2026-02-31'})).status,400);
+ assert.equal((await call(portfolioPUT,'PUT',{...buy,id:savedPayload.transactions[0].id,tradeDate:'2026-02-31'})).status,400);
  assert(!('snapshot' in savedPayload.quotes.TEST));assert(JSON.stringify(savedPayload).length<200000);
  const stranger=await portfolioGET(new Request('https://radar.test/api/portfolio'));assert.deepEqual((await stranger.json()).transactions,[]);
  const oversell=await call(portfolioPOST,'POST',{...buy,side:'sell',quantity:11,price:12,tradeDate:'2026-01-02'});assert.equal(oversell.status,409);
@@ -558,6 +603,17 @@ test('SEC research stage resumes across eight-row pages and records a stable 403
   const final=await processScanBatch('sec-403-pages');assert.equal(final.done,true);assert.equal(final.run.stage,13);assert.equal(final.run.status,'partial');assert.equal(final.run.retryPending,0);assert.equal(final.run.sec_failed,9);assert.equal(final.run.sec_requests,18);assert.equal(opportunityCalls,9);assert.match(final.run.error,/SEC/);
  }finally{setOpportunityResearchResult({providerStatus:'retrieved',retryable:false});}
 });
+test('terminal SEC failures from an earlier page remain visible in the final scan status',async()=>{
+ const now=new Date().toISOString(),companies=Array.from({length:9},(_,index)=>({ticker:`SEC-MIXED-${index}`,cik:3000+index}));
+ await db().prepare('INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,strategy_hash) VALUES(?,?,?,?,?,?,?,?,?)').bind('sec-mixed-pages',now,now,'running','Bulk Quotes/SEC Frames + Opportunity SEC v14 · full',companies.length,'paged-v1',11,currentHash()).run();
+ await db().prepare('INSERT INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind('universe:sec-mixed-pages:opportunity:0','test',now,JSON.stringify(companies)).run();
+ for(const company of companies)await insertSnapshot('sec-mixed-pages',{...base,symbol:company.ticker,cik:company.cik,asOf:now,securityType:'common',price:10,marketCap:50e6,medianDollarVolume20d:500_000,provenance:{...base.provenance}}).run();
+ setOpportunityResearchResult([...Array.from({length:8},()=>({providerStatus:'unavailable',retryable:false,error:'HTTP 403'})),{providerStatus:'retrieved',retryable:false}]);
+ try{
+  const first=await processScanBatch('sec-mixed-pages');assert.equal(first.done,false);assert.equal(first.run.offset,8);assert.equal(first.run.failed,8);
+  const final=await processScanBatch('sec-mixed-pages');assert.equal(final.done,true);assert.equal(final.run.status,'partial');assert.equal(final.run.failed,8);assert.equal(final.run.sec_failed,8);assert.match(final.run.error,/8/);
+ }finally{setOpportunityResearchResult({providerStatus:'retrieved',retryable:false});}
+});
 test('SEC research stage records mismatched-issuer payloads as validation failures, not successful coverage',async()=>{
  const now=new Date().toISOString(),company={ticker:'SECIDENTITY',cik:2888};
  await db().prepare('INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,strategy_hash) VALUES(?,?,?,?,?,?,?,?,?)').bind('sec-invalid-identity','2026-09-20','2026-09-20','running','Bulk Quotes/SEC Frames + Opportunity SEC v12 · full',1,'paged-v1',11,currentHash()).run();
@@ -639,6 +695,17 @@ test('push ownership, same-origin, key validation, delivery acceptance and expir
  assert.equal((await send('/api/push/subscribe',subscription,null,null)).status,403);
  const registered=await send('/api/push/subscribe',subscription);assert.equal(registered.status,200);const cookie=registered.headers.get('set-cookie').split(';')[0];
  assert.equal((await send('/api/push/subscribe',subscription)).status,403);
+ const originalPrepare=runtimeEnv.DB.prepare;let hiddenPreflight=false;
+ runtimeEnv.DB.prepare=sql=>String(sql).startsWith('SELECT owner FROM push_subscriptions WHERE endpoint=')&&!hiddenPreflight?(hiddenPreflight=true,{bind:()=>({first:async()=>null})}):originalPrepare(sql);
+ try{const raced=await send('/api/push/subscribe',subscription,'radar-visitor=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');assert.equal(raced.status,403);}
+ finally{runtimeEnv.DB.prepare=originalPrepare;}
+ const quotaCookie='radar-visitor=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+ for(let index=0;index<11;index++){
+  const endpointSubscription={...subscription,endpoint:`https://fcm.googleapis.com/fcm/send/quota-${index}`};
+  const response=await send('/api/push/subscribe',endpointSubscription,quotaCookie);
+  assert.equal(response.status,index<10?200:429);
+ }
+ await db().prepare('DELETE FROM push_subscriptions WHERE owner=?').bind('visitor:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb').run();
  assert.equal((await send('/api/push/test',{endpoint:subscription.endpoint})).status,404);
  const original=globalThis.fetch;let status=201,calls=0;
  globalThis.fetch=async(url,options)=>{calls++;assert.equal(options.redirect,'error');assert(options.body.length>0);return new Response('',{status});};

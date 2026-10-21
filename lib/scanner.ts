@@ -450,27 +450,27 @@ export async function processScanBatch(runId: string) {
     const writes:any[]=[];let requests=0,success=0,failed=0,terminalFailed=0;
     for(const outcome of outcomes){
       requests+=Number.isFinite(outcome.result?.requests)?Math.max(0,Number(outcome.result.requests)):1;
+      let outcomeFailed=false;
       if(outcome.snapshots?.length){
         // Keep a malformed/mismatched-issuer payload in the saved research
         // record for diagnosis, but never count it as a successful SEC fetch.
         // Empty standard-taxonomy coverage is a valid response and is tracked
         // as retrieval success while the factor itself remains unscored.
         if(outcome.result?.providerStatus==='retrieved'||outcome.result?.providerStatus==='empty')success++;
-        else {failed++;terminalFailed++;}
+        else {failed++;outcomeFailed=true;}
         for(const snapshot of outcome.snapshots)writes.push(insertSnapshot(run.id,snapshot));
-      }else {failed++;terminalFailed++;}
+      }else {failed++;outcomeFailed=true;}
       const retryable=outcome.result?.retryable===true||outcome.retryable===true;
       const error=outcome.result?.error||outcome.error;
       if(retryable&&outcome.job.attempt<2)remaining.push({...outcome.job,attempt:outcome.job.attempt+1});
-      else if(retryable&&outcome.job.attempt>=2)terminalFailed++;
+      else if(outcomeFailed)terminalFailed++;
       if(error)await log(run.id,'opportunity-sec',`${outcome.job.company.ticker}: ${error}`);
     }
     const offset=retrying?run.offset:run.offset+jobs.length;
     const done=offset>=run.total&&remaining.length===0;
-    const exhausted=outcomes.filter(outcome=>(outcome.result?.retryable===true||outcome.retryable===true)&&outcome.job.attempt>=2).length;
-    const totalFailed=Number(run.failed||0)+exhausted;
-    const nextError=done?(totalFailed?`تعذّر تحميل التاريخ لبعض الشركات (${totalFailed}).`:terminalFailed?`تعذّر استكمال بيانات SEC لبعض الشركات (${terminalFailed})؛ راجع تغطية كل شركة.`:null):run.error;
-    writes.push(database.prepare('UPDATE strategy_runs SET offset=?,processed=?,stage=?,status=?,failed=?,sec_requests=COALESCE(sec_requests,0)+?,sec_success=COALESCE(sec_success,0)+?,sec_failed=COALESCE(sec_failed,0)+?,error=?,updated_at=?,lease_until=0,retry_queue=? WHERE id=?').bind(offset,offset,done?13:11,done?(totalFailed||terminalFailed?'partial':'complete'):'running',totalFailed,requests,success,failed,nextError,new Date().toISOString(),JSON.stringify(remaining),run.id));
+    const totalFailed=Number(run.failed||0)+terminalFailed;
+    const nextError=done?(totalFailed?`تعذّر استكمال بعض بيانات SEC/المسح (${totalFailed})؛ راجع تغطية الشركات والمزودات.`:null):run.error;
+    writes.push(database.prepare('UPDATE strategy_runs SET offset=?,processed=?,stage=?,status=?,failed=?,sec_requests=COALESCE(sec_requests,0)+?,sec_success=COALESCE(sec_success,0)+?,sec_failed=COALESCE(sec_failed,0)+?,error=?,updated_at=?,lease_until=0,retry_queue=? WHERE id=?').bind(offset,offset,done?13:11,done?(totalFailed?'partial':'complete'):'running',totalFailed,requests,success,failed,nextError,new Date().toISOString(),JSON.stringify(remaining),run.id));
     await database.batch(writes);
     run=await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first();
     return {run:publicRun(run),done};

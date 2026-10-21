@@ -17,7 +17,9 @@ test("renders development preview metadata", async () => {
     // artifact and leave runtime Worker execution to the Sites environment.
     if (error?.code !== "ERR_UNSUPPORTED_ESM_URL_SCHEME") throw error;
     const built = await readFile(new URL("../dist/server/index.js", import.meta.url), "utf8");
-    assert.match(built, /"codex-preview"\s*:\s*"development"/);
+    // Vite/Rolldown emits minified object properties with template literals,
+    // while older builds used JSON-style double-quoted strings.
+    assert.match(built, /["'`]codex-preview["'`]\s*:\s*["'`]development["'`]/);
     return;
   }
 
