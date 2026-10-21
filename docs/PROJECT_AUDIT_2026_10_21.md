@@ -4,7 +4,9 @@
 
 Three independent code reviews covered SEC/provider parsing and data normalization, scanner/persistence/API/rating calculations, and the frontend/account/portfolio/report flows. The primary product and pipeline paths are implemented and have broad automated regression coverage. The audit found and fixed financial-period validation defects that could turn partial-quarter data into annual or trailing-twelve-month (TTM) values, plus several smaller UI state and validation defects.
 
-This is an audit of the local source tree at commit `71ef4fe` plus the uncommitted fixes listed below. Those fixes have **not** been pushed or deployed. The separate runtime hotfix deployment `346fb0db-2dde-45c6-90c8-c35c0dcd3871` succeeded on 2026-10-21 and the public home/API checks returned HTTP 200, but that proves request serving only; this audit did not revalidate the deployed ranking release, production D1 contents, or the audit fixes in production.
+The audit fixes were committed in `60d2a22` and pushed. The ranking verifier correction was committed in `02444aa`; its deployment `3d2bb8b2-d87d-4b1a-93aa-40c71b7f7367` succeeded on 2026-10-21. The full production verifier passed for run `26af6c3c-f409-4106-91a8-7a0da3221f8b:ratings-v5`: 7,532 official/retained listings, no missing factors or final grades, exact ordering across radar/report/profile views, and matching rubric `1.5.3-validated-period-windows` / hash `56e82dda`. The fresh off-host database backup passed checksum and gzip validation.
+
+The later acquisition-speed change is commit `6437a9f`, pushed to the same branch. Its production deployment attempts `5a1510a5-1422-4a50-8728-3b375a792348` and `b656b994-8ddb-47cc-8d80-596d9a544039` failed at Railway build infrastructure startup; attempt `c0bd0700-0e6b-411a-956b-b2da8bba9174` was still initializing at the last check. Production continues serving the previously successful release, and its scan cursor continues to advance. Do not treat the 36-company stage batch change as live until a deployment succeeds and the cursor shows the wider increments.
 
 ## Verified code defects fixed
 
@@ -53,4 +55,4 @@ The build emitted Vite/Vinext sourcemap warnings for generated virtual modules; 
 
 ## Delivery and operational note
 
-No schema or migration change was required for the fixes. No production scan, saved-row reevaluation, volume change, push, or deployment was performed as part of this audit. The historical handoff and acceptance files contain checkpoints from earlier dates; use a fresh read-only production check before treating their stored capacity, active scan, or ranking-version statements as current.
+No schema or migration change was required for the audit fixes. Production scan `26af6c3c-f409-4106-91a8-7a0da3221f8b` is a full run of 7,532 listings. At 2026-10-21 03:56 UTC it was actively advancing in stage 5 (SEC Company Facts recovery), at offset 4,080/7,532. A timed earlier sample advanced 60 companies in 25.6 seconds. The separate [acquisition performance investigation and plan](ACQUISITION_PERFORMANCE_PLAN_2026_10_21.md) records the diagnosis, the pending optimization, and the staged next steps. Historical handoff entries below this date are checkpoints from earlier deployments and should not be treated as current state.
