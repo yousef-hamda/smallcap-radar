@@ -99,6 +99,14 @@ const knownEvent=(overrides={})=>event({impactAsPctTtmRevenue:impact(20,'percent
   s.opportunityResearch.earnings.quarterly=recentQuarters();
   const current=buildOpportunityThesis(s);assert.equal(current.valuation.status,'available');assert.equal(current.valuation.normalizedCashflow,8);assert.equal(current.valuation.normalizedEarnings,4);
   assert(current.valuation.scenarios[1].equityValue<annual.valuation.scenarios[1].equityValue);
+  const shortWindow=intrinsic(),anchor=Date.parse('2026-08-29T00:00:00Z');
+  shortWindow.opportunityResearch.earnings.quarterly=recentQuarters().map((quarter,index)=>{
+   const end=new Date(anchor-(3-index)*60*86_400_000).toISOString().slice(0,10),start=new Date(Date.parse(`${end}T00:00:00Z`)-59*86_400_000).toISOString().slice(0,10);
+   return {...quarter,start,end,metrics:Object.fromEntries(Object.entries(quarter.metrics).map(([key,metric])=>[key,{...metric,source:source(start,end)}]))};
+  });
+  const shortWindowThesis=buildOpportunityThesis(shortWindow);assert.equal(shortWindowThesis.valuation.status,'available');
+  assert.equal(shortWindowThesis.valuation.normalizedCashflow,annual.valuation.normalizedCashflow,'four adjacent 60-day quarters must not replace annual cash flow');
+  assert.equal(shortWindowThesis.valuation.normalizedEarnings,annual.valuation.normalizedEarnings,'four adjacent 60-day quarters must not replace annual earnings');
   s.opportunityResearch.earnings.quarterly=recentQuarters(-1);assert.equal(buildOpportunityThesis(s).valuation.status,'unavailable');
   delete s.opportunityResearch.earnings.quarterly[0].metrics.stockBasedCompensation;assert.equal(buildOpportunityThesis(s).valuation.status,'unavailable','known current losses cannot be hidden by missing SBC');
   s.opportunityResearch.earnings.quarterly[3].metrics.netIncome.source.retrievedAt='2026-12-01';assert.equal(buildOpportunityThesis(s).valuation.status,'available','future observations cannot affect current estimates');

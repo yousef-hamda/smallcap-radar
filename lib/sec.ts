@@ -18,6 +18,11 @@ export const AGGREGATE_BORROWING_TAGS=['DebtAndCapitalLeaseObligations','Borrowi
 export type Fact={start?:string;end:string;val:number;filed:string;form:string;accn?:string;fy?:number;fp?:string;tag?:string};
 const annualForms=['10-K','10-K/A','20-F','20-F/A','40-F','40-F/A'];
 const interimForms=['10-Q','10-Q/A','6-K','6-K/A'];
+function validCalendarDate(value:unknown):value is string{
+ if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(value))return false;
+ const time=Date.parse(`${value}T00:00:00.000Z`);
+ return Number.isFinite(time)&&new Date(time).toISOString().slice(0,10)===value;
+}
 export function observations(facts:any,tags:string[],unit='USD'):Fact[]{return tags.flatMap(tag=>{
  const namespaces=['us-gaap','ifrs-full','dei'];
  return namespaces.flatMap(namespace=>{
@@ -25,8 +30,8 @@ export function observations(facts:any,tags:string[],unit='USD'):Fact[]{return t
   return Array.isArray(rows)?rows.map((f:any)=>({...f,tag})):[];
  });
 });}
-export function latestInstant(rows:Fact[],asOf:string){return rows.filter(r=>Date.parse(r.filed+'T23:59:59Z')<=Date.parse(asOf)&&Number.isFinite(Date.parse(r.end))&&Date.parse(r.end)<=Date.parse(asOf)&&!r.start&&Number.isFinite(r.val)).sort((a,b)=>b.end.localeCompare(a.end)||b.filed.localeCompare(a.filed))[0]||null;}
-export function trailingAnnual(rows:Fact[],asOf:string){const eligible=rows.filter(r=>r.start&&Date.parse(r.filed+'T23:59:59Z')<=Date.parse(asOf)&&Number.isFinite(Date.parse(r.end))&&Date.parse(r.end)<=Date.parse(asOf)&&Number.isFinite(r.val));const days=(r:Fact)=>(Date.parse(r.end)-Date.parse(r.start!))/864e5;const annual=eligible.filter(r=>annualForms.includes(r.form)&&days(r)>=330&&days(r)<=380).sort((a,b)=>b.end.localeCompare(a.end)||b.filed.localeCompare(a.filed))[0];if(!annual)return null;
+export function latestInstant(rows:Fact[],asOf:string){return rows.filter(r=>validCalendarDate(r.end)&&validCalendarDate(r.filed)&&Date.parse(r.filed+'T23:59:59Z')<=Date.parse(asOf)&&Date.parse(r.end)<=Date.parse(asOf)&&!r.start&&Number.isFinite(r.val)).sort((a,b)=>b.end.localeCompare(a.end)||b.filed.localeCompare(a.filed))[0]||null;}
+export function trailingAnnual(rows:Fact[],asOf:string){const eligible=rows.filter(r=>validCalendarDate(r.start)&&validCalendarDate(r.end)&&validCalendarDate(r.filed)&&Date.parse(r.filed+'T23:59:59Z')<=Date.parse(asOf)&&Date.parse(r.end)<=Date.parse(asOf)&&Number.isFinite(r.val));const days=(r:Fact)=>(Date.parse(r.end)-Date.parse(r.start!))/864e5;const annual=eligible.filter(r=>annualForms.includes(r.form)&&days(r)>=330&&days(r)<=380).sort((a,b)=>b.end.localeCompare(a.end)||b.filed.localeCompare(a.filed))[0];if(!annual)return null;
  // A filer can transition between standard revenue tags. Only combine YTD
  // facts from the same concept as the selected annual fact; an unrelated,
  // newer-tagged quarter must not suppress a valid same-tag TTM bridge.

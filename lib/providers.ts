@@ -616,8 +616,9 @@ export function parseYahooDaily(payload:any,asOf=new Date().toISOString()){
  const bars=new Map<string,NonNullable<Snapshot['history']>[number]>();
  for(let index=0;index<timestamps.length;index++){
   const timestamp=timestamps[index];
-  if(!Number.isFinite(timestamp)||timestamp*1000>cutoff)continue;
-  const date=new Date(timestamp*1000).toISOString().slice(0,10);
+  const milliseconds=timestamp*1000;
+  if(!Number.isFinite(timestamp)||!Number.isFinite(milliseconds)||Math.abs(milliseconds)>8.64e15||milliseconds>cutoff)continue;
+  const date=new Date(milliseconds).toISOString().slice(0,10);
   // Daily quote OHLC is split-adjusted. adjclose additionally adjusts cash
   // dividends and must not be mixed with the current price/52-week range.
   const close=numeric(quote.close?.[index]);
@@ -637,8 +638,9 @@ export function parseYahooDaily(payload:any,asOf=new Date().toISOString()){
   const numerator=numeric(event.numerator),denominator=numeric(event.denominator);
   const ratioParts=String(event.splitRatio??'').split(':').map(Number);
   const factor=numerator!=null&&denominator!=null?numerator/denominator:ratioParts.length===2?ratioParts[0]/ratioParts[1]:NaN;
-  if(!Number.isFinite(event.date)||!Number.isFinite(factor)||factor<=0){validEvents=false;continue;}
-  const date=new Date(event.date*1000).toISOString().slice(0,10);
+  const milliseconds=event.date*1000;
+  if(!Number.isFinite(event.date)||!Number.isFinite(milliseconds)||Math.abs(milliseconds)>8.64e15||!Number.isFinite(factor)||factor<=0){validEvents=false;continue;}
+  const date=new Date(milliseconds).toISOString().slice(0,10);
   if(Date.parse(`${date}T23:59:59Z`)>cutoff)continue;
   splits.push({date,factor});
  }
@@ -647,7 +649,8 @@ export function parseYahooDaily(payload:any,asOf=new Date().toISOString()){
 
 export function parseCboeDaily(payload:any,from:string,to:string):MarketBar[]{
  const rows:Array<{date:string;close:number|null;open?:number;high?:number;low?:number;volume?:number}>=(Array.isArray(payload?.data)?payload.data:[]).map((row:any)=>({date:String(row.date??''),close:numeric(row.close),open:numeric(row.open)??undefined,high:numeric(row.high)??undefined,low:numeric(row.low)??undefined,volume:numeric(row.volume)??undefined}));
- return rows.filter((row):row is {date:string;close:number;open?:number;high?:number;low?:number;volume?:number}=>/^\d{4}-\d{2}-\d{2}$/.test(row.date)&&row.date>=from&&row.date<=to&&row.close!=null&&row.close>0).sort((a,b)=>a.date.localeCompare(b.date));
+ const validDate=(value:string)=>/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(`${value}T00:00:00Z`))&&new Date(`${value}T00:00:00Z`).toISOString().slice(0,10)===value;
+ return rows.filter((row):row is {date:string;close:number;open?:number;high?:number;low?:number;volume?:number}=>validDate(row.date)&&row.date>=from&&row.date<=to&&row.close!=null&&row.close>0).sort((a,b)=>a.date.localeCompare(b.date));
 }
 
 export async function historicalMarketData(symbol: string, asOf = new Date().toISOString(), days = 1900):Promise<HistoricalResult> {

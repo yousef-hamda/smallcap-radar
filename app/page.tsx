@@ -39,6 +39,7 @@ export function mergeRecentQuote(base:Snapshot,alternative:Snapshot):Snapshot {
  }
  return result;
 }
+export function isTickerSearch(value:string){return /^[A-Za-z0-9][A-Za-z0-9.^-]{0,15}$/.test(value.trim());}
 
 export default function RadarApp(){
  const [view,setView]=useState<View>('opportunity'),[opportunityState]=useState<OpportunityState>('ranked'),[researchFit,setResearchFit]=useState(true),[query,setQuery]=useState(''),[search,setSearch]=useState('');
@@ -48,7 +49,7 @@ export default function RadarApp(){
  const [selected,setSelected]=useState<Snapshot|null>(null),[selectedOpportunity,setSelectedOpportunity]=useState<OpportunityEvaluation|null>(null),[profileDescription,setProfileDescription]=useState<ProfileDescription|null>(null),[detailLoading,setDetailLoading]=useState(false),[detailError,setDetailError]=useState('');
  const [reportOpen,setReportOpen]=useState(false);
  const [portfolioCount,setPortfolioCount]=useState(0);
- const [account,setAccount]=useState<AccountSession|null>(null),[accountOpen,setAccountOpen]=useState(false),[accountMode,setAccountMode]=useState<'login'|'signup'>('login'),[accountUsername,setAccountUsername]=useState(''),[accountPassword,setAccountPassword]=useState(''),[accountBusy,setAccountBusy]=useState(false),[accountRevision,setAccountRevision]=useState(0);
+ const [account,setAccount]=useState<AccountSession|null>(null),[accountOpen,setAccountOpen]=useState(false),[accountMode,setAccountMode]=useState<'login'|'signup'>('login'),[accountUsername,setAccountUsername]=useState(''),[accountPassword,setAccountPassword]=useState(''),[accountBusy,setAccountBusy]=useState(false),[accountLoading,setAccountLoading]=useState(true),[accountError,setAccountError]=useState(''),[accountLoadError,setAccountLoadError]=useState(''),[accountRevision,setAccountRevision]=useState(0);
  const [settings,setSettings]=useState(false),[notificationBusy,setNotificationBusy]=useState(false),[saving,setSaving]=useState<string|null>(null);
  const [hasMore,setHasMore]=useState(false),[copied,setCopied]=useState('');
  const selection=useRef<AbortController|null>(null),lastView=useRef({view,search}),listRequest=useRef<AbortController|null>(null);
@@ -107,7 +108,17 @@ export default function RadarApp(){
   return()=>{window.clearInterval(timer);controller.abort();};
  },[progress.active,refresh,data?.pausedForCapacity]);
  useEffect(()=>{if('serviceWorker'in navigator)void navigator.serviceWorker.register('/sw.js').catch(()=>{});return()=>selection.current?.abort()},[]);
- useEffect(()=>{void request<{account:AccountSession|null}>('/api/account').then(value=>setAccount(value.account)).catch(()=>undefined)},[]);
+ const loadAccount=useCallback(async()=>{
+  setAccountLoading(true);setAccountLoadError('');
+  try{const value=await request<{account:AccountSession|null}>('/api/account');setAccount(value.account)}
+  catch(error){setAccountLoadError(error instanceof Error?error.message:'تعذّر التحقق من الحساب.')}
+  finally{setAccountLoading(false)}
+ },[]);
+ useEffect(()=>{
+  let active=true;
+  void request<{account:AccountSession|null}>('/api/account').then(value=>{if(active)setAccount(value.account)}).catch(error=>{if(active)setAccountLoadError(error instanceof Error?error.message:'تعذّر التحقق من الحساب.')}).finally(()=>{if(active)setAccountLoading(false)});
+  return()=>{active=false};
+ },[]);
  useEffect(()=>{
   if(view==='portfolio')return;
   const hiddenAt={value:null as number|null};
@@ -145,15 +156,15 @@ export default function RadarApp(){
   catch(e){setError(e instanceof Error?e.message:'تعذّر حفظ المفضلة')}finally{favoritePending.current=false;favoriteVersion.current++;setSaving(null)}
  }
  async function accountAction(event:React.FormEvent){
-  event.preventDefault();setAccountBusy(true);setError('');
+  event.preventDefault();setAccountBusy(true);setError('');setAccountError('');
   try{
    const value=await request<{account:AccountSession|null}>('/api/account',post({action:accountMode,username:accountUsername,password:accountPassword}));
    setAccount(value.account);setAccountPassword('');setAccountOpen(false);setAccountRevision(version=>version+1);await refresh();setNotice(accountMode==='signup'?'تم إنشاء الحساب ومزامنة بيانات هذا الجهاز.':'تم تسجيل الدخول ومزامنة بياناتك.');
-  }catch(error){setError(error instanceof Error?error.message:'تعذّر تسجيل الحساب.')}finally{setAccountBusy(false)}
+  }catch(error){const message=error instanceof Error?error.message:'تعذّر تسجيل الحساب.';setAccountError(message);setError(message)}finally{setAccountBusy(false)}
  }
  async function logout(){
-  setAccountBusy(true);setError('');
-  try{await request('/api/account',post({action:'logout'}));setAccount(null);setAccountRevision(version=>version+1);await refresh();setNotice('تم تسجيل الخروج.')}catch(error){setError(error instanceof Error?error.message:'تعذّر تسجيل الخروج.')}finally{setAccountBusy(false)}
+  setAccountBusy(true);setError('');setAccountError('');
+  try{await request('/api/account',post({action:'logout'}));setAccount(null);setAccountRevision(version=>version+1);await refresh();setNotice('تم تسجيل الخروج.')}catch(error){const message=error instanceof Error?error.message:'تعذّر تسجيل الخروج.';setAccountError(message);setError(message)}finally{setAccountBusy(false)}
  }
  function syncCardQuote(profile:Snapshot){
   if(Number.isFinite(profile.price)&&Number.isFinite(profile.dailyChange)&&profile.provenance.price?.tag?.includes('last completed session close'))setCardQuotes(current=>{
@@ -175,7 +186,7 @@ export default function RadarApp(){
  async function copy(symbol:string){try{await navigator.clipboard.writeText(symbol);setCopied(symbol);window.setTimeout(()=>setCopied(''),1500)}catch{setNotice('تعذّر النسخ؛ يمكنك تحديد الرمز ونسخه يدويًا.')}}
  async function lookup(){
   setSearch(query.trim());
-  if(!/^[A-Za-z][A-Za-z0-9.^-]{0,15}$/.test(query.trim()))return;
+  if(!isTickerSearch(query))return;
   const found=ratedRows.find(row=>row.s.symbol===query.trim().toUpperCase());if(found){await openCompany(found.s);return;}
   const symbol=query.trim().toUpperCase();
   await openCompany({symbol,name:symbol,asOf:new Date().toISOString(),provenance:{}});
@@ -207,7 +218,7 @@ export default function RadarApp(){
  return <div className="radar-app" dir="rtl">
   <header className="radar-header"><div className="header-inner">
    <div className="header-line"><div className="brand"><h1>رادار الشركات الصغيرة</h1><p>{(data?.summary.total??0).toLocaleString('en-US')} شركة مفحوصة · {day(data?.dataRun?.updated_at)}</p></div>
-    <div className="header-actions"><button className={`favorite-pill ${view==='favorites'?'chosen':''}`} onClick={()=>setView('favorites')} aria-label={`المفضلة: ${favorites.length}`}><Star size={18} fill={view==='favorites'?'currentColor':'none'}/><span>{favorites.length}</span></button><button className={`account-pill ${account?'signed-in':''}`} onClick={()=>setAccountOpen(true)} aria-label={account?`الحساب ${account.username}`:'فتح مزامنة الحساب'}><UserRound size={17}/><span>{account?.username||'مزامنة'}</span></button><button className="scan-button" onClick={()=>scan()} disabled={busy||progress.active}><RefreshCw size={16} className={busy||progress.active?'spin':''}/>{busy?'جارٍ البدء':progress.active?'جارٍ الفحص':'فحص السوق'}</button></div></div>
+   <div className="header-actions"><button className={`favorite-pill ${view==='favorites'?'chosen':''}`} onClick={()=>setView('favorites')} aria-label={`المفضلة: ${favorites.length}`}><Star size={18} fill={view==='favorites'?'currentColor':'none'}/><span>{favorites.length}</span></button><button className={`account-pill ${account?'signed-in':''}`} onClick={()=>setAccountOpen(true)} aria-label={account?`الحساب ${account.username}`:accountLoading?'جارٍ التحقق من الحساب':'فتح مزامنة الحساب'}><UserRound size={17}/><span>{account?.username||(accountLoading?'جارٍ التحقق':'مزامنة')}</span></button><button className="scan-button" onClick={()=>scan()} disabled={busy||progress.active}><RefreshCw size={16} className={busy||progress.active?'spin':''}/>{busy?'جارٍ البدء':progress.active?'جارٍ الفحص':'فحص السوق'}</button></div></div>
    <form className="search-box" onSubmit={e=>{e.preventDefault();void lookup()}}><Search size={18}/><input aria-label="ابحث برمز السهم أو اسم الشركة" placeholder="ابحث برمز السهم أو اسم الشركة" value={query} onChange={e=>{setQuery(e.target.value);if(!e.target.value)setSearch('')}}/><button disabled={!query.trim()||busy}>بحث</button></form>
   </div></header>
   <main className="radar-main">
@@ -241,7 +252,7 @@ export default function RadarApp(){
    </>}
   </main>
   <CompanySheet snapshot={selected} opportunityEvaluation={selectedOpportunity} profileDescription={profileDescription} cardCompletedClose={selectedCompletedClose} loading={detailLoading} error={detailError} onClose={closeCompany} onRetry={()=>selected&&openCompany(selected)} favorite={selected?favorites.includes(selected.symbol):false} onFavorite={()=>selected&&favorite(selected)} onCopy={()=>selected&&copy(selected.symbol)}/>
-  <Dialog open={accountOpen} onOpenChange={setAccountOpen}><DialogContent className="account-dialog" dir="rtl"><DialogTitle>{account?'حساب المزامنة':'مزامنة بياناتك بين الأجهزة'}</DialogTitle><DialogDescription>{account?'المحفظة والمفضلة محفوظتان على هذا الحساب ويمكن فتحهما من الهاتف والكمبيوتر.':'أنشئ حسابًا بكلمة مرور حتى تظهر المحفظة والمفضلة نفسها على كل أجهزتك.'}</DialogDescription>{account?<div className="account-status"><div><UserRound size={22}/><b dir="ltr">{account.username}</b></div><p>آخر التغييرات تُحفظ على الخادم وتظهر بعد تسجيل الدخول بهذا الحساب.</p><button className="account-submit" onClick={()=>void logout()} disabled={accountBusy}><LogOut size={17}/>{accountBusy?'جارٍ التنفيذ…':'تسجيل الخروج'}</button></div>:<form className="account-form" onSubmit={accountAction}><div className="account-mode" role="tablist" aria-label="نوع الحساب"><button type="button" className={accountMode==='login'?'active':''} onClick={()=>setAccountMode('login')}>تسجيل الدخول</button><button type="button" className={accountMode==='signup'?'active':''} onClick={()=>setAccountMode('signup')}>إنشاء حساب</button></div><label>اسم المستخدم<input required minLength={3} maxLength={32} pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,31}" autoComplete="username" value={accountUsername} onChange={event=>setAccountUsername(event.target.value)} placeholder="مثال: yousef" dir="ltr"/></label><label>كلمة المرور<input required minLength={8} maxLength={128} type="password" autoComplete={accountMode==='login'?'current-password':'new-password'} value={accountPassword} onChange={event=>setAccountPassword(event.target.value)} placeholder="8 أحرف على الأقل" dir="ltr"/></label><p>بياناتك الحالية على هذا الجهاز ستُنقل إلى الحساب عند الإنشاء أو تسجيل الدخول.</p><button className="account-submit" disabled={accountBusy}>{accountBusy?<RefreshCw className="spin" size={17}/>:accountMode==='login'?<LogIn size={17}/>:<UserRound size={17}/>} {accountBusy?'جارٍ الحفظ…':accountMode==='login'?'دخول ومزامنة':'إنشاء ومزامنة'}</button></form>}</DialogContent></Dialog>
+  <Dialog open={accountOpen} onOpenChange={open=>{setAccountOpen(open);if(!open)setAccountError('')}}><DialogContent className="account-dialog" dir="rtl"><DialogTitle>{account?'حساب المزامنة':'مزامنة بياناتك بين الأجهزة'}</DialogTitle><DialogDescription>{account?'المحفظة والمفضلة محفوظتان على هذا الحساب ويمكن فتحهما من الهاتف والكمبيوتر.':'أنشئ حسابًا بكلمة مرور حتى تظهر المحفظة والمفضلة نفسها على كل أجهزتك.'}</DialogDescription>{accountLoadError&&<div className="message error" role="alert"><span>{accountLoadError}</span><button onClick={()=>void loadAccount()}>إعادة المحاولة</button></div>}{accountError&&<div className="message error" role="alert">{accountError}</div>}{accountLoading?<p role="status">جارٍ التحقق من حالة الحساب…</p>:accountLoadError?null:account?<div className="account-status"><div><UserRound size={22}/><b dir="ltr">{account.username}</b></div><p>آخر التغييرات تُحفظ على الخادم وتظهر بعد تسجيل الدخول بهذا الحساب.</p><button className="account-submit" onClick={()=>void logout()} disabled={accountBusy}><LogOut size={17}/>{accountBusy?'جارٍ التنفيذ…':'تسجيل الخروج'}</button></div>:<form className="account-form" onSubmit={accountAction}><div className="account-mode" role="group" aria-label="نوع الحساب"><button type="button" aria-pressed={accountMode==='login'} className={accountMode==='login'?'active':''} onClick={()=>setAccountMode('login')}>تسجيل الدخول</button><button type="button" aria-pressed={accountMode==='signup'} className={accountMode==='signup'?'active':''} onClick={()=>setAccountMode('signup')}>إنشاء حساب</button></div><label>اسم المستخدم<input required minLength={3} maxLength={32} pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,31}" autoComplete="username" value={accountUsername} onChange={event=>setAccountUsername(event.target.value)} placeholder="مثال: yousef" dir="ltr"/></label><label>كلمة المرور<input required minLength={8} maxLength={128} type="password" autoComplete={accountMode==='login'?'current-password':'new-password'} value={accountPassword} onChange={event=>setAccountPassword(event.target.value)} placeholder="8 أحرف على الأقل" dir="ltr"/></label><p>بياناتك الحالية على هذا الجهاز ستُنقل إلى الحساب عند الإنشاء أو تسجيل الدخول.</p><button className="account-submit" disabled={accountBusy}>{accountBusy?<RefreshCw className="spin" size={17}/>:accountMode==='login'?<LogIn size={17}/>:<UserRound size={17}/>} {accountBusy?'جارٍ الحفظ…':accountMode==='login'?'دخول ومزامنة':'إنشاء ومزامنة'}</button></form>}</DialogContent></Dialog>
   <Dialog open={settings} onOpenChange={setSettings}><DialogContent className="settings-dialog" dir="rtl" showCloseButton={false}><DialogClose className="absolute top-4 left-4" aria-label="إغلاق مركز البيانات"><X size={20}/></DialogClose><DialogTitle>مركز البيانات والإشعارات</DialogTitle><DialogDescription>حالة المصادر والفحص، وأدوات حفظ النتائج ومراجعتها.</DialogDescription>
    <div className="settings-scroll">{(error||notice)&&<div className={`message ${error?'error':''}`} role={error?'alert':'status'}>{error||notice}</div>}<section><h3>إشعار اكتمال الفحص</h3><p>على iPhone: افتح الموقع في Safari ← أضف إلى الشاشة الرئيسية ← افتحه من الأيقونة ← فعّل الإشعارات ← وافق على الإذن ← اختبر الإشعار.</p><div className="action-pair"><button onClick={()=>notifications()} disabled={notificationBusy}>تفعيل الإشعارات</button><button onClick={()=>notifications(true)} disabled={notificationBusy}>اختبار الإشعار</button></div><small>قبول الإرسال من المزود ليس دليل وصول على الهاتف.</small></section>
    <section><h3>منهجية الفرص الاستثمارية الموحدة</h3><dl className="data-grid"><div><dt>نسخة التقييم</dt><dd dir="ltr">{OPPORTUNITY_SPEC.version}</dd></div><div><dt>المدة الافتراضية</dt><dd>{OPPORTUNITY_SPEC.defaultHorizonMonths} أشهر</dd></div><div><dt>الدرجة</dt><dd>نهائية من 100</dd></div><div><dt>تغطية الدرجات الحسابية</dt><dd>100%</dd></div></dl><div className="coverage-chips">{OPPORTUNITY_SPEC.factors.map(f=><span key={f.id}>{f.label}: {f.weight}%</span>)}</div><p className="muted">التحقق التاريخي لنموذج الفرص الموحد لم يكتمل. لا نعرض احتمال عائد، ولا نعتبر نتائج الفئات السابقة اعتمادًا لهذا النموذج.</p></section>

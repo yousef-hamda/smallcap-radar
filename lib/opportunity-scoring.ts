@@ -2,6 +2,7 @@ import type { Provenance } from './engine';
 import type { OpportunityEvidence } from './opportunity-engine';
 import { isOpportunityProvenanceValid } from './opportunity-engine';
 import { compatibleFinancialSources } from './financial-integrity';
+import { evidenceTimestamp } from './evidence';
 
 export type FairValueMethodId = 'normalized-dcf' | 'peer-multiples' | 'sum-of-parts' | 'residual-income' | 'risk-adjusted-npv' | 'asset-value';
 
@@ -178,7 +179,7 @@ function unavailableTechnical(rationale: string, conflicts: string[] = []): Tech
 
 function mean(values: number[]) { return values.reduce((sum, value) => sum + value, 0) / values.length; }
 function validBars(bars: TechnicalBar[], minCount: number, asOf: string) {
-  if (bars.length < minCount || bars.some((bar, index) => !bar.completed || !/^\d{4}-\d{2}-\d{2}$/.test(bar.date) || !Number.isFinite(Date.parse(bar.date)) || Date.parse(bar.date) > Date.parse(asOf)
+  if (bars.length < minCount || bars.some((bar, index) => !bar.completed || !/^\d{4}-\d{2}-\d{2}$/.test(bar.date) || !Number.isFinite(evidenceTimestamp(bar.date)) || Date.parse(bar.date) > Date.parse(asOf)
     || [0, 6].includes(new Date(`${bar.date}T00:00:00Z`).getUTCDay())
     || !Number.isFinite(bar.close) || bar.close <= 0 || (bar.volume != null && (!Number.isFinite(bar.volume) || bar.volume < 0))
     || (index > 0 && Date.parse(bar.date) <= Date.parse(bars[index - 1].date)))) return false;
@@ -464,6 +465,10 @@ function scoreEarningsQualityCore(input: EarningsQualityAssessment, allowPartial
 
   const quarterly = [...input.quarterly].sort((a, b) => Date.parse(a.revenue.source.periodEnd) - Date.parse(b.revenue.source.periodEnd));
   const recent = quarterly.slice(-4);
+  const recentQuarterWindowDays = (Date.parse(recent.at(-1)!.revenue.source.periodEnd) - Date.parse(recent[0].revenue.source.periodStart!)) / 86_400_000;
+  if (recentQuarterWindowDays < 330 || recentQuarterWindowDays > 400) {
+    return unavailableEarnings('The latest four standalone quarters do not span a compatible TTM period.', ['TTM quarter coverage mismatch']);
+  }
   const positiveOperatingQuarters = recent.filter(period => period.operatingIncome.value > 0).length;
   const operatingPersistence = rounded(positiveOperatingQuarters / 4 * 10, 2);
   const ttmNetIncome = recent.reduce((sum, period) => sum + period.netIncome.value, 0);

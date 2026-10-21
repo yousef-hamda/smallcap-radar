@@ -192,7 +192,9 @@ function deriveRevenueGrowth(snapshot: Snapshot) {
   if(quarters.length>=8){
     const last=quarters.slice(-8);
     const adjacent=last.every((item,index)=>index===0||Date.parse(item.source.periodStart!)-Date.parse(last[index-1].source.periodEnd)===86_400_000);
-    if(adjacent&&new Set(last.map(item=>item.unit)).size===1){
+    const windowDays=(items:Metric[])=>items.length===4?(Date.parse(items[3].source.periodEnd)-Date.parse(items[0].source.periodStart!))/86_400_000:NaN;
+    if(adjacent&&windowDays(last.slice(0,4))>=330&&windowDays(last.slice(0,4))<=400
+      &&windowDays(last.slice(4))>=330&&windowDays(last.slice(4))<=400&&new Set(last.map(item=>item.unit)).size===1){
       selected=last;value=last.slice(4).reduce((sum,item)=>sum+item.value,0)/last.slice(0,4).reduce((sum,item)=>sum+item.value,0)-1;method='latest-four-quarter-revenue / prior-four-quarter-revenue - 1';
     }
   }

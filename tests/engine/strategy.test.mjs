@@ -12,6 +12,7 @@ import {parseYahooIntraday} from '../../.test-build/chart-data.mjs';
 import {parseOfficialDirectory,classifyListedSecurity} from '../../.test-build/directory.mjs';
 import {applyFinancingRisk} from '../../.test-build/financing-risk.mjs';
 import {OPPORTUNITY_SPEC} from '../../.test-build/opportunity-spec.mjs';
+import {scoreEarningsQualityPartial} from '../../.test-build/opportunity-scoring.mjs';
 import {opportunityWeightedScore, evaluateOpportunity,isOpportunityProvenanceValid} from '../../.test-build/opportunity-engine.mjs';
 import {operatingCandidateSignals,operatingCandidateOrderSql} from '../../.test-build/opportunity-candidates.mjs';
 import {scoreFairValue,scoreFinancialStrength,scoreFinancialStrengthPartial,scoreCatalysts,scoreEarningsQuality,scoreDownsideRisk,scoreTechnicalTiming,scoreQualitativeFactor} from '../../.test-build/opportunity-scoring.mjs';
@@ -93,6 +94,10 @@ test('daily history ignores dividends, incomplete sessions, invalid and duplicat
  assert.equal(parseYahooDaily({chart:{error:{code:'oops'}}}).splits,null);
  const bad={chart:{result:[{events:{splits:{a:{date:t,numerator:2,denominator:0}}}}]}};assert.equal(parseYahooDaily(bad,'2026-09-01').splits,null);
 });
+test('Yahoo split timestamps outside Date range invalidate split coverage without crashing',()=>{
+ const parsed=parseYahooDaily({chart:{result:[{events:{splits:{a:{date:1e100,numerator:2,denominator:1}}}}]}},'2026-09-01T00:00:00Z');
+ assert.equal(parsed.splits,null);
+});
 test('daily history keeps a valid close but rejects impossible or zero OHLC fields',()=>{
  const t=Date.parse('2026-08-28T13:30:00Z')/1000;
  const [bar]=parseYahooDaily({chart:{result:[{timestamp:[t],indicators:{quote:[{close:[10],open:[9],high:[8],low:[0],volume:[100]}]}}]}},'2026-08-29T00:00:00Z').history;
@@ -166,6 +171,12 @@ test('TTM bridge ignores a newer incompatible concept instead of discarding a va
  assert.equal(trailingAnnual(rows,'2025-12-01T00:00:00Z').val,120);
 });
 test('foreign annual filers retained; future restatement excluded',()=>{const old={start:'2024-01-01',end:'2024-12-31',val:100,filed:'2025-02-01',form:'20-F'};assert.equal(trailingAnnual([old,{...old,val:200,filed:'2026-01-01'}],'2025-09-01T00:00:00Z').val,100)});
+test('SEC annual normalization rejects impossible period and filing dates',()=>{
+ const valid={start:'2023-03-01',end:'2024-02-29',val:5,filed:'2024-03-01',form:'10-K',tag:'Revenue'};
+ assert.equal(trailingAnnual([{...valid,end:'2024-02-30'}],'2025-01-01T00:00:00Z'),null);
+ assert.equal(trailingAnnual([{...valid,filed:'2024-02-30'}],'2025-01-01T00:00:00Z'),null);
+ assert.equal(latestInstant([{end:'2024-02-30',filed:'2024-03-01',val:1,form:'10-K'}],'2025-01-01T00:00:00Z'),null);
+});
 test('foreign 20-F plus matching 6-K YTD reports derive TTM only from comparable periods',()=>{
  const annual={start:'2025-01-01',end:'2025-12-31',val:1000,filed:'2026-03-01',form:'20-F',tag:'Revenue'};
  const prior={start:'2025-01-01',end:'2025-06-30',val:420,filed:'2025-08-10',form:'6-K',tag:'Revenue'};
@@ -295,7 +306,7 @@ test('deep financial enrichment separates contract liabilities from backlog',()=
  assert.equal(s.grossMargin,.6);assert.equal(s.backlog,undefined);assert.equal(s.contractLiabilities.amount,25);assert.equal(s.provenance.grossMargin.source,'SEC revenue and cost of revenue');assert.equal(s.provenance.contractLiabilities.source,'SEC EDGAR');
 });
 test('Cboe fallback parser keeps only bounded positive dated OHLCV rows',()=>{
- const rows=parseCboeDaily({data:[{date:'2026-01-02',close:12,open:11,high:13,low:10,volume:100},{date:'2025-12-31',close:9},{date:'2026-02-01',close:0},{date:'bad',close:20}]},'2026-01-01','2026-01-31');
+ const rows=parseCboeDaily({data:[{date:'2026-01-02',close:12,open:11,high:13,low:10,volume:100},{date:'2025-12-31',close:9},{date:'2026-02-01',close:0},{date:'2026-02-30',close:20},{date:'bad',close:20}]},'2026-01-01','2026-01-31');
  assert.deepEqual(rows.map(row=>row.date),['2026-01-02']);assert.equal(rows[0].volume,100);
 });
 test('SEC filing index becomes profile events when RSS is unavailable',()=>{
@@ -594,6 +605,14 @@ test('earnings-quality rubric withholds incomplete, stale, future, misaligned an
  const longGap=earningsInput();longGap.annual=longGap.annual.map((period,index)=>index===1?Object.fromEntries(Object.entries(period).map(([key,metric])=>[key,{...metric,source:{...metric.source,periodStart:'2022-01-01',periodEnd:'2022-12-31'}}])):period);
  assert.ok(scoreEarningsQuality(longGap).conflicts.includes('period alignment conflict'));
 });
+test('earnings-quality refuses to call four short sequential quarters a TTM window',()=>{
+ const input=earningsInput(),anchor=Date.parse('2026-08-29T00:00:00Z');
+ input.quarterly=input.quarterly.map((period,index)=>{
+  const end=new Date(anchor-(7-index)*60*86_400_000).toISOString().slice(0,10),start=new Date(Date.parse(`${end}T00:00:00Z`)-59*86_400_000).toISOString().slice(0,10);
+  return Object.fromEntries(Object.entries(period).map(([key,metric])=>[key,{...metric,source:{...metric.source,periodStart:start,periodEnd:end,availableAt:`${end}T12:00:00.000Z`}}]));
+ });
+ const result=scoreEarningsQualityPartial(input);assert.equal(result.score,null);assert(result.conflicts.includes('TTM quarter coverage mismatch'),JSON.stringify(result));
+});
 test('earnings-quality requires sourced adjustment and one-off reviews and reflects their actual assessments',()=>{
  const input=earningsInput();
  assert.equal(scoreEarningsQuality({...input,gaapNonGaapBridgeReview:undefined}).score,null);
@@ -632,6 +651,8 @@ test('technical-timing rubric refuses partial bars, weekend points, unadjusted s
  assert.equal(scoreTechnicalTiming({...input,daily:input.daily.map((bar,index)=>index===219?{...bar,completed:false}:bar)}).score,null);
  assert.equal(scoreTechnicalTiming({...input,daily:input.daily.slice(0,150)}).score,null);
  assert.equal(scoreTechnicalTiming({...input,daily:input.daily.map((bar,index)=>index===219?{...bar,date:'2026-09-26'}:bar)}).score,null);
+ const impossibleDate=input.daily.findIndex(bar=>bar.date==='2026-03-03');assert.notEqual(impossibleDate,-1);
+ assert.equal(scoreTechnicalTiming({...input,daily:input.daily.map((bar,index)=>index===impossibleDate?{...bar,date:'2026-02-31'}:bar)}).score,null,'a normalized impossible date must not pass as a valid bar');
  const shortBenchmark=input.benchmarkDaily.slice(0,120),shortBenchmarkEnd=shortBenchmark.at(-1).date;
  assert.equal(scoreTechnicalTiming({...input,benchmarkDaily:shortBenchmark,benchmarkSource:{...input.benchmarkSource,periodEnd:shortBenchmarkEnd,availableAt:`${shortBenchmarkEnd}T21:00:00Z`}}).score,null);
 });

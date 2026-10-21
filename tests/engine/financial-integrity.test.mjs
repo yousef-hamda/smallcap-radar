@@ -188,6 +188,13 @@ test('aligned newer quarters replace stale annual fields and preserve complete d
  s.opportunityResearch.earnings.quarterly[2].metrics.revenue.unit='EUR';assert.equal(alignSnapshotFinancials(s).revenue,999);
 });
 
+test('a short period mislabeled annual cannot replace compact annual financials',()=>{
+ const s=base();s.revenue=999;s.provenance.revenue=source('2024-01-01','2024-12-31');
+ const start='2026-01-01',end='2026-03-31';
+ s.opportunityResearch={earnings:{conflicts:[],annual:[{start,end,metrics:{revenue:{value:20,unit:'USD',source:source(start,end)},netIncome:{value:2,unit:'USD',source:source(start,end)}}}],quarterly:[]}};
+ const aligned=alignSnapshotFinancials(s);assert.equal(aligned.revenue,999);assert.equal(aligned.netIncome,15);
+});
+
 test('comparable peers require distinct issuers, fiscal windows and sufficient observations',()=>{
  const own=valuationFixture();own.cik=1;own.provenance.industryModel={...source(),tag:'SIC 3571: Computers'};own.opportunityResearch.earnings.annual[2].metrics.grossProfit={value:60,unit:'USD',source:source('2025-01-01','2025-12-31')};
  const observation=peerObservation(own);assert(observation);

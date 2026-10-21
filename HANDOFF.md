@@ -1,5 +1,9 @@
 # Handoff — Small-Cap Radar
 
+## October 21 project-wide audit continuation
+
+The runtime hotfix deployment `346fb0db-2dde-45c6-90c8-c35c0dcd3871` succeeded on October 21; the public homepage and sampled API routes returned HTTP 200 after the previous Worker 500. This does not establish live ranking, data coverage, or saved-row acceptance. The new source audit is in [PROJECT_AUDIT_2026_10_21.md](docs/PROJECT_AUDIT_2026_10_21.md). It fixed short-window TTM/annual promotion and invalid-date handling across SEC/provider/scoring paths, plus several UI defects. The local rubric is now `1.5.3-validated-period-windows`, which will invalidate and recalculate saved ratings on a future deployment. The audit fixes are local, uncommitted, and not deployed. The older checkpoints below describe earlier candidate/deployment states and must not be read as current deployment status. No current production D1 ranking migration or source-quality acceptance was performed in this audit.
+
 ## October 15 completion continuation (source candidate, live gate remains)
 
 The fetch-only production hotfix is `f2a8fcfa-1bff-4cfb-9c5c-8b659cc7486e` on unchanged rubric 1.2.6; live saved list and anonymous wallet loaded after deployment. The candidate branch adds the requested full-card/daily-chart/company-explanation layout, score/rank/evidence labels, and a fix for a newer completed close with missing or stale daily change. It also adds a bounded source-only SEC annual/interim filing archive for later equity-class review; source capture does **not** create reviewed capitalization or catalysts or change weights. Independent audit found zero reviewed economic capitalization and catalysts in the latest inputs; the 1.5.2 replay's top score is 43.33/100, so predictive stock selection is not yet established.

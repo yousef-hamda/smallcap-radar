@@ -2,6 +2,12 @@ import type { Provenance, Snapshot } from './engine';
 import { derivedEvidence, usableEvidence,evidenceTimestamp,validEvidenceConversion } from './evidence';
 import {hasVerifiedShareRatio} from './research';
 
+function validCalendarDate(value:unknown):value is string{
+  if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(value))return false;
+  const time=Date.parse(`${value}T00:00:00.000Z`);
+  return Number.isFinite(time)&&new Date(time).toISOString().slice(0,10)===value;
+}
+
 /** Model observations retain unknown rights separately, but every dependency
  * must be auditable and actually available at the saved research cutoff. */
 export function modelEvidenceAvailable(source:Provenance|undefined,asOf:string,ancestors=new Set<Provenance>(),depth=0):boolean {
@@ -107,6 +113,8 @@ export function alignSnapshotFinancials(original: Snapshot): Snapshot {
     const duration = (Date.parse(item.end)-Date.parse(item.start))/86_400_000;
     return duration >= 55 && duration <= 120 && (!index || Date.parse(item.start)-Date.parse(quarters[index-1].end) === 86_400_000);
   });
+  const ttmWindowDays=contiguous?(Date.parse(quarters[3].end)-Date.parse(quarters[0].start))/86_400_000:NaN;
+  const coversTtmWindow=contiguous&&ttmWindowDays>=330&&ttmWindowDays<=400;
   const promote = (key: 'revenue'|'netIncome'|'fcf'|'cash'|'debt', value: number, source: Provenance) => {
     const previous = snapshot.provenance[key];
     if (!previous || Date.parse(source.periodEnd) >= Date.parse(previous.periodEnd)) {
@@ -114,7 +122,7 @@ export function alignSnapshotFinancials(original: Snapshot): Snapshot {
     }
   };
   for (const key of ['revenue','netIncome'] as const) {
-    if (contiguous && quarters.every(period => valid(period.metrics[key])
+    if (coversTtmWindow && quarters.every(period => valid(period.metrics[key])
       && period.metrics[key]!.source.periodStart === period.start && period.metrics[key]!.source.periodEnd === period.end)) {
       const metrics = quarters.map(period => period.metrics[key]!);
       const source = derivedEvidence(`SEC aligned four-quarter ${key}`,metrics.map(item=>item.source),snapshot.asOf,`sum of four contiguous standalone ${key} quarters`)!;
@@ -122,11 +130,13 @@ export function alignSnapshotFinancials(original: Snapshot): Snapshot {
     } else {
       const annual = [...(research?.annual ?? [])].sort((a,b)=>a.end.localeCompare(b.end)).at(-1);
       const metric = annual?.metrics[key];
-      if (annual && valid(metric) && metric!.source.periodStart === annual.start && metric!.source.periodEnd === annual.end)
+      const annualDays=annual&&validCalendarDate(annual.start)&&validCalendarDate(annual.end)?(Date.parse(annual.end)-Date.parse(annual.start))/86_400_000:NaN;
+      if (annual && Number.isFinite(annualDays) && annualDays>=330 && annualDays<=380
+        && valid(metric) && metric!.source.periodStart === annual.start && metric!.source.periodEnd === annual.end)
         promote(key,metric!.value,metric!.source);
     }
   }
-  if (contiguous && quarters.every(period=>valid(period.metrics.operatingCashFlow)&&valid(period.metrics.capitalExpenditure)
+  if (coversTtmWindow && quarters.every(period=>valid(period.metrics.operatingCashFlow)&&valid(period.metrics.capitalExpenditure)
     && period.metrics.operatingCashFlow!.source.periodStart === period.start && period.metrics.operatingCashFlow!.source.periodEnd === period.end
     && period.metrics.capitalExpenditure!.source.periodStart === period.start && period.metrics.capitalExpenditure!.source.periodEnd === period.end
     && compatibleFinancialSources([period.metrics.operatingCashFlow!.source,period.metrics.capitalExpenditure!.source],'flow'))) {

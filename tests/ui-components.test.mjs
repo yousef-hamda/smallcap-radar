@@ -438,10 +438,39 @@ test('portfolio search clears stale results and aborts superseded account reads'
 });
 
 test('direct ticker lookup opens the same loading and retryable profile flow as a ranked row',async()=>{
- const source=await readFile(path.join(root,'app/page.tsx'),'utf8');
+ const [source,module]=await Promise.all([readFile(path.join(root,'app/page.tsx'),'utf8'),vite.ssrLoadModule('/app/page.tsx')]);
  assert.match(source,/await openCompany\(\{symbol,name:symbol,asOf:new Date\(\)\.toISOString\(\),provenance:\{\}\}\)/);
  assert.match(source,/setSelected\(s\);setSelectedOpportunity\(ratedRows\.find/);
  assert.match(source,/setDetailLoading\(true\);setDetailError\(''\)/);
+ assert.equal(module.isTickerSearch('3M'),true);
+ assert.equal(module.isTickerSearch('SOFI'),true);
+ assert.equal(module.isTickerSearch('NYSE:SOFI'),false);
+});
+
+test('scan report hides a stale page when a different page or run failed to load',async()=>{
+ const [component,route]=await Promise.all([readFile(path.join(root,'app/scan-report.tsx'),'utf8'),readFile(path.join(root,'app/api/scan-report/route.ts'),'utf8')]);
+ assert.match(component,/page:\{offset:number;hasMore:boolean\}/);
+ assert.match(component,/report\.run\.id===runId&&report\.page\.offset===offset&&!loading/);
+ assert.match(route,/page:\{offset,limit,hasMore:/);
+});
+
+test('account mode toggles expose button-group pressed state to assistive technology',async()=>{
+ const source=await readFile(path.join(root,'app/page.tsx'),'utf8');
+ assert.match(source,/className="account-mode" role="group" aria-label="نوع الحساب"/);
+ assert.match(source,/aria-pressed=\{accountMode==='login'\}/);
+ assert.match(source,/aria-pressed=\{accountMode==='signup'\}/);
+ assert.doesNotMatch(source,/className="account-mode" role="tablist"/);
+ assert.match(source,/accountError&&<div className="message error" role="alert">\{accountError\}<\/div>/);
+ assert.match(source,/accountLoading\?\<p role="status">جارٍ التحقق من حالة الحساب…<\/p>:accountLoadError\?null:account\?/);
+ assert.match(source,/accountLoadError&&<div className="message error" role="alert">/);
+ assert.match(source,/onClick=\{\(\)=>void loadAccount\(\)\}>إعادة المحاولة/);
+});
+
+test('portfolio dialog keeps search and trade errors inside the active modal',async()=>{
+ const source=await readFile(path.join(root,'app/portfolio-view.tsx'),'utf8');
+ assert.match(source,/dialogError&&<div className="message error" role="alert">\{dialogError\}<\/div>/);
+ assert.match(source,/if \(dialogOpen\) setDialogError\(message\); else setError\(message\)/);
+ assert.match(source,/catch \(error\) \{ const message = error instanceof Error \? error\.message : 'تعذّر حفظ العملية\.'; setDialogError\(message\); setError\(message\); \}/);
 });
 
 test('offline snapshot labels saved view, search, page and remaining results',async()=>{

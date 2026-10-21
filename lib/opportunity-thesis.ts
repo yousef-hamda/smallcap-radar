@@ -75,6 +75,8 @@ export function buildOpportunityThesis(snapshot:Snapshot,horizonMonths=6):Opport
  const quarters=[...(snapshot.opportunityResearch?.earnings?.quarterly??[])].filter(item=>item?.metrics&&item.start&&item.end).sort((a,b)=>a.end.localeCompare(b.end)).slice(-4);
  const currentPeriodValid=valid&&quarters.length===4&&quarters.at(-1)!.end>periods.at(-1)!.end
   &&(Date.parse(snapshot.asOf)-Date.parse(quarters.at(-1)!.end))/864e5<=400
+  &&(Date.parse(quarters.at(-1)!.end)-Date.parse(quarters[0].start))/864e5>=330
+  &&(Date.parse(quarters.at(-1)!.end)-Date.parse(quarters[0].start))/864e5<=400
   &&quarters.every((quarter,index)=>{
    const days=(Date.parse(quarter.end)-Date.parse(quarter.start))/864e5;
    return days>=55&&days<=120&&(!index||Date.parse(quarter.start)-Date.parse(quarters[index-1].end)===864e5);
