@@ -19,13 +19,15 @@ The slowdown comes from doing only 12 companies per scheduled HTTP tick. Each ti
 
 The deployed 36-row cursor advances by listing order and preserves its checkpoint. Before the follow-on targeted-read change, a production sample advanced 216 listings in 44.169 seconds (4.89 listings/second), versus the earlier 60 in 25.6 seconds (2.34/second), about 2.1× faster. Requests advanced by 150 (3.40/sec), 144 succeeded, and 6 failed; the shared request reservation remains 8/sec. The retry queue held at 488 across both observations, so the run is progressing but transient retries have not drained. The second sample's latest error was `HTTP 404` and two successful responses without usable standard facts, rather than the first sample's generic internal failures. HTTP 404/empty facts are legitimate issuer coverage gaps; the aggregate `sec_failed` counter still mixes outcome classes. This measurement shows a speedup, not that every stage is fast or the retry backlog is resolved. The CA fix removes one root cause of SEC failures but does not make every issuer have Company Facts or eliminate permanent missing-resource responses.
 
+The same production run later reached a terminal partial state: stage 13, offset 5,945/5,945, retry queue 0, with `sec_requests=18,375`, `sec_success=11,653`, `sec_failed=777`, and a run error reporting 649 acquisition/data gaps. This confirms it no longer sits at 31% and all queued retry work terminated. Partial status and the 649/777 failure counters remain real coverage gaps; do not call it a clean complete data refresh. The status API returned HTTP 200 in 0.50 seconds; warm homepage and source-registry checks returned HTTP 200 in 0.44 and 0.56 seconds. Railway logs separately show an expensive cold radar read (54.8 seconds) and first homepage render (114 seconds), followed by warm reads under 0.5 seconds. Cold evaluation/rebuild is separate from scan throughput and remains on the plan.
+
 ## Full improvement plan
 
 ### P0 — validate the bounded batch change and SEC transport
 
 1. Run type, runtime, and production build checks.
 2. Deployment `71cc6c79-a113-48c7-94bf-57cb9619b66a` succeeded and the post-deploy sample measured 4.89 listings/sec, about 2.1× the 2.34/sec baseline. SEC request rate was 3.40/sec.
-3. Confirm the CA bundle is in the running image (done). Recent status returned 200 and the latest SEC errors were HTTP 404/empty standard facts rather than internal errors. `retryPending` remained at 488 over this sample, so it has not drained. Continue monitoring unique retry outcomes and confirm there is no stuck lease or memory pressure.
+3. Confirm the CA bundle is in the running image (done). Recent status returned 200 and the latest SEC errors were HTTP 404/empty standard facts rather than internal errors. The run later reached terminal stage 13 with retryPending 0; 777 SEC failures and 649 overall data gaps remain in its partial result. No active lease is held by that terminal run.
 4. Keep the batch at 36 only if memory, SEC responses, and total progress remain healthy. Otherwise lower the cursor size while retaining the 12-worker cap.
 
 ### P1 — show stage-specific operational progress
@@ -48,7 +50,7 @@ Separately from acquisition, cold GET `/api/radar` can run `ensureRunEvaluations
 
 Add per-stage durations and throughput for SEC Frames, scoring, history, issuer research, and ranking publication. For each stage, compare network wait, provider quota wait, JSON parse time, database batch time, and scheduler idle time. Tune each batch only after measuring the dominant component, preserving resumable checkpoints and data completeness.
 
-The next scanner release already addresses one measured avoidable cost by reading only the current CIK batch from `bulk_fundamentals`; a separate count keeps coverage exact. It also prevents duplicate CIK retry entries within a queued batch. Validate stage-5 outputs and retries with duplicate-listing fixtures and a live cursor sample before increasing batch or concurrency further.
+The pushed follow-on release (`9bf74b0`) addresses one measured avoidable cost by reading only the current CIK batch from `bulk_fundamentals`; a separate count keeps coverage exact. It also prevents duplicate CIK retry entries within a queued batch and explains the progress cursor in the UI. Its duplicate-listing regression and all local type/runtime/research/UI/build checks pass. Railway CLI authentication expired before deployment; the CLI device login is awaiting the account owner. Deploy this SHA, then use the next scheduled acquisition run to measure this optimization before changing batch or concurrency further.
 
 ## External source
 
