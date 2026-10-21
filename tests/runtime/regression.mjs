@@ -295,6 +295,7 @@ test('newest finished full universe remains canonical despite partial provider c
    const company=await(await companyGET(new Request('https://radar.test/api/company?symbol='+snapshot.symbol))).json();assert.deepEqual(company.evaluation,expected);assert.equal(company.ranking.runId,id);assert.equal(company.ranking.position,current.rankPositions[index]);assert.equal(company.profileDescription.description,description);assert.equal(company.snapshot.description,snapshot.description,'current profile prose never mutates the archived rating snapshot');
    const row=report.rows.find(row=>row.symbol===snapshot.symbol);assert.deepEqual(row.evaluation,expected);assert.equal(row.rank,current.rankPositions[index]);
   }
+  const ratingOnly=await(await companyGET(new Request('https://radar.test/api/company?symbol=PARTIAL-A&includeDescription=0'))).json();assert.equal(ratingOnly.profileDescription,null,'bulk release verification can skip optional external narrative enrichment');
   const prior=new Date(Date.now()-4*86_400_000).toISOString().slice(0,10),last=new Date(Date.now()-3*86_400_000).toISOString().slice(0,10);
   const savedBefore=await db().prepare('SELECT payload,evaluation FROM fundamental_snapshots WHERE run_id=? AND symbol=?').bind(id,'PARTIAL-A').first();
   setHistoryResult({history:[{date:prior,close:20},{date:last,close:22}],splits:[],source:'TEST_CHART_HISTORY',url:'https://example.test/chart-history',retrievedAt:new Date().toISOString(),availableAt:`${last}T21:00:00Z`});

@@ -40,9 +40,10 @@ export async function GET(request: Request) {
     if(canonical){
       // Keep the archived rating snapshot unchanged. A current issuer
       // explanation is display-only and carries its own observation date.
+      const includeDescription=params.get('includeDescription')!=='0';
       const missingDescription=!canonical.snapshot.description||canonical.snapshot.description.startsWith('الوصف غير متاح');
       const [profileDescription,chart]=await Promise.all([
-        missingDescription?(async()=>{try{const observed=await observedNasdaqCompanyDescription(symbol);if(!observed)return null;const translated=await translateToArabic(observed.description,3_600);return {description:observed.description,descriptionAr:translated?.text,source:observed.source};}catch{return null;}})():Promise.resolve(null),
+        includeDescription&&missingDescription?(async()=>{try{const observed=await observedNasdaqCompanyDescription(symbol);if(!observed)return null;const translated=await translateToArabic(observed.description,3_600);return {description:observed.description,descriptionAr:translated?.text,source:observed.source};}catch{return null;}})():Promise.resolve(null),
         params.get('includeHistory')==='1'?displayHistory(symbol,new Date().toISOString()).catch(()=>null):Promise.resolve(null),
       ]);
       const snapshot=chart?{...canonical.snapshot,history:chart.history,provenance:{...canonical.snapshot.provenance,history:chart.source}}:canonical.snapshot;
