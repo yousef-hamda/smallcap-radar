@@ -221,26 +221,44 @@ export async function processScanBatch(runId: string) {
   }
 
   if (!isQuick && run.stage === 5) {
-    const rows = (await database.prepare('SELECT cik,payload FROM bulk_fundamentals WHERE run_id=?').bind(run.id).all()).results as any[];
-    const facts = new Map<number, BulkFundamentals>(rows.map((row) => [Number(row.cik), JSON.parse(row.payload)]));
-    const queue = JSON.parse(run.retry_queue || '[]');
+    const queuedCiks = new Set<number>();
+    const queue = JSON.parse(run.retry_queue || '[]').filter((job: any) => {
+      const cik = Number(job.company?.cik);
+      if (!Number.isSafeInteger(cik) || cik <= 0 || queuedCiks.has(cik)) return false;
+      queuedCiks.add(cik);
+      return true;
+    });
     const retrying = run.offset >= run.total;
     const jobs = retrying ? queue.slice(0, COMPANY_FACTS_BATCH_SIZE) : companies.slice(run.offset, run.offset + COMPANY_FACTS_BATCH_SIZE).map((company: any) => ({ company, attempt: 0 }));
     const remaining = retrying ? queue.slice(COMPANY_FACTS_BATCH_SIZE) : queue;
-    const candidates: number[] = jobs.map((job: any) => Number(job.company?.cik)).filter((cik: number): cik is number => Number.isInteger(cik) && cik > 0 && needsCompanyFacts(facts.get(cik))) as number[];
+    const rawJobCiks: number[] = jobs.map((job: any) => Number(job.company?.cik)).filter((cik: number) => Number.isSafeInteger(cik) && cik > 0);
+    const jobCiks = [...new Set<number>(rawJobCiks)];
+    const [savedRows, coverageRow] = await Promise.all([
+      jobCiks.length
+        ? database.prepare(`SELECT cik,payload FROM bulk_fundamentals WHERE run_id=? AND cik IN (${jobCiks.map(() => '?').join(',')})`).bind(run.id, ...jobCiks).all()
+        : Promise.resolve({ results: [] }),
+      database.prepare('SELECT COUNT(*) AS count FROM bulk_fundamentals WHERE run_id=?').bind(run.id).first() as Promise<any>,
+    ]);
+    const facts = new Map<number, BulkFundamentals>((savedRows.results as any[]).map((row) => [Number(row.cik), JSON.parse(row.payload)]));
+    const candidates: number[] = jobCiks.filter((cik: number) => needsCompanyFacts(facts.get(cik)));
     const fallback = candidates.length ? await fetchCompanyFactsFallback([...new Set(candidates)], new Date(), facts) : { fundamentals: facts, changed: [], requests: 0, success: 0, empty: 0, failed: 0, failedCiks: [], retryableFailedCiks: [], errors: [] };
     const retryableFailedSet = new Set(fallback.retryableFailedCiks);
+    const queuedRetryCiks = new Set(remaining.map((job: any) => Number(job.company?.cik)).filter((cik: number) => Number.isSafeInteger(cik) && cik > 0));
     for (const job of jobs) {
       const cik = Number(job.company?.cik);
-      if (retryableFailedSet.has(cik) && job.attempt < 2) remaining.push({ ...job, attempt: job.attempt + 1 });
+      if (retryableFailedSet.has(cik) && job.attempt < 2 && !queuedRetryCiks.has(cik)) {
+        remaining.push({ ...job, attempt: job.attempt + 1 });
+        queuedRetryCiks.add(cik);
+      }
     }
     const statements = fallback.changed.map((cik) => database.prepare('INSERT OR REPLACE INTO bulk_fundamentals(run_id,cik,payload) VALUES(?,?,?)').bind(run.id, cik, JSON.stringify(fallback.fundamentals.get(cik))));
     for (let index = 0; index < statements.length; index += 75) await database.batch(statements.slice(index, index + 75));
     const nextOffset = retrying ? run.offset : run.offset + jobs.length;
     const done = nextOffset >= run.total && remaining.length === 0;
     const nextError = fallback.failed ? `SEC Company Facts: ${fallback.success}/${fallback.requests} طلبًا ناجحًا${fallback.empty ? `، ${fallback.empty} دون حقائق معيارية قابلة للاستخدام` : ''}. ${fallback.errors.join('؛ ')||run.error||''}` : run.error;
-    await database.prepare("UPDATE strategy_runs SET stage=?,offset=?,processed=0,sec_requests=?,sec_success=?,sec_failed=?,fundamental_coverage=?,error=?,updated_at=?,lease_until=0,retry_queue=? WHERE id=?").bind(done?9:5,done?0:nextOffset,Number(run.sec_requests||0)+fallback.requests,Number(run.sec_success||0)+fallback.success,Number(run.sec_failed||0)+fallback.failed,fallback.fundamentals.size,(nextError||'').slice(0,4000),new Date().toISOString(),JSON.stringify(remaining),run.id).run();
-    await log(run.id, 'sec_companyfacts', `استعادة Company Facts: ${fallback.success}/${fallback.requests} طلبًا؛ ${fallback.empty} بلا حقائق معيارية؛ ${fallback.failed} فشل؛ تغطية الحقول ${fallback.fundamentals.size}/${run.total}${done ? '؛ اكتملت مرحلة الاستعادة' : ''}`);
+    const coverage = Number(coverageRow?.count ?? 0) + fallback.changed.filter((cik) => !facts.has(cik)).length;
+    await database.prepare("UPDATE strategy_runs SET stage=?,offset=?,processed=0,sec_requests=?,sec_success=?,sec_failed=?,fundamental_coverage=?,error=?,updated_at=?,lease_until=0,retry_queue=? WHERE id=?").bind(done?9:5,done?0:nextOffset,Number(run.sec_requests||0)+fallback.requests,Number(run.sec_success||0)+fallback.success,Number(run.sec_failed||0)+fallback.failed,coverage,(nextError||'').slice(0,4000),new Date().toISOString(),JSON.stringify(remaining),run.id).run();
+    await log(run.id, 'sec_companyfacts', `استعادة Company Facts: ${fallback.success}/${fallback.requests} طلبًا؛ ${fallback.empty} بلا حقائق معيارية؛ ${fallback.failed} فشل؛ تغطية حقائق المُصدرين ${coverage}/${run.total}${done ? '؛ اكتملت مرحلة الاستعادة' : ''}`);
     run = await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first();
     return { run: publicRun(run), done: false };
   }

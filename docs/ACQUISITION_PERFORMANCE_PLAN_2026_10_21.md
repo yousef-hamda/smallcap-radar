@@ -13,25 +13,28 @@ The slowdown comes from doing only 12 companies per scheduled HTTP tick. Each ti
 - Increased the durable Company Facts cursor batch from 12 to 36 companies, so one scheduled invocation can make progress across multiple SEC request windows.
 - Bounded active Company Facts requests and response parsing to 12 workers. This preserves the existing per-issuer request fanout ceiling while the wider cursor reduces scheduler round trips. The global provider queue still controls actual SEC request starts.
 - Kept permanent 404 / invalid-resource failures out of the transient retry queue.
+- Added the Debian `ca-certificates` package to the production image. Runtime inspection found that the original `node:22-bookworm-slim` image lacked `/etc/ssl/certs/ca-certificates.crt`. Workerd therefore rejected SEC TLS certificates even though the separate Node process could fetch SEC using Node's bundled roots. This caused repeated internal SEC fetch failures and transient retry buildup. The CA-equipped image is now deployed as Railway deployment `71cc6c79-a113-48c7-94bf-57cb9619b66a` (SUCCESS); the bundle is present in the live container.
+- Clarified the stage-5 Arabic label and details locally: 30–35% represents the issuer-list cursor, not the fraction of Company Facts requests completed. The details display the transient retry count separately.
+- Reduced each stage-5 fundamentals read to the CIKs in the current batch, with a separate row count for coverage, rather than reading and parsing every saved fundamentals payload on every scheduler tick. Also deduplicated retry entries by CIK across the active and queued work. A regression proves unrelated damaged payloads are not read, duplicate listing CIKs make one request per issuer, active/queued retry entries are unique, and request retries stay bounded. Typecheck, lint, all 276 engine tests, all 105 runtime tests, all 21 research tests, all 89 repository/UI tests, and production build passed. This local follow-on change is not yet deployed.
 
-These changes preserve row order, checkpoints, data selection, and SEC rate limits. They should reduce the scheduler overhead per issuer; actual scan duration remains bounded by SEC response latency, missing-fact coverage, and later scan stages. Validate with the next production stage-5 throughput sample before claiming a measured speedup.
+The deployed 36-row cursor advances by listing order and preserves its checkpoint. Before the follow-on targeted-read change, a production sample advanced 216 listings in 44.169 seconds (4.89 listings/second), versus the earlier 60 in 25.6 seconds (2.34/second), about 2.1× faster. Requests advanced by 150 (3.40/sec), 144 succeeded, and 6 failed; the shared request reservation remains 8/sec. The retry queue held at 488 across both observations, so the run is progressing but transient retries have not drained. The second sample's latest error was `HTTP 404` and two successful responses without usable standard facts, rather than the first sample's generic internal failures. HTTP 404/empty facts are legitimate issuer coverage gaps; the aggregate `sec_failed` counter still mixes outcome classes. This measurement shows a speedup, not that every stage is fast or the retry backlog is resolved. The CA fix removes one root cause of SEC failures but does not make every issuer have Company Facts or eliminate permanent missing-resource responses.
 
 ## Full improvement plan
 
-### P0 — validate the bounded batch change
+### P0 — validate the bounded batch change and SEC transport
 
 1. Run type, runtime, and production build checks.
-2. Deploy and compare persisted Company Facts cursor movement and request counts over a fixed interval against the baseline above.
-3. Confirm `retryPending` drains, no lease remains stuck, request rate stays below the global 8/second reservation, and the Worker remains within memory limits.
+2. Deployment `71cc6c79-a113-48c7-94bf-57cb9619b66a` succeeded and the post-deploy sample measured 4.89 listings/sec, about 2.1× the 2.34/sec baseline. SEC request rate was 3.40/sec.
+3. Confirm the CA bundle is in the running image (done). Recent status returned 200 and the latest SEC errors were HTTP 404/empty standard facts rather than internal errors. `retryPending` remained at 488 over this sample, so it has not drained. Continue monitoring unique retry outcomes and confirm there is no stuck lease or memory pressure.
 4. Keep the batch at 36 only if memory, SEC responses, and total progress remain healthy. Otherwise lower the cursor size while retaining the 12-worker cap.
 
 ### P1 — show stage-specific operational progress
 
-Expose stage name, companies examined, actual Company Facts requests, successes, permanent missing-resource responses, transient retries, and last checkpoint time separately. Keep the overall phase-weighted progress, but show it beside the actual stage cursor so a long 30–35% phase cannot look frozen. Report a stale checkpoint only after an explicit no-progress threshold; do not infer a stall from the percentage alone.
+The local UI change explains that the 30–35% stage-5 bar is the issuer-list cursor, not request completion, and displays transient retry count separately. The persisted SEC request totals still combine Frames and Company Facts, and `sec_failed` does not distinguish permanent 404s from all transient failures. The next instrumentation step is to persist per-stage durations, Company Facts request outcomes, and a durable last-progress timestamp. Keep overall phase-weighted progress beside those stage-specific values, and report a stale checkpoint only after an explicit no-progress threshold; do not infer a stall from the percentage alone.
 
 ### P1 — reuse existing source artifacts more broadly
 
-Measure SEC artifact-cache hits and age by source before adding providers. Company Facts already has a durable six-hour cache. Persist per-run request outcomes by CIK so resumed scans do not repeat known permanent 404s and so aggregate SEC success/failure counters distinguish `not-found`, `empty-standard-facts`, `rate-limited`, `timeout`, and `server-error`.
+Measure SEC artifact-cache hits and age by source before adding providers. Company Facts already has a durable six-hour positive response cache. Persist per-run request outcomes by CIK so resumed scans do not repeat known permanent 404s or empty standard facts, and distinguish `not-found`, `empty-standard-facts`, `rate-limited`, `timeout`, and `server-error`. The current cursor walks listing rows, while data and provider retry identity are CIK-based; 648 duplicate CIKs appeared in the checked-in dated sample of 7,494 listings. A durable unique-CIK work queue and per-CIK attempt budget should replace repeated issuer work across listing boundaries. Validate counts against the current production directory before choosing its size.
 
 ### P2 — evaluate the SEC nightly bulk archive
 
@@ -44,6 +47,8 @@ Separately from acquisition, cold GET `/api/radar` can run `ensureRunEvaluations
 ### P3 — profile later stages independently
 
 Add per-stage durations and throughput for SEC Frames, scoring, history, issuer research, and ranking publication. For each stage, compare network wait, provider quota wait, JSON parse time, database batch time, and scheduler idle time. Tune each batch only after measuring the dominant component, preserving resumable checkpoints and data completeness.
+
+The next scanner release already addresses one measured avoidable cost by reading only the current CIK batch from `bulk_fundamentals`; a separate count keeps coverage exact. It also prevents duplicate CIK retry entries within a queued batch. Validate stage-5 outputs and retries with duplicate-listing fixtures and a live cursor sample before increasing batch or concurrency further.
 
 ## External source
 

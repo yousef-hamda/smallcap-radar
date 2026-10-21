@@ -562,6 +562,27 @@ test('terminal no-session instruments retain missing coverage without repeated h
   assert.match(stored,/no historical sessions returned/);
  }finally{setHistoryResult(null);}
 });
+test('Company Facts stage reads the active CIK batch and queues at most one retry per issuer',async()=>{
+ const now=new Date().toISOString(),companies=[
+  {ticker:'FACTS-A',cik:12345},{ticker:'FACTS-A-CLASS',cik:12345},{ticker:'FACTS-B',cik:67890}
+ ];
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,offset,strategy_hash,retry_queue) VALUES(?,?,?,'running','Bulk Quotes/SEC Frames + Opportunity SEC v14 · full',3,'paged-v1',5,0,?,'[]')").bind('facts-batch-read',now,now,currentHash()).run();
+ await db().prepare('INSERT INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind('universe:facts-batch-read:candidates:0','test',now,JSON.stringify(companies)).run();
+ // An unrelated damaged row must not be read or parsed while processing this small batch.
+ await db().prepare('INSERT INTO bulk_fundamentals(run_id,cik,payload) VALUES(?,?,?)').bind('facts-batch-read',99999,'not-json').run();
+ const original=globalThis.fetch;let requests=0;
+ globalThis.fetch=async()=>{requests++;return new Response('',{status:503});};
+ try{
+  const result=await processScanBatch('facts-batch-read');
+  const saved=await db().prepare("SELECT retry_queue,sec_requests,sec_failed,fundamental_coverage,offset FROM strategy_runs WHERE id='facts-batch-read'").first();
+  const retries=JSON.parse(saved.retry_queue);
+  assert.equal(result.run.stage,5);assert.equal(saved.offset,3,JSON.stringify({run:result.run,busy:result.busy,pausedForCapacity:result.pausedForCapacity}));
+  assert.equal(saved.sec_requests,2,'duplicate listings share one SEC request per CIK in this batch');
+  assert.equal(saved.sec_failed,2);assert.equal(saved.fundamental_coverage,1,'coverage counts saved CIK rows without loading their payloads');
+  assert.equal(requests,6,'two unique CIKs receive bounded three-attempt provider retries');
+  assert.equal(retries.length,2);assert.deepEqual(retries.map(job=>job.company.cik).sort((a,b)=>a-b),[12345,67890]);
+ }finally{globalThis.fetch=original;}
+});
 test('history completion queues all CIK-linked common stocks for SEC research and recovered SEC retries complete cleanly',async()=>{
  const now=new Date().toISOString(),companies=[
   {ticker:'SEC-ELIGIBLE',cik:1001},{ticker:'SEC-ALIAS',cik:1001},{ticker:'SEC-LOW-LIQUIDITY',cik:1002},{ticker:'SEC-NO-CIK'},{ticker:'SEC-NO-QUOTE',cik:1004}
