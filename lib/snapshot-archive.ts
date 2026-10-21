@@ -53,6 +53,7 @@ export async function maintainHistoricalStorage(limit=50){
  // are separate from saved source evidence, favorites and portfolio state.
  await db().batch([
   db().prepare("DELETE FROM bulk_fundamentals WHERE run_id<>? AND run_id IN (SELECT id FROM strategy_runs WHERE status='failed' OR (status IN ('complete','partial') AND stage>=13))").bind(recoverable?.id??''),
+  db().prepare("DELETE FROM company_facts_outcomes WHERE run_id<>? AND run_id IN (SELECT id FROM strategy_runs WHERE status='failed' OR (status IN ('complete','partial') AND stage>=13))").bind(recoverable?.id??''),
   db().prepare("DELETE FROM raw_cache WHERE key LIKE 'universe:%' AND EXISTS(SELECT 1 FROM strategy_runs r WHERE r.id<>? AND r.id=substr(raw_cache.key,10,36) AND (r.status='failed' OR (r.status IN ('complete','partial') AND r.stage>=13)))").bind(recoverable?.id??''),
  ]);
  const summaries=await compactHistoricalSummaries(limit);

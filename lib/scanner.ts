@@ -24,6 +24,17 @@ const OPPORTUNITY_PROVIDER_CONCURRENCY = 8;
 export const SCAN_SOURCE_VERSION = 'Bulk Quotes/SEC Frames + Opportunity SEC v14';
 const UNIVERSE_PAGE=100;
 const universePageSize=(run:any)=>run.universe==='paged-v2'?UNIVERSE_PAGE:1000;
+function parseStoredBulkFundamentals(cik:number,payload:string):BulkFundamentals|null {
+  try {
+    const value=JSON.parse(payload);
+    if(!value||typeof value!=='object'||Array.isArray(value))return null;
+    for(const [key,fact] of Object.entries(value)){
+      if(key==='conflicts'||key==='warnings'){if(!Array.isArray(fact))return null;continue;}
+      if(!fact||typeof fact!=='object'||Number((fact as any).cik)!==cik||!Number.isFinite(Number((fact as any).val)))return null;
+    }
+    return value as BulkFundamentals;
+  }catch{return null;}
+}
 async function cachedMarketHistory(payload:string):Promise<Awaited<ReturnType<typeof historicalMarketData>>|null>{
  try{
   const value:any=await decodeHistoryCache(payload);
@@ -194,7 +205,9 @@ export async function processScanBatch(runId: string) {
     try {
       if(!companies.length&&run.total>0)throw Error('ملف CIK المرشحين مفقود؛ لا يمكن اعتبار SEC مكتملًا.');
       const previousRows=(await database.prepare('SELECT cik,payload FROM bulk_fundamentals WHERE run_id=?').bind(run.id).all()).results as any[];
-      const initial=new Map<number,BulkFundamentals>(previousRows.map(row=>[Number(row.cik),JSON.parse(row.payload)]));
+      const initial=new Map<number,BulkFundamentals>(),corruptCiks:number[]=[];
+      for(const row of previousRows){const cik=Number(row.cik),parsed=parseStoredBulkFundamentals(cik,row.payload);if(parsed)initial.set(cik,parsed);else corruptCiks.push(cik);}
+      if(corruptCiks.length){const deletes=corruptCiks.map(cik=>database.prepare('DELETE FROM bulk_fundamentals WHERE run_id=? AND cik=?').bind(run.id,cik));for(let index=0;index<deletes.length;index+=75)await database.batch(deletes.slice(index,index+75));await log(run.id,'sec_frames',`Discarded ${corruptCiks.length} malformed or CIK-mismatched saved issuer row(s); bounded Frames acquisition will rebuild them.`);}
       const bulk = await fetchBulkFundamentals(companies.map((company: any) => Number(company.cik)),new Date(),{offset:run.offset,limit:4,initial});
       const statements = bulk.changed.map(cik=>database.prepare('INSERT OR REPLACE INTO bulk_fundamentals(run_id,cik,payload) VALUES(?,?,?)').bind(run.id,cik,JSON.stringify(bulk.fundamentals.get(cik))));
       for (let index = 0; index < statements.length; index += 75) await database.batch(statements.slice(index, index + 75));
@@ -229,34 +242,74 @@ export async function processScanBatch(runId: string) {
       return true;
     });
     const retrying = run.offset >= run.total;
-    const jobs = retrying ? queue.slice(0, COMPANY_FACTS_BATCH_SIZE) : companies.slice(run.offset, run.offset + COMPANY_FACTS_BATCH_SIZE).map((company: any) => ({ company, attempt: 0 }));
+    const cursorEnd = Math.min(run.total, run.offset + COMPANY_FACTS_BATCH_SIZE);
+    const listingJobs = retrying ? queue.slice(0, COMPANY_FACTS_BATCH_SIZE) : companies.slice(run.offset, cursorEnd).map((company: any) => ({ company, attempt: 0 }));
+    const jobs: any[] = [];
+    const batchJobCiks = new Set<number>();
+    for (const job of listingJobs) {
+      const cik = Number(job.company?.cik);
+      if (!Number.isSafeInteger(cik) || cik <= 0 || batchJobCiks.has(cik)) continue;
+      batchJobCiks.add(cik);
+      jobs.push(job);
+    }
     const remaining = retrying ? queue.slice(COMPANY_FACTS_BATCH_SIZE) : queue;
     const rawJobCiks: number[] = jobs.map((job: any) => Number(job.company?.cik)).filter((cik: number) => Number.isSafeInteger(cik) && cik > 0);
     const jobCiks = [...new Set<number>(rawJobCiks)];
-    const [savedRows, coverageRow] = await Promise.all([
+    const [savedRows, outcomeRows, coverageRow] = await Promise.all([
       jobCiks.length
         ? database.prepare(`SELECT cik,payload FROM bulk_fundamentals WHERE run_id=? AND cik IN (${jobCiks.map(() => '?').join(',')})`).bind(run.id, ...jobCiks).all()
         : Promise.resolve({ results: [] }),
+      jobCiks.length
+        ? database.prepare(`SELECT cik,state,attempt,last_error FROM company_facts_outcomes WHERE run_id=? AND cik IN (${jobCiks.map(() => '?').join(',')})`).bind(run.id, ...jobCiks).all()
+        : Promise.resolve({ results: [] }),
       database.prepare('SELECT COUNT(*) AS count FROM bulk_fundamentals WHERE run_id=?').bind(run.id).first() as Promise<any>,
     ]);
-    const facts = new Map<number, BulkFundamentals>((savedRows.results as any[]).map((row) => [Number(row.cik), JSON.parse(row.payload)]));
-    const candidates: number[] = jobCiks.filter((cik: number) => needsCompanyFacts(facts.get(cik)));
-    const fallback = candidates.length ? await fetchCompanyFactsFallback([...new Set(candidates)], new Date(), facts) : { fundamentals: facts, changed: [], requests: 0, success: 0, empty: 0, failed: 0, failedCiks: [], retryableFailedCiks: [], errors: [] };
+    const facts = new Map<number, BulkFundamentals>(),corruptCiks:number[]=[];
+    for(const row of savedRows.results as any[]){const cik=Number(row.cik),parsed=parseStoredBulkFundamentals(cik,row.payload);if(parsed)facts.set(cik,parsed);else corruptCiks.push(cik);}
+    const outcomesByCik = new Map<number, any>((outcomeRows.results as any[]).map((row) => [Number(row.cik), row]));
+    // A retrying slice is removed from `remaining` while it is being processed,
+    // so only jobs outside that slice should suppress enqueueing a new retry.
+    // During cursor traversal every queued retry must still suppress a later
+    // duplicate listing from bypassing the queue.
+    const queuedRetryCiks = new Set((retrying ? remaining : queue).map((job: any) => Number(job.company?.cik)).filter((cik: number) => Number.isSafeInteger(cik) && cik > 0));
+    if(corruptCiks.length){
+      await database.batch(corruptCiks.flatMap(cik=>[
+        database.prepare('DELETE FROM bulk_fundamentals WHERE run_id=? AND cik=?').bind(run.id,cik),
+        database.prepare('DELETE FROM company_facts_outcomes WHERE run_id=? AND cik=?').bind(run.id,cik),
+      ]));
+      for(const cik of corruptCiks)outcomesByCik.delete(cik);
+      await log(run.id,'sec_companyfacts',`Discarded ${corruptCiks.length} malformed or CIK-mismatched saved issuer row(s); refetching those CIKs.`);
+    }
+    const candidates: number[] = jobCiks.filter((cik: number) => needsCompanyFacts(facts.get(cik)) && (retrying ? (!outcomesByCik.has(cik) || outcomesByCik.get(cik)?.state === 'retryable_failure') : (!outcomesByCik.has(cik) && !queuedRetryCiks.has(cik))));
+    const fallback = candidates.length ? await fetchCompanyFactsFallback([...new Set(candidates)], new Date(), facts) : { fundamentals: facts, changed: [], requests: 0, success: 0, empty: 0, failed: 0, failedCiks: [], retryableFailedCiks: [], failures: [], errors: [] };
     const retryableFailedSet = new Set(fallback.retryableFailedCiks);
-    const queuedRetryCiks = new Set(remaining.map((job: any) => Number(job.company?.cik)).filter((cik: number) => Number.isSafeInteger(cik) && cik > 0));
+    const candidateSet = new Set(candidates);
+    const retryAttempts = new Map<number, number>();
     for (const job of jobs) {
       const cik = Number(job.company?.cik);
+      if (candidateSet.has(cik)) retryAttempts.set(cik, Number(job.attempt || 0));
       if (retryableFailedSet.has(cik) && job.attempt < 2 && !queuedRetryCiks.has(cik)) {
         remaining.push({ ...job, attempt: job.attempt + 1 });
         queuedRetryCiks.add(cik);
       }
     }
     const statements = fallback.changed.map((cik) => database.prepare('INSERT OR REPLACE INTO bulk_fundamentals(run_id,cik,payload) VALUES(?,?,?)').bind(run.id, cik, JSON.stringify(fallback.fundamentals.get(cik))));
+    const failuresByCik = new Map(fallback.failures.map((failure) => [failure.cik,failure]));
+    for (const cik of candidates) {
+      const attempt = retryAttempts.get(cik) ?? 0;
+      const fact = fallback.fundamentals.get(cik);
+      const failure = failuresByCik.get(cik);
+      const state = failure
+        ? retryableFailedSet.has(cik) ? (attempt < 2 ? 'retryable_failure' : 'retry_exhausted') : 'permanent_failure'
+        : !fact ? 'empty' : needsCompanyFacts(fact) ? 'incomplete' : 'complete';
+      const error = failure?.message.slice(0, 1000) ?? null;
+      statements.push(database.prepare('INSERT INTO company_facts_outcomes(run_id,cik,state,attempt,last_error,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(run_id,cik) DO UPDATE SET state=excluded.state,attempt=excluded.attempt,last_error=excluded.last_error,updated_at=excluded.updated_at').bind(run.id,cik,state,attempt,error,new Date().toISOString()));
+    }
     for (let index = 0; index < statements.length; index += 75) await database.batch(statements.slice(index, index + 75));
-    const nextOffset = retrying ? run.offset : run.offset + jobs.length;
+    const nextOffset = retrying ? run.offset : cursorEnd;
     const done = nextOffset >= run.total && remaining.length === 0;
     const nextError = fallback.failed ? `SEC Company Facts: ${fallback.success}/${fallback.requests} طلبًا ناجحًا${fallback.empty ? `، ${fallback.empty} دون حقائق معيارية قابلة للاستخدام` : ''}. ${fallback.errors.join('؛ ')||run.error||''}` : run.error;
-    const coverage = Number(coverageRow?.count ?? 0) + fallback.changed.filter((cik) => !facts.has(cik)).length;
+    const coverage = Math.max(0,Number(coverageRow?.count ?? 0)-corruptCiks.length) + fallback.changed.filter((cik) => !facts.has(cik)).length;
     await database.prepare("UPDATE strategy_runs SET stage=?,offset=?,processed=0,sec_requests=?,sec_success=?,sec_failed=?,fundamental_coverage=?,error=?,updated_at=?,lease_until=0,retry_queue=? WHERE id=?").bind(done?9:5,done?0:nextOffset,Number(run.sec_requests||0)+fallback.requests,Number(run.sec_success||0)+fallback.success,Number(run.sec_failed||0)+fallback.failed,coverage,(nextError||'').slice(0,4000),new Date().toISOString(),JSON.stringify(remaining),run.id).run();
     await log(run.id, 'sec_companyfacts', `استعادة Company Facts: ${fallback.success}/${fallback.requests} طلبًا؛ ${fallback.empty} بلا حقائق معيارية؛ ${fallback.failed} فشل؛ تغطية حقائق المُصدرين ${coverage}/${run.total}${done ? '؛ اكتملت مرحلة الاستعادة' : ''}`);
     run = await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first();
@@ -265,7 +318,15 @@ export async function processScanBatch(runId: string) {
 
   if (!isQuick && run.stage === 9) {
     const rows = (await database.prepare('SELECT cik,payload FROM bulk_fundamentals WHERE run_id=?').bind(run.id).all()).results as any[];
-    const facts = new Map<number, BulkFundamentals>(rows.map((row) => [Number(row.cik), JSON.parse(row.payload)]));
+    const facts = new Map<number, BulkFundamentals>(),corruptCiks:number[]=[];
+    for(const row of rows){const cik=Number(row.cik),parsed=parseStoredBulkFundamentals(cik,row.payload);if(parsed)facts.set(cik,parsed);else corruptCiks.push(cik);}
+    if(corruptCiks.length){
+      const deletes=corruptCiks.map(cik=>database.prepare('DELETE FROM bulk_fundamentals WHERE run_id=? AND cik=?').bind(run.id,cik));for(let index=0;index<deletes.length;index+=75)await database.batch(deletes.slice(index,index+75));
+      const message=`Discarded ${corruptCiks.length} malformed or CIK-mismatched saved issuer row(s) during scoring; those issuers are scored with missing-data coverage.`;
+      await database.prepare("UPDATE strategy_runs SET failed=failed+?,error=?,updated_at=? WHERE id=?").bind(corruptCiks.length,[run.error,message].filter(Boolean).join(' ').slice(0,4000),new Date().toISOString(),run.id).run();
+      await log(run.id,'sec_frames',message);
+      run.failed=Number(run.failed||0)+corruptCiks.length;
+    }
     const entries = companies.slice(run.offset, run.offset + SCORE_BATCH_SIZE);
     const now = new Date().toISOString();
     const snapshots:{company:any;snapshot:ReturnType<typeof preliminarySnapshot>}[]=entries.map((company:any)=>({company,snapshot:preliminarySnapshot(company,facts.get(Number(company.cik)),now)}));

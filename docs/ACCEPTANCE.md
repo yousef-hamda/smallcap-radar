@@ -1,5 +1,7 @@
 # Production acceptance — October 7, 2026
 
+**Current release note — 2026-10-22:** the acceptance table below proves the mathematical ranking contract only for the October 7 archive/deployment; it is not proof for current source or data acquisition. The October 21 rubric `1.5.3-validated-period-windows` production replay was separately verified for 7,532 listings in [the project audit](PROJECT_AUDIT_2026_10_21.md). The live acquisition is currently in stage 5 at about 31% and is advancing, with SEC coverage gaps; local cross-batch retry and corrupted-payload fixes are awaiting a successful Railway deployment. The current deployment, running scan, Railway incident, and secret-rotation follow-up are tracked in [the handoff](../HANDOFF.md).
+
 **PASS for every required mathematical scoring/ranking condition.** Deployment `7a9f861a-4b77-41aa-a09f-dbc4f9fcbf2e`, application archive `6c452e5545b4c78ea25f09374794219f45f81afd`, rubric `1.2.6-stable-import-identities` / `d21f9710`. Exact-archive CI `37568804637` PASS.
 
 | Acceptance check | Observed result |

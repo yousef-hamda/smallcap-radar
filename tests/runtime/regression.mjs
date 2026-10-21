@@ -271,6 +271,14 @@ test('stage9 persists rows and hands every in-range category row to history scor
  try { const researchStage=await processScanBatch('scan-test');assert.equal(researchStage.done,false);assert.equal(researchStage.run.stage,11);assert.equal(researchStage.run.total,1,'issuer-linked financial research is attempted even when liquidity is below the safety floor');const final=await processScanBatch('scan-test');assert.equal(final.done,true);assert.equal(final.run.stage,13);assert.equal(final.run.processed,1);assert.equal(final.run.status,'complete');const stored=JSON.parse((await db().prepare("SELECT payload FROM fundamental_snapshots WHERE run_id='scan-test'").first()).payload);assert.equal(stored.price,11);assert.ok(Math.abs(stored.dailyChange-.1)<1e-12);assert.match(stored.provenance.dailyChange.tag,/completed close/);assert.equal(stored.opportunityResearch.earnings.providerStatus,'retrieved');const opportunity=await GET(new Request('https://radar.test/api/radar'));assert.equal(opportunity.status,200);const body=await opportunity.json();assert.equal(body.page.strategy,'opportunity','the API defaults to the unified category');assert.equal(body.summary.opportunityRanked,1);assert.equal(body.summary.opportunityNeedsResearch,0);assert.equal(body.snapshots.length,1,'scanner-only data has a final numeric grade with separate evidence diagnostics');const oldAlias=await GET(new Request('https://radar.test/api/radar?strategy=core'));assert.equal((await oldAlias.json()).page.strategy,'opportunity','retired category requests are mapped to the unified category');const research=await GET(new Request('https://radar.test/api/radar?strategy=opportunity&state=needs-research'));assert.equal((await research.json()).snapshots[0].symbol,'TEST'); }
  finally { setHistoryResult(null); }
 });
+test('stage9 quarantines a damaged saved Company Facts row and continues scoring with one explicit data gap',async()=>{
+ const now=new Date().toISOString(),company={ticker:'CORRUPT-FACTS',name:'Synthetic damaged-row fixture',cik:444,exchange:'Nasdaq',marketCap:50e6,price:5};
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,strategy_hash) VALUES(?,?,?,'running','Bulk Quotes/SEC Frames + Opportunity SEC v14 · full',1,?,9,?)").bind('corrupt-facts-score',now,now,JSON.stringify([company]),currentHash()).run();
+ await db().prepare('INSERT INTO bulk_fundamentals(run_id,cik,payload) VALUES(?,?,?)').bind('corrupt-facts-score',company.cik,'not-json').run();
+ const result=await processScanBatch('corrupt-facts-score');assert.equal(result.run.stage,10);assert.equal(result.run.failed,1);assert.equal(result.run.status,'running');
+ assert.equal(await db().prepare("SELECT cik FROM bulk_fundamentals WHERE run_id='corrupt-facts-score'").first(),null);
+ assert.equal((await db().prepare("SELECT COUNT(*) AS count FROM fundamental_snapshots WHERE run_id='corrupt-facts-score'").first()).count,1);
+});
 test('Company Facts recovery stage advances when the durable Frames row is already complete',async()=>{
  const company={ticker:'FACTS-STAGE',name:'Synthetic facts stage',cik:654321,exchange:'Nasdaq',marketCap:100e6,price:10};
  await db().prepare('INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,strategy_hash) VALUES(?,?,?,?,?,?,?,?,?)').bind('facts-stage','2026-09-11T00:00:00Z','2026-09-11T00:00:00Z','running','Bulk Quotes/SEC Frames + Company Facts v10 · full',1,'paged-v1',5,currentHash()).run();
@@ -581,6 +589,38 @@ test('Company Facts stage reads the active CIK batch and queues at most one retr
   assert.equal(saved.sec_failed,2);assert.equal(saved.fundamental_coverage,1,'coverage counts saved CIK rows without loading their payloads');
   assert.equal(requests,6,'two unique CIKs receive bounded three-attempt provider retries');
   assert.equal(retries.length,2);assert.deepEqual(retries.map(job=>job.company.cik).sort((a,b)=>a-b),[12345,67890]);
+ }finally{globalThis.fetch=original;}
+});
+test('Company Facts cursor suppresses a repeated permanent issuer failure across batch boundaries',async()=>{
+ const now=new Date().toISOString(),duplicateCik=50001,companies=[{ticker:'FACTS-404-FIRST',cik:duplicateCik},...Array.from({length:35},(_,i)=>({ticker:`FACTS-CACHED-${i}`,cik:50002+i})),{ticker:'FACTS-404-LATER',cik:duplicateCik}];
+ const completeFacts=(cik)=>Object.fromEntries(['revenue','netIncome','ocf','capex','shares','priorShares','cash','debtTotal'].map(key=>[key,{cik,val:1,end:'2025-12-31'}]));
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,offset,strategy_hash,retry_queue) VALUES(?,?,?,'running','Bulk Quotes/SEC Frames + Opportunity SEC v14 · full',37,'paged-v1',5,0,?,'[]')").bind('facts-404-cross-batch',now,now,currentHash()).run();
+ await db().prepare('INSERT INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind('universe:facts-404-cross-batch:candidates:0','test',now,JSON.stringify(companies)).run();
+ for(const company of companies.slice(1,-1))await db().prepare('INSERT INTO bulk_fundamentals(run_id,cik,payload) VALUES(?,?,?)').bind('facts-404-cross-batch',company.cik,JSON.stringify(completeFacts(company.cik))).run();
+ await db().prepare('INSERT INTO bulk_fundamentals(run_id,cik,payload) VALUES(?,?,?)').bind('facts-404-cross-batch',duplicateCik,'not-json').run();
+ const original=globalThis.fetch;let requests=0;globalThis.fetch=async()=>{requests++;return new Response('',{status:404});};
+ try{
+  const first=await processScanBatch('facts-404-cross-batch');assert.equal(first.run.stage,5);assert.equal(first.run.offset,36);assert.equal(requests,1);
+  const terminal=await db().prepare("SELECT state FROM company_facts_outcomes WHERE run_id='facts-404-cross-batch' AND cik=?").bind(duplicateCik).first();assert.equal(terminal.state,'permanent_failure');
+  const second=await processScanBatch('facts-404-cross-batch');assert.equal(second.run.stage,9);assert.equal(requests,1,'the second listing alias must reuse the persisted terminal outcome');
+  const saved=await db().prepare("SELECT sec_requests,sec_failed FROM strategy_runs WHERE id='facts-404-cross-batch'").first();assert.deepEqual([saved.sec_requests,saved.sec_failed],[1,1]);
+ }finally{globalThis.fetch=original;}
+});
+test('Company Facts cursor leaves one cross-batch transient retry to its retry queue and caps the issuer at three calls',async()=>{
+ const now=new Date().toISOString(),duplicateCik=61001,companies=[{ticker:'FACTS-503-FIRST',cik:duplicateCik},...Array.from({length:35},(_,i)=>({ticker:`FACTS-RETRY-CACHED-${i}`,cik:61002+i})),{ticker:'FACTS-503-LATER',cik:duplicateCik}];
+ const completeFacts=(cik)=>Object.fromEntries(['revenue','netIncome','ocf','capex','shares','priorShares','cash','debtTotal'].map(key=>[key,{cik,val:1,end:'2025-12-31'}]));
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe,stage,offset,strategy_hash,retry_queue) VALUES(?,?,?,'running','Bulk Quotes/SEC Frames + Opportunity SEC v14 · full',37,'paged-v1',5,0,?,'[]')").bind('facts-503-cross-batch',now,now,currentHash()).run();
+ await db().prepare('INSERT INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind('universe:facts-503-cross-batch:candidates:0','test',now,JSON.stringify(companies)).run();
+ for(const company of companies.slice(1,-1))await db().prepare('INSERT INTO bulk_fundamentals(run_id,cik,payload) VALUES(?,?,?)').bind('facts-503-cross-batch',company.cik,JSON.stringify(completeFacts(company.cik))).run();
+ const original=globalThis.fetch;let requests=0;globalThis.fetch=async()=>{requests++;return new Response('',{status:503});};
+ try{
+  const first=await processScanBatch('facts-503-cross-batch');assert.equal(first.run.offset,36);assert.equal(first.run.retryPending,1);assert.equal(requests,3,'the initial provider operation makes three bounded HTTP attempts');
+  await db().prepare("DELETE FROM company_facts_outcomes WHERE run_id='facts-503-cross-batch' AND cik=?").bind(duplicateCik).run(); // Simulate a durable retry queue created by the previous deployed version.
+  const duplicate=await processScanBatch('facts-503-cross-batch');assert.equal(duplicate.run.offset,37);assert.equal(duplicate.run.retryPending,1);assert.equal(requests,3,'the later alias must not bypass the queued retry');
+  const retryOne=await processScanBatch('facts-503-cross-batch');assert.equal(retryOne.run.retryPending,1);assert.equal(requests,6);
+  const retryTwo=await processScanBatch('facts-503-cross-batch');assert.equal(retryTwo.run.stage,9);assert.equal(retryTwo.run.retryPending,0);assert.equal(requests,9,'one issuer is capped at the intended three provider operations');
+  const outcome=await db().prepare("SELECT state,attempt FROM company_facts_outcomes WHERE run_id='facts-503-cross-batch' AND cik=?").bind(duplicateCik).first();assert.deepEqual([outcome.state,outcome.attempt],['retry_exhausted',2]);
+  const saved=await db().prepare("SELECT sec_requests,sec_failed FROM strategy_runs WHERE id='facts-503-cross-batch'").first();assert.deepEqual([saved.sec_requests,saved.sec_failed],[3,3]);
  }finally{globalThis.fetch=original;}
 });
 test('history completion queues all CIK-linked common stocks for SEC research and recovered SEC retries complete cleanly',async()=>{
