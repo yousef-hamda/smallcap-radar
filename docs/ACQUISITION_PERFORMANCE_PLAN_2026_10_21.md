@@ -6,7 +6,7 @@ The previous scanner fix limited D1 fundamentals reads to the active CIK batch, 
 
 The continuation also validates saved fundamentals JSON and CIK identity before reuse. Malformed rows are removed and refetched in acquisition stages; if damage is discovered during scoring, the row is quarantined, missing evidence is retained as missing, and the scan reports a data gap instead of throwing. Outcome rows are cleaned with other terminal-run acquisition caches. Regression coverage includes cross-batch 404s, transient retries, old retry-queue compatibility, and damaged payloads. During revalidation, a test exposed a bug that discarded the second retry while processing the first retry; the queue now excludes its active slice from duplicate suppression. The final runtime suite passes 108/108. This local follow-up is not deployed yet.
 
-At 2026-10-21 23:13 UTC, active scan `c554b271-1cb6-49a3-b8f2-fd413c4b9f7d` was at stage 5, 3,168/7,535 listings, 3 retries pending, 2,512 requests, 2,441 successes, 71 failures, and 4,958 saved issuer rows. A sample about 13 seconds earlier showed 3,096 listings and 2,453 requests, corroborating continued cursor movement. This is not a completed or full-coverage refresh, and the active run still uses the previous deployment.
+At 2026-10-21 23:15:55 UTC, active scan `c554b271-1cb6-49a3-b8f2-fd413c4b9f7d` was at stage 5, 3,924/7,535 listings (52.1%), 9 retries pending, 3,141 requests, 3,044 successes, 97 failures, and 5,033 saved issuer rows. Compared with the 23:13:19 UTC sample, it advanced 756 listings (~4.85/sec) and made 629 more SEC requests (~4.03/sec). This is not a completed or full-coverage refresh, and the active run still uses the previous deployment.
 
 ## Final local verification — 2026-10-21
 
