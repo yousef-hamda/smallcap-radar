@@ -171,16 +171,25 @@ export async function fetchCompanyFactsFallback(candidateCiks: number[], asOf = 
   const failedCiks: number[] = [];
   const retryableFailedCiks: number[] = [];
   let success = 0, empty = 0, failed = 0;
-  const outcomes = await Promise.all([...new Set(candidateCiks.filter(cik=>Number.isSafeInteger(cik)&&cik>0))].map(async (cik) => {
-    const url = companyFactsUrl(cik);
-    try {
-      const payload = await fetchJson(url, 8_000, 6 * 60 * 60_000, 3);
-      if (!companyFactsIdentityMatches(cik, payload)) throw new Error('SEC Company Facts issuer identity mismatch');
-      return { cik, parsed: parseCompanyFacts(cik, payload, asOf), error: null };
-    } catch (error) {
-      return { cik, parsed: undefined, error: error instanceof Error ? error : Error('SEC Company Facts error') };
+  const ciks = [...new Set(candidateCiks.filter(cik=>Number.isSafeInteger(cik)&&cik>0))];
+  const outcomes: {cik:number;parsed:BulkFundamentals|undefined;error:Error|null}[] = [];
+  // A scan tick may advance multiple SEC rate-limit windows. Keep response
+  // memory and active HTTP requests bounded independently of its cursor size.
+  let next = 0;
+  const worker = async () => {
+    while (next < ciks.length) {
+      const cik = ciks[next++];
+      const url = companyFactsUrl(cik);
+      try {
+        const payload = await fetchJson(url, 8_000, 6 * 60 * 60_000, 3);
+        if (!companyFactsIdentityMatches(cik, payload)) throw new Error('SEC Company Facts issuer identity mismatch');
+        outcomes.push({ cik, parsed: parseCompanyFacts(cik, payload, asOf), error: null });
+      } catch (error) {
+        outcomes.push({ cik, parsed: undefined, error: error instanceof Error ? error : Error('SEC Company Facts error') });
+      }
     }
-  }));
+  };
+  await Promise.all(Array.from({length:Math.min(12,ciks.length)},worker));
   for (const outcome of outcomes) {
     if (outcome.error) {
       failed++;

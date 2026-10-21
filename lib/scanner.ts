@@ -12,7 +12,10 @@ const BATCH_SIZE = 1;
 const HISTORY_BATCH_SIZE = 18;
 const PROVIDER_CONCURRENCY = 6;
 const SCORE_BATCH_SIZE = 200;
-const COMPANY_FACTS_BATCH_SIZE = 12;
+// This stage was paying a full scheduler round trip for every 12 issuers.
+// Keep SEC fetch concurrency bounded in bulk.ts, while advancing a wider
+// durable cursor per tick to reduce scheduler/D1 overhead between fetch waves.
+const COMPANY_FACTS_BATCH_SIZE = 36;
 const OPPORTUNITY_BATCH_SIZE = 8;
 // The durable SEC request queue caps aggregate traffic at 8 requests/sec,
 // below SEC's 10 requests/sec fair-access ceiling. Use its full bounded batch
