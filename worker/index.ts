@@ -159,6 +159,7 @@ async function runBackgroundBatch(request: Request, runId: string, env: Env, dir
 // dangerouslyAllowSVG: true in next.config.js and uncomment below:
 // const imageConfig: ImageConfig = { dangerouslyAllowSVG: true };
 
+let scheduledTickPromise:Promise<unknown>|null=null;
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -168,8 +169,13 @@ const worker = {
       const reusable=Number(request.headers.get('X-Radar-Reusable-Bytes')),free=Number(request.headers.get('X-Radar-Filesystem-Free-Bytes'));
       const capacity=request.headers.has('X-Radar-Reusable-Bytes')&&request.headers.has('X-Radar-Filesystem-Free-Bytes')&&Number.isSafeInteger(reusable)&&reusable>=0&&Number.isSafeInteger(free)&&free>=0?{reusableBytes:reusable,filesystemFreeBytes:free}:undefined;
       if((env as any).RAILWAY_VOLUME_MOUNT_PATH&&!capacity)return json({error:'Storage capacity inspection is unavailable; scheduler retry required.'},503);
-      try { return json(await scheduledScanTick(Date.now(),capacity)); }
+      if(scheduledTickPromise)return json({busy:true},202);
+      try {
+        const tick=scheduledScanTick(Date.now(),capacity);scheduledTickPromise=tick;
+        return json(await tick);
+      }
       catch(error) { return json({error:error instanceof Error?error.message:"تعذّر تحديث البيانات"},statusOf(error,503)); }
+      finally { scheduledTickPromise=null; }
     }
 
     if (url.pathname === "/api/push/key" && request.method === "GET") return env.VAPID_PUBLIC_KEY?json({ publicKey: env.VAPID_PUBLIC_KEY }):json({error:"لم تتم تهيئة مفتاح الإشعارات"},503);

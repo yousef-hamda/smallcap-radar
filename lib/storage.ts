@@ -63,7 +63,7 @@ export async function ensureSchema(){
   d.prepare("CREATE TABLE IF NOT EXISTS fundamental_snapshots (id TEXT PRIMARY KEY NOT NULL, run_id TEXT NOT NULL, symbol TEXT NOT NULL, as_of TEXT NOT NULL, payload TEXT NOT NULL, evaluation TEXT NOT NULL, FOREIGN KEY (run_id) REFERENCES strategy_runs(id))"),
   d.prepare("CREATE TABLE IF NOT EXISTS opportunity_rankings (run_id TEXT NOT NULL,symbol TEXT NOT NULL,score REAL NOT NULL,evaluation_hash TEXT NOT NULL,rank_position INTEGER NOT NULL,rubric_hash TEXT NOT NULL,research_fit INTEGER NOT NULL DEFAULT 0,research_fit_financing_pass INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(run_id,symbol))"),
   d.prepare("CREATE INDEX IF NOT EXISTS opportunity_rank_position_idx ON opportunity_rankings(run_id,rank_position)"),
-  d.prepare("CREATE TABLE IF NOT EXISTS opportunity_rank_projection_versions (run_id TEXT PRIMARY KEY,revision INTEGER NOT NULL,rubric_hash TEXT NOT NULL,projection_version TEXT NOT NULL)"),
+  d.prepare("CREATE TABLE IF NOT EXISTS opportunity_rank_projection_versions (run_id TEXT PRIMARY KEY,revision INTEGER NOT NULL,rubric_hash TEXT NOT NULL,projection_version TEXT NOT NULL,cursor_rank_position INTEGER NOT NULL DEFAULT 0,complete INTEGER NOT NULL DEFAULT 0)"),
   d.prepare("CREATE TABLE IF NOT EXISTS opportunity_rank_projection_leases (run_id TEXT PRIMARY KEY,owner TEXT NOT NULL,lease_until INTEGER NOT NULL)"),
   d.prepare("CREATE TABLE IF NOT EXISTS opportunity_rating_versions (run_id TEXT PRIMARY KEY,revision INTEGER NOT NULL DEFAULT 0)"),
   d.prepare("CREATE TABLE IF NOT EXISTS opportunity_rank_versions (run_id TEXT PRIMARY KEY,revision INTEGER NOT NULL,rubric_hash TEXT NOT NULL)"),
@@ -108,6 +108,8 @@ export async function ensureSchema(){
  }))await ensureColumn(d,'strategy_runs',name,definition);
  await ensureColumn(d,'opportunity_rankings','research_fit','research_fit INTEGER NOT NULL DEFAULT 0');
  await ensureColumn(d,'opportunity_rankings','research_fit_financing_pass','research_fit_financing_pass INTEGER NOT NULL DEFAULT 0');
+ await ensureColumn(d,'opportunity_rank_projection_versions','cursor_rank_position','cursor_rank_position INTEGER NOT NULL DEFAULT 0');
+ await ensureColumn(d,'opportunity_rank_projection_versions','complete','complete INTEGER NOT NULL DEFAULT 0');
  await d.prepare("CREATE INDEX IF NOT EXISTS opportunity_research_fit_idx ON opportunity_rankings(run_id,research_fit,research_fit_financing_pass DESC,rank_position)").run();
  await ensureColumn(d,'push_subscriptions','owner',"owner TEXT NOT NULL DEFAULT ''");
  const compacted=await d.prepare("SELECT id FROM diag WHERE stage='compact-history-v1' LIMIT 1").first();
@@ -179,33 +181,45 @@ const researchFitSql=`
  AND NOT EXISTS(SELECT 1 FROM json_each(s.evaluation,'$.opportunity.checks') c WHERE json_extract(c.value,'$.id') IN ('market-cap','liquidity','price') AND json_extract(c.value,'$.status')='FAIL')`;
 const RESEARCH_FIT_PROJECTION_VERSION='research-fit-v1';
 async function researchFitProjectionReady(runId:string){
- const row=await db().prepare(`SELECT p.revision,p.rubric_hash,p.projection_version,v.revision AS rank_revision,v.rubric_hash AS rank_hash,COALESCE(r.revision,0) AS current_revision FROM opportunity_rank_projection_versions p JOIN opportunity_rank_versions v ON v.run_id=p.run_id LEFT JOIN opportunity_rating_versions r ON r.run_id=p.run_id WHERE p.run_id=?`).bind(runId).first() as any;
- return !!row&&row.projection_version===RESEARCH_FIT_PROJECTION_VERSION&&row.rubric_hash===opportunitySpecHash()&&row.rank_hash===opportunitySpecHash()&&Number(row.revision)===Number(row.rank_revision)&&Number(row.revision)===Number(row.current_revision);
+ const row=await db().prepare(`SELECT p.revision,p.rubric_hash,p.projection_version,p.complete,v.revision AS rank_revision,v.rubric_hash AS rank_hash,COALESCE(r.revision,0) AS current_revision FROM opportunity_rank_projection_versions p JOIN opportunity_rank_versions v ON v.run_id=p.run_id LEFT JOIN opportunity_rating_versions r ON r.run_id=p.run_id WHERE p.run_id=?`).bind(runId).first() as any;
+ return !!row&&Number(row.complete)===1&&row.projection_version===RESEARCH_FIT_PROJECTION_VERSION&&row.rubric_hash===opportunitySpecHash()&&row.rank_hash===opportunitySpecHash()&&Number(row.revision)===Number(row.rank_revision)&&Number(row.revision)===Number(row.current_revision);
 }
-/** Materialize the unchanged research-fit predicate once per canonical rating
- * revision. A durable lease lets concurrent cold readers share one backfill. */
-async function ensureResearchFitRankProjection(runId:string){
- if(await researchFitProjectionReady(runId))return;
- const d=db(),owner=crypto.randomUUID(),deadline=Date.now()+180_000;
- let acquired=false;
- while(Date.now()<deadline){
-  const now=Date.now();
-  const lease=await d.prepare('INSERT INTO opportunity_rank_projection_leases(run_id,owner,lease_until) VALUES(?,?,?) ON CONFLICT(run_id) DO UPDATE SET owner=excluded.owner,lease_until=excluded.lease_until WHERE opportunity_rank_projection_leases.lease_until<? RETURNING owner').bind(runId,owner,now+180_000,now).first() as any;
-  if(lease?.owner===owner){acquired=true;break;}
-  await new Promise(resolve=>setTimeout(resolve,100));
-  if(await researchFitProjectionReady(runId))return;
- }
- if(!acquired)throw Object.assign(Error('قائمة البحث قيد التجهيز؛ حاول مجددًا.'),{status:409});
+/** Process one bounded rank-position slice. Cursor, derived flags and completion
+ * marker commit together; interrupted slices resume from the last committed
+ * rank. A lease is acquired and released for each scheduler tick. */
+export async function publishResearchFitRankProjectionBatch(runId:string,batchSize=75){
+ await ensureSchema();
+ const size=Math.max(1,Math.min(100,Math.floor(Number.isFinite(batchSize)?batchSize:75)));
+ const d=db(),owner=crypto.randomUUID(),now=Date.now();
+ if(await researchFitProjectionReady(runId))return {runId,done:true,busy:false,processed:0,cursor:0,revision:null as number|null};
+ const lease=await d.prepare('INSERT INTO opportunity_rank_projection_leases(run_id,owner,lease_until) VALUES(?,?,?) ON CONFLICT(run_id) DO UPDATE SET owner=excluded.owner,lease_until=excluded.lease_until WHERE opportunity_rank_projection_leases.lease_until<? RETURNING owner').bind(runId,owner,now+180_000,now).first() as any;
+ if(lease?.owner!==owner)return {runId,done:false,busy:true,processed:0,cursor:null as number|null,revision:null as number|null};
  try{
   const release=await d.prepare('SELECT v.revision,v.rubric_hash,COALESCE(r.revision,0) AS current_revision FROM opportunity_rank_versions v LEFT JOIN opportunity_rating_versions r ON r.run_id=v.run_id WHERE v.run_id=?').bind(runId).first() as any;
   if(!release||release.rubric_hash!==opportunitySpecHash()||Number(release.revision)!==Number(release.current_revision))throw Object.assign(Error('تغيرت نسخة التقييم؛ حدّث النتائج.'),{status:409});
-  const revision=Number(release.revision);
-  await d.batch([
-   d.prepare(`UPDATE opportunity_rankings AS r SET research_fit=COALESCE((SELECT CASE WHEN (${researchFitSql}) THEN 1 ELSE 0 END FROM fundamental_snapshots s WHERE s.run_id=r.run_id AND s.symbol=r.symbol),0),research_fit_financing_pass=COALESCE((SELECT CASE WHEN ${researchFitFinancingPassSql} THEN 1 ELSE 0 END FROM fundamental_snapshots s WHERE s.run_id=r.run_id AND s.symbol=r.symbol),0) WHERE r.run_id=? AND EXISTS(SELECT 1 FROM opportunity_rank_versions v LEFT JOIN opportunity_rating_versions rv ON rv.run_id=v.run_id WHERE v.run_id=r.run_id AND v.revision=? AND v.rubric_hash=? AND COALESCE(rv.revision,0)=?)`).bind(runId,revision,opportunitySpecHash(),revision),
-   d.prepare('INSERT OR REPLACE INTO opportunity_rank_projection_versions(run_id,revision,rubric_hash,projection_version) SELECT ?,?,?,? WHERE EXISTS(SELECT 1 FROM opportunity_rank_versions v LEFT JOIN opportunity_rating_versions rv ON rv.run_id=v.run_id WHERE v.run_id=? AND v.revision=? AND v.rubric_hash=? AND COALESCE(rv.revision,0)=?)').bind(runId,revision,opportunitySpecHash(),RESEARCH_FIT_PROJECTION_VERSION,runId,revision,opportunitySpecHash(),revision),
-   d.prepare('DELETE FROM opportunity_rank_projection_leases WHERE run_id=? AND owner=?').bind(runId,owner),
-  ]);
-  if(!await researchFitProjectionReady(runId))throw Object.assign(Error('تغيرت البيانات أثناء تجهيز قائمة البحث؛ حدّث النتائج.'),{status:409});
+  const revision=Number(release.revision),rubric=opportunitySpecHash();
+  let progress=await d.prepare('SELECT revision,rubric_hash,projection_version,cursor_rank_position,complete FROM opportunity_rank_projection_versions WHERE run_id=?').bind(runId).first() as any;
+  const matching=progress&&Number(progress.revision)===revision&&progress.rubric_hash===rubric&&progress.projection_version===RESEARCH_FIT_PROJECTION_VERSION;
+  if(!matching){
+   await d.prepare('INSERT INTO opportunity_rank_projection_versions(run_id,revision,rubric_hash,projection_version,cursor_rank_position,complete) VALUES(?,?,?,?,0,0) ON CONFLICT(run_id) DO UPDATE SET revision=excluded.revision,rubric_hash=excluded.rubric_hash,projection_version=excluded.projection_version,cursor_rank_position=0,complete=0').bind(runId,revision,rubric,RESEARCH_FIT_PROJECTION_VERSION).run();
+   progress={revision,rubric_hash:rubric,projection_version:RESEARCH_FIT_PROJECTION_VERSION,cursor_rank_position:0,complete:0};
+  }
+  if(Number(progress.complete)===1&&await researchFitProjectionReady(runId))return {runId,done:true,busy:false,processed:0,cursor:Number(progress.cursor_rank_position),revision};
+  const cursor=Number(progress.cursor_rank_position)||0;
+  const next=(await d.prepare('SELECT rank_position FROM opportunity_rankings WHERE run_id=? AND rank_position>? ORDER BY rank_position LIMIT ?').bind(runId,cursor,size+1).all()).results as any[];
+  const page=next.slice(0,size),last=Number(page.at(-1)?.rank_position??cursor),done=next.length<=size;
+  const guard='EXISTS(SELECT 1 FROM opportunity_rank_versions v LEFT JOIN opportunity_rating_versions rv ON rv.run_id=v.run_id WHERE v.run_id=? AND v.revision=? AND v.rubric_hash=? AND COALESCE(rv.revision,0)=?)';
+  const statements:any[]=[];
+  if(page.length){
+   statements.push(d.prepare(`UPDATE opportunity_rankings AS r SET research_fit=COALESCE((SELECT CASE WHEN (${researchFitSql}) THEN 1 ELSE 0 END FROM fundamental_snapshots s WHERE s.run_id=r.run_id AND s.symbol=r.symbol),0),research_fit_financing_pass=COALESCE((SELECT CASE WHEN ${researchFitFinancingPassSql} THEN 1 ELSE 0 END FROM fundamental_snapshots s WHERE s.run_id=r.run_id AND s.symbol=r.symbol),0) WHERE r.run_id=? AND r.rank_position>? AND r.rank_position<=? AND ${guard}`).bind(runId,cursor,last,runId,revision,rubric,revision));
+  }
+  statements.push(d.prepare(`UPDATE opportunity_rank_projection_versions SET cursor_rank_position=?,complete=? WHERE run_id=? AND revision=? AND rubric_hash=? AND projection_version=? AND cursor_rank_position=? AND ${guard}`).bind(last,done?1:0,runId,revision,rubric,RESEARCH_FIT_PROJECTION_VERSION,cursor,runId,revision,rubric,revision));
+  statements.push(d.prepare('UPDATE opportunity_rank_projection_leases SET lease_until=? WHERE run_id=? AND owner=?').bind(Date.now()+180_000,runId,owner));
+  await d.batch(statements);
+  progress=await d.prepare('SELECT revision,rubric_hash,projection_version,cursor_rank_position,complete FROM opportunity_rank_projection_versions WHERE run_id=?').bind(runId).first() as any;
+  const stillCurrent=await researchFitProjectionReady(runId);
+  if(!progress||Number(progress.cursor_rank_position)!==last||Number(progress.revision)!==revision||progress.rubric_hash!==rubric)throw Object.assign(Error('تغيرت البيانات أثناء تجهيز قائمة البحث؛ أعد المحاولة.'),{status:409});
+  return {runId,done:stillCurrent,busy:false,processed:page.length,cursor:last,revision};
  }finally{await d.prepare('DELETE FROM opportunity_rank_projection_leases WHERE run_id=? AND owner=?').bind(runId,owner).run();}
 }
 
@@ -233,6 +247,7 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
  // run remains stale as data; only its evaluation can be current.
  if(latest)await ensureRunEvaluations(String(latest.id));
  const release=latest?await readRankReleaseIdentity(String(latest.id),options.releaseToken):null;
+ if(latest&&options.researchFit===true&&strategy==='opportunity'&&!await researchFitProjectionReady(String(latest.id)))throw Object.assign(Error('قائمة البحث قيد التجهيز؛ حاول مجددًا بعد قليل.'),{status:409});
  const currentEvaluation=!!latest;
  const limit=Math.max(1,Math.min(250,Math.floor(options.limit??150)));
  const offset=Math.max(0,Math.floor(options.offset??0));
@@ -380,7 +395,7 @@ export async function ensureRunEvaluations(runId:string) {
  const work=(async()=>{
   const d=db();
   const version=await d.prepare("SELECT v.revision,v.rubric_hash,COALESCE(r.revision,0) AS current_revision FROM opportunity_rank_versions v LEFT JOIN opportunity_rating_versions r ON r.run_id=v.run_id WHERE v.run_id=?").bind(runId).first() as any;
-  if(version&&version.rubric_hash===opportunitySpecHash()&&Number(version.revision)===Number(version.current_revision)){await ensureResearchFitRankProjection(runId);return;}
+  if(version&&version.rubric_hash===opportunitySpecHash()&&Number(version.revision)===Number(version.current_revision))return;
   const owner=crypto.randomUUID(),deadline=Date.now()+180_000;
   let acquired=false;
   while(Date.now()<deadline){
@@ -389,7 +404,7 @@ export async function ensureRunEvaluations(runId:string) {
    if(lease?.owner===owner){acquired=true;break;}
    await new Promise(resolve=>setTimeout(resolve,500));
    const ready=await d.prepare('SELECT v.revision,v.rubric_hash,COALESCE(r.revision,0) AS current_revision FROM opportunity_rank_versions v LEFT JOIN opportunity_rating_versions r ON r.run_id=v.run_id WHERE v.run_id=?').bind(runId).first() as any;
-   if(ready&&ready.rubric_hash===opportunitySpecHash()&&Number(ready.revision)===Number(ready.current_revision)){await ensureResearchFitRankProjection(runId);return;}
+   if(ready&&ready.rubric_hash===opportunitySpecHash()&&Number(ready.revision)===Number(ready.current_revision))return;
   }
   if(!acquired)throw Object.assign(Error('التقييم قيد إعادة الحساب؛ حاول مجددًا.'),{status:409});
   try{
@@ -440,7 +455,6 @@ export async function ensureRunEvaluations(runId:string) {
   if(!published||Number(published.revision)!==expectedRevision||Number(published.current_revision)!==expectedRevision||published.rubric_hash!==opportunitySpecHash())throw Object.assign(Error('تغيرت البيانات أثناء الحساب؛ حدّث النتائج.'),{status:409});
   invalidateStateCache();
   }finally{await d.prepare('UPDATE opportunity_evaluation_leases SET lease_until=0 WHERE run_id=? AND owner=?').bind(runId,owner).run();}
-  await ensureResearchFitRankProjection(runId);
  })().finally(()=>evaluationRepairs.delete(runId));
  evaluationRepairs.set(runId,work);return work;
 }

@@ -10,7 +10,7 @@ import {setHistoryResult,setOpportunityResearchResult,setUniverse,setBulkQuoteTr
 import {evaluateStrategy} from '../../.test-build/engine.mjs';
 import {proxyOpportunityEvidence} from '../../.test-build/opportunity-proxies.mjs';
 import {fixtures} from '../../.test-build/fixtures.mjs';
-import {ensureSchema,db,currentHash,readState,insertSnapshot,invalidateStateCache,readResearchConflictCount,migrateCompatibleAcquisitionRuns} from '../../.test-build/storage.mjs';
+import {ensureSchema,db,currentHash,readState,insertSnapshot,invalidateStateCache,readResearchConflictCount,migrateCompatibleAcquisitionRuns,publishResearchFitRankProjectionBatch} from '../../.test-build/storage.mjs';
 import {processScanBatch,startScan,historyCandidate,preliminaryCandidates} from '../../.test-build/scanner.mjs';
 import {decodeHistoryCache} from '../../.test-build/history-cache.mjs';
 import {hasVerifiedShareRatio} from '../../.test-build/research.mjs';
@@ -886,8 +886,16 @@ test('research-fit pages retain canonical scores and ranks while requiring curre
  invalidateStateCache();
  const full=await readState({runId,limit:20});
  const fullBySymbol=new Map(full.snapshots.map((row,index)=>[row.symbol,{rank:full.rankPositions[index],score:full.storedEvaluations[index].opportunity.score}]));
- const projection=await db().prepare('SELECT revision,rubric_hash,projection_version FROM opportunity_rank_projection_versions WHERE run_id=?').bind(runId).first();
+ assert.equal(await db().prepare('SELECT run_id FROM opportunity_rank_projection_versions WHERE run_id=?').bind(runId).first(),null,'ordinary ranked reads do not start a full research-fit backfill');
+ await assert.rejects(readState({runId,researchFit:true,limit:20}),error=>error.status===409);
+ const concurrent=await Promise.all([publishResearchFitRankProjectionBatch(runId,2),publishResearchFitRankProjectionBatch(runId,2)]);
+ assert(concurrent.every(result=>result.processed<=2));
+ let published=concurrent.find(result=>result.done)||concurrent[0],processed=concurrent.reduce((sum,result)=>sum+result.processed,0),ticks=0;
+ while(!published.done&&ticks++<10){published=await publishResearchFitRankProjectionBatch(runId,2);processed+=published.processed;}
+ assert(published.done);assert.equal(processed,8,'concurrent and resumed slices process each ranking row once');
+ const projection=await db().prepare('SELECT revision,rubric_hash,projection_version,cursor_rank_position,complete FROM opportunity_rank_projection_versions WHERE run_id=?').bind(runId).first();
  assert.equal(projection.revision,full.release.revision);assert.equal(projection.rubric_hash,full.release.rubricHash);assert.equal(projection.projection_version,'research-fit-v1');
+ assert.equal(projection.complete,1);assert.equal(projection.cursor_rank_position,8);
  const projected=(await db().prepare('SELECT symbol,research_fit,research_fit_financing_pass,rank_position FROM opportunity_rankings WHERE run_id=? ORDER BY rank_position').bind(runId).all()).results;
  const eligible=new Set(['FIT-A','FIT-B','FIT-MICRO']);
  assert.deepEqual(projected.filter(row=>row.research_fit===1).map(row=>row.symbol).sort(),[...eligible].sort());
@@ -916,22 +924,26 @@ test('research-fit pages retain canonical scores and ranks while requiring curre
  assert.deepEqual(searched.snapshots.map(row=>row.symbol),['FIT-MICRO']);
  assert.equal(searched.rankPositions[0],fullBySymbol.get('FIT-MICRO').rank);
  // Simulate a previous projection format and concurrent isolates observing a
- // current rating release. Exactly one lease holder should rebuild the flags.
+ // current rating release. They may claim separate slices, but every slice is
+ // bounded, cursor progress is durable, and no row is skipped or repeated.
  await db().prepare("UPDATE opportunity_rank_projection_versions SET projection_version='research-fit-v0' WHERE run_id=?").bind(runId).run();
  await db().prepare('UPDATE opportunity_rankings SET research_fit=0,research_fit_financing_pass=0 WHERE run_id=?').bind(runId).run();
  const [storageA,storageB]=await Promise.all([
   import(`../../.test-build/storage.mjs?projection-isolate-a=${Date.now()}`),
   import(`../../.test-build/storage.mjs?projection-isolate-b=${Date.now()}`),
  ]);
- const originalPrepare=runtimeEnv.DB.prepare;let projectionsBuilt=0;
- runtimeEnv.DB.prepare=sql=>{if(sql.startsWith('UPDATE opportunity_rankings AS r SET research_fit='))projectionsBuilt++;return originalPrepare(sql)};
- try{await Promise.all([storageA.ensureRunEvaluations(runId),storageB.ensureRunEvaluations(runId)]);await storageA.ensureRunEvaluations(runId);}
- finally{runtimeEnv.DB.prepare=originalPrepare;}
- assert.equal(projectionsBuilt,1,'concurrent cold readers share a single projection backfill, and the current version is idempotent');
- assert.equal((await db().prepare('SELECT projection_version FROM opportunity_rank_projection_versions WHERE run_id=?').bind(runId).first()).projection_version,'research-fit-v1');
+ const oldVersionBatches=await Promise.all([storageA.publishResearchFitRankProjectionBatch(runId,2),storageB.publishResearchFitRankProjectionBatch(runId,2)]);
+ assert(oldVersionBatches.every(result=>result.processed<=2));
+ published=oldVersionBatches.find(result=>result.done)||oldVersionBatches[0];processed=oldVersionBatches.reduce((sum,result)=>sum+result.processed,0);ticks=0;
+ while(!published.done&&ticks++<10){published=await storageA.publishResearchFitRankProjectionBatch(runId,2);processed+=published.processed;}
+ assert(published.done);assert.equal(processed,8);assert.equal((await db().prepare('SELECT projection_version FROM opportunity_rank_projection_versions WHERE run_id=?').bind(runId).first()).projection_version,'research-fit-v1');
  invalidateStateCache();
+ const idempotent=await storageA.publishResearchFitRankProjectionBatch(runId,2);assert.equal(idempotent.done,true);assert.equal(idempotent.processed,0);
  const normal=await readState({runId,researchFit:false,opportunityState:'ranked',limit:20});
  assert.deepEqual(normal.rankPositions,full.rankPositions);assert.deepEqual(normal.snapshots.map(row=>row.symbol),full.snapshots.map(row=>row.symbol));
+ await db().prepare('UPDATE opportunity_rating_versions SET revision=revision+1 WHERE run_id=?').bind(runId).run();
+ await assert.rejects(publishResearchFitRankProjectionBatch(runId,2),error=>error.status===409,'stale rank release revisions cannot publish a projection batch');
+ await assert.rejects(readState({runId,researchFit:true,limit:20}),error=>error.status===409,'a stale projection remains unavailable after the rating release changes');
  await db().prepare('DELETE FROM fundamental_snapshots WHERE run_id=?').bind(runId).run();
  await db().prepare('DELETE FROM opportunity_rankings WHERE run_id=?').bind(runId).run();
  await db().prepare('DELETE FROM opportunity_rank_versions WHERE run_id=?').bind(runId).run();
