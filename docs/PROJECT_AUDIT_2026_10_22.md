@@ -107,3 +107,29 @@ Live acceptance: archive batching was deployed as `eade0c18-45fd-4519-a94c-f938f
 - Prediction quality cannot be established from the available data: there is no point-in-time/delisted historical universe or supported market-data redistribution permission. No local code change can supply that evidence; keep return probabilities and price targets disabled until an approved dataset and out-of-sample validation are available.
 - Risk tolerance remains report context rather than a score modifier. The existing regression contract and product meaning need an explicit decision before changing score behavior.
 - Remaining operational follow-up is to rotate the PostgreSQL credential through Database View after consumer review, and inspect Railway audit/activity records when authenticated access is available. Continue measuring cold reads, scheduler tick durations, scan progression, persistent-volume headroom, and quote/coverage parity. Archive batching is deployed, but current production still shows cold calls above a minute and occasional scheduler ticks near two minutes.
+
+## Follow-up audit — 2026-10-23
+
+Three more confirmed defects were found during independent cold-path, scoring-cadence, and persistence reviews. Their fixes are local and pass focused/full local verification; they are not yet in a Railway release.
+
+### 8. Research-fit cold reads repeatedly evaluate JSON predicates and sort — High
+
+The default radar view requests `fit=research`. Its query tested roughly 30 JSON predicates over the ranked snapshot join and sorted eligible rows using a computed financing-pass expression, despite already having a canonical materialized rank. A production browser request took about 255 seconds before showing 7,538 rows; the page initially remained in its loading state. The initial cold read likely includes other summary/coverage aggregates as well, so the query was a confirmed bottleneck but not necessarily the only contributor to end-to-end latency.
+
+The local fix stores the predicate's exact eligibility and financing-pass results beside each materialized rank and indexes `(run_id, research_fit, research_fit_financing_pass DESC, rank_position)`. A version marker and per-run durable lease make the projection build idempotent and shared across concurrent readers. The page query retains the same filter, financing-first ordering, rank tie-break, search and pagination semantics. Runtime regression coverage compares the eligible set/order and canonical ranks, simulates an old projection version and isolated concurrent readers, and checks `EXPLAIN QUERY PLAN` for the composite index without a temporary sort. Summary and coverage JSON aggregates are still not persisted/indexed.
+
+### 9. Technical timing accepted daily bars in weekly/monthly series — Medium
+
+`intervalCadenceValid` checked only maximum gaps and total span, allowing consecutive weekdays to pass as weekly or monthly bars. The resulting values were then used as MA30w and monthly trend. The local fix also enforces minimum four-day weekly and twenty-day monthly gaps, with regressions for invalid daily-frequency inputs and valid holiday-shifted intervals. Factor weights and score semantics are unchanged for valid source cadence.
+
+### 10. Portfolio owner merge could bypass revision compare-and-swap — Medium
+
+`mergeOwnerData` previously set the target portfolio revision to the maximum of source and target revisions. When they matched, transferred transaction rows changed the ledger without changing its revision. A concurrent write validated against the pre-merge ledger could then pass its compare-and-swap check. The local fix increments the target revision atomically when new source transaction IDs are actually transferred; runtime coverage verifies that an old revision cannot authorize a write after the merge.
+
+### Follow-up verification and release state
+
+- Verified locally on 2026-10-23: `npm run typecheck`, `npm run lint`, `npm run test:runtime` (279 engine and 113 runtime/API tests), `npm run test:research` (21), and `npm test` (production build and 89 repository/UI tests) all pass; `git diff --check` passes.
+- The three fixes plus the UI regression update are still local. No production write or deployment has occurred. A direct read-only production status request timed out with HTTP 000 and no response, so these fixes have no live latency or release acceptance measurement yet.
+- The earlier browser acceptance independently confirmed a 255-second `/api/radar?fit=research` response with 7,538 rows and a visible loading delay. Concurrent diagnostic requests were also active during some later slow status/scheduler calls, so attribution for those other timeouts remains uncertain.
+- The production scan remains unverified as complete. At the prior 2026-10-22 sample, `db9901ac-9a17-4925-8436-d1784acd19ea` was running at stage 1, offset 2,500/7,538. Do not infer completion from the rating-publication pass.
+- External security follow-up is unchanged: supported Postgres credential rotation and Railway audit/activity log review require the authenticated Database View/dashboard. The outstanding user sign-in request remains unanswered; the app-side unused `DATABASE_URL` was removed and `BACKGROUND_SCAN_SECRET` rotated in the prior release.

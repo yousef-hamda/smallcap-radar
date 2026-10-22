@@ -67,8 +67,13 @@ export async function mergeOwnerData(fromOwner: string, toOwner: string) {
   await d.batch([
     d.prepare('INSERT OR IGNORE INTO personal_watchlist(owner,symbol,created_at,payload) SELECT ?,symbol,created_at,payload FROM personal_watchlist WHERE owner=?').bind(toOwner, fromOwner),
     d.prepare('DELETE FROM personal_watchlist WHERE owner=?').bind(fromOwner),
+    d.prepare('INSERT OR IGNORE INTO portfolio_revisions(owner,revision) VALUES(?,0)').bind(toOwner),
     d.prepare('INSERT OR IGNORE INTO portfolio_revisions(owner,revision) SELECT ?,revision FROM portfolio_revisions WHERE owner=?').bind(toOwner, fromOwner),
     d.prepare('UPDATE portfolio_revisions SET revision=MAX(revision,COALESCE((SELECT revision FROM portfolio_revisions WHERE owner=?),0)) WHERE owner=?').bind(fromOwner, toOwner),
+    // Moving a new transaction changes the account ledger. Advance its CAS
+    // token before the move in this same transaction so portfolio writes
+    // validated against the old account rows cannot commit after the merge.
+    d.prepare('UPDATE portfolio_revisions SET revision=revision+1 WHERE owner=? AND EXISTS(SELECT 1 FROM portfolio_transactions source WHERE source.owner=? AND NOT EXISTS(SELECT 1 FROM portfolio_transactions target WHERE target.owner=? AND target.id=source.id))').bind(toOwner, fromOwner, toOwner),
     d.prepare('DELETE FROM portfolio_transactions WHERE owner=? AND id IN (SELECT id FROM portfolio_transactions WHERE owner=?)').bind(fromOwner, toOwner),
     d.prepare('UPDATE portfolio_transactions SET owner=? WHERE owner=?').bind(toOwner, fromOwner),
     d.prepare('DELETE FROM portfolio_revisions WHERE owner=?').bind(fromOwner),

@@ -185,12 +185,16 @@ function validBars(bars: TechnicalBar[], minCount: number, asOf: string) {
     || (index > 0 && Date.parse(bar.date) <= Date.parse(bars[index - 1].date)))) return false;
   return true;
 }
-function intervalCadenceValid(bars: TechnicalBar[], count: number, maximumSpanDays: number, maximumGapDays: number) {
+function intervalCadenceValid(bars: TechnicalBar[], count: number, maximumSpanDays: number, maximumGapDays: number, minimumGapDays = 1) {
   const sample = bars.slice(-count);
   if (sample.length < count) return false;
   const millis = (date: string) => Date.parse(`${date}T00:00:00Z`);
   if ((millis(sample.at(-1)!.date) - millis(sample[0].date)) / 86_400_000 > maximumSpanDays) return false;
-  return sample.every((bar, index) => index === 0 || (millis(bar.date) - millis(sample[index - 1].date)) / 86_400_000 <= maximumGapDays);
+  return sample.every((bar, index) => {
+    if (index === 0) return true;
+    const gapDays = (millis(bar.date) - millis(sample[index - 1].date)) / 86_400_000;
+    return gapDays >= minimumGapDays && gapDays <= maximumGapDays;
+  });
 }
 function wilderRsi(closes: number[], period = 14) {
   if (closes.length <= period || closes.some(value => !finitePositive(value))) return null;
@@ -233,8 +237,8 @@ export function scoreTechnicalTiming(input: TechnicalTimingAssessment): Technica
     || !validBars(input.monthly, 12, input.asOf)
     || !validBars(input.benchmarkDaily, 64, input.asOf)
     || !intervalCadenceValid(input.daily, 200, 370, 7)
-    || !intervalCadenceValid(input.weekly, 30, 350, 14)
-    || !intervalCadenceValid(input.monthly, 12, 500, 62)
+    || !intervalCadenceValid(input.weekly, 30, 350, 14, 4)
+    || !intervalCadenceValid(input.monthly, 12, 500, 62, 20)
     || !intervalCadenceValid(input.benchmarkDaily, 64, 125, 7)) {
     return unavailableTechnical('At least 200 completed daily, 30 weekly, 12 monthly, and 64 benchmark daily bars with valid provenance are required.');
   }

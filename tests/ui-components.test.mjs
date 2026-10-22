@@ -159,8 +159,8 @@ test('research-fit control keeps the full rank and names the evidence-limited vi
  assert.match(page,/بيانات السوق قد تكون حقوق استخدامها غير محسومة/);
  assert.match(page,/rank:payload\.rankPositions\?\.\[index\]/);
  assert.match(route,/researchFit:activeStrategy==='opportunity'&&url\.searchParams\.get\('fit'\)==='research'/);
- assert.match(storage,/INDEXED BY opportunity_rank_position_idx JOIN fundamental_snapshots/);
- assert.match(storage,/ORDER BY CASE WHEN \$\{researchFitFinancingPassSql\} THEN 0 ELSE 1 END,r\.rank_position LIMIT \? OFFSET \?/);
+ assert.match(storage,/INDEXED BY opportunity_research_fit_idx JOIN fundamental_snapshots/);
+ assert.match(storage,/r\.research_fit=1 AND \(\?='' OR instr\(lower\(s\.symbol\),\?\)>0 OR instr\(lower\(json_extract\(s\.payload,'\$\.name'\)\),\?\)>0\) ORDER BY r\.research_fit_financing_pass DESC,r\.rank_position LIMIT \? OFFSET \?/);
 });
 
 test('profile renders sourced financial-strength gaps without filling missing figures with zero',async()=>{

@@ -673,6 +673,24 @@ test('technical-timing rejects sparse daily, weekly, monthly and benchmark histo
  assert.equal(scoreTechnicalTiming({...input,monthly:rowsWithDates(input.monthly,monthlyDates)}).score,null,'12 bars spanning multiple years are not one year of monthly coverage');
  assert.equal(scoreTechnicalTiming({...input,benchmarkDaily:rowsWithDates(input.benchmarkDaily,benchmarkDates)}).score,null,'64 sparse benchmark points cannot satisfy aligned daily coverage');
 });
+test('technical-timing rejects over-frequent weekly/monthly bars while allowing holiday-shifted periods',()=>{
+ const input=technicalInput();
+ const recentWeekdays=(count,endDate)=>{const rows=[];let date=new Date(`${endDate}T00:00:00Z`);while(rows.length<count){if(![0,6].includes(date.getUTCDay()))rows.unshift(date.toISOString().slice(0,10));date.setUTCDate(date.getUTCDate()-1)}return rows};
+ const rowsWithDates=(rows,dates)=>rows.slice(-dates.length).map((row,index)=>({...row,date:dates[index]}));
+ const weeklyDailyDates=recentWeekdays(30,input.weekly.at(-1).date),monthlyDailyDates=recentWeekdays(12,input.monthly.at(-1).date);
+ const weeklyDaily=rowsWithDates(input.weekly,weeklyDailyDates),monthlyDaily=rowsWithDates(input.monthly,monthlyDailyDates);
+ assert.equal(scoreTechnicalTiming({...input,weekly:weeklyDaily,weeklySource:{...input.weeklySource,periodEnd:weeklyDaily.at(-1).date,availableAt:`${weeklyDaily.at(-1).date}T21:00:00Z`}}).score,null,'30 consecutive weekday observations are not 30 weekly bars');
+ assert.equal(scoreTechnicalTiming({...input,monthly:monthlyDaily,monthlySource:{...input.monthlySource,periodEnd:monthlyDaily.at(-1).date,availableAt:`${monthlyDaily.at(-1).date}T21:00:00Z`}}).score,null,'12 consecutive weekday observations are not 12 monthly bars');
+
+ const holidayWeekly=input.weekly.map(bar=>({...bar}));
+ const shiftedWeeklyDate=new Date(`${holidayWeekly[25].date}T00:00:00Z`);shiftedWeeklyDate.setUTCDate(shiftedWeeklyDate.getUTCDate()-3);
+ holidayWeekly[25].date=shiftedWeeklyDate.toISOString().slice(0,10);
+ const holidayMonthly=input.monthly.map(bar=>({...bar}));
+ const shiftedMonthlyDate=new Date(`${holidayMonthly[5].date}T00:00:00Z`);shiftedMonthlyDate.setUTCDate(shiftedMonthlyDate.getUTCDate()-1);
+ holidayMonthly[5].date=shiftedMonthlyDate.toISOString().slice(0,10);
+ assert.notEqual(scoreTechnicalTiming({...input,weekly:holidayWeekly,weeklySource:{...input.weeklySource,periodEnd:holidayWeekly.at(-1).date}}).score,null,'weekly periods shifted by a market holiday remain valid');
+ assert.notEqual(scoreTechnicalTiming({...input,monthly:holidayMonthly,monthlySource:{...input.monthlySource,periodEnd:holidayMonthly.at(-1).date}}).score,null,'month-end periods shifted by a market holiday remain valid');
+});
 test('technical-timing RSI uses Wilder smoothing over the available close history',()=>{
  const input=technicalInput();
  const daily=input.daily.map((bar,index)=>({...bar,close:index<206?100:index<219?101:100}));

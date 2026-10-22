@@ -38,6 +38,7 @@ import {GET as portfolioGET,POST as portfolioPOST,PUT as portfolioPUT,DELETE as 
 import {GET as portfolioHistoryGET} from '../../.test-build/portfolio-history-api.mjs';
 import {GET as portfolioLogoGET} from '../../.test-build/portfolio-logo-api.mjs';
 import {GET as accountGET,POST as accountPOST} from '../../.test-build/account-api.mjs';
+import {mergeOwnerData} from '../../.test-build/account.mjs';
 import webpush from 'web-push';
 import {secUserAgent,secUserAgentCacheVersion} from '../../.test-build/sec-user-agent.mjs';
 await ensureSchema();
@@ -238,6 +239,23 @@ test('account sync moves anonymous wallet data and keeps it available on another
  const accountId=sqlite.prepare('SELECT id FROM radar_accounts WHERE username=?').get('sync-test-user').id,owner=`account:${accountId}`;
  assert.equal(sqlite.prepare('SELECT COUNT(*) AS count FROM portfolio_transactions WHERE owner=?').get(owner).count,1);assert.equal(sqlite.prepare('SELECT COUNT(*) AS count FROM personal_watchlist WHERE owner=?').get(owner).count,1);
  const secondDevice=await accountGET(new Request(`${origin}/api/account`,{headers:{cookie:session}}));assert.equal(secondDevice.status,200);assert.equal((await secondDevice.json()).account.username,'sync-test-user');
+});
+test('portfolio merge advances the account revision so pre-merge writes fail their CAS guard',async()=>{
+ const source='visitor:merge-race-source',target='account:merge-race-target',now=new Date().toISOString();
+ sqlite.prepare('INSERT INTO portfolio_revisions(owner,revision) VALUES(?,0)').run(source);
+ sqlite.prepare('INSERT INTO portfolio_revisions(owner,revision) VALUES(?,0)').run(target);
+ sqlite.prepare('INSERT INTO portfolio_transactions(id,owner,symbol,company_name,side,quantity,price,fees,trade_date,note,metadata,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run('merge-race-source-tx',source,'TEST','Synthetic','buy',2,10,0,'2026-01-01','', '{}',now,now);
+ const revisionValidatedBeforeMerge=Number(sqlite.prepare('SELECT revision FROM portfolio_revisions WHERE owner=?').get(target).revision);
+ await mergeOwnerData(source,target);
+ assert.equal(sqlite.prepare('SELECT COUNT(*) AS count FROM portfolio_transactions WHERE owner=?').get(target).count,1);
+ assert.equal(sqlite.prepare('SELECT revision FROM portfolio_revisions WHERE owner=?').get(target).revision,revisionValidatedBeforeMerge+1);
+ const staleMutation=await runtimeEnv.DB.batch([
+  db().prepare('INSERT INTO portfolio_transactions(id,owner,symbol,company_name,side,quantity,price,fees,trade_date,note,metadata,created_at,updated_at) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM portfolio_revisions WHERE owner=? AND revision=?)').bind('merge-race-stale-write',target,'TEST','Synthetic','sell',1,10,0,'2026-02-01','', '{}',now,now,target,revisionValidatedBeforeMerge),
+  db().prepare('UPDATE portfolio_revisions SET revision=revision+1 WHERE owner=? AND revision=?').bind(target,revisionValidatedBeforeMerge),
+ ]);
+ assert.equal(staleMutation[0].meta.changes,0);
+ assert.equal(staleMutation[1].meta.changes,0);
+ assert.equal(sqlite.prepare('SELECT COUNT(*) AS count FROM portfolio_transactions WHERE id=?').get('merge-race-stale-write').count,0);
 });
 test('account usernames are canonical and duplicate signup races return a conflict',async()=>{
  const origin='https://radar.test',signup=(username)=>accountPOST(new Request(`${origin}/api/account`,{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({action:'signup',username,password:'strong-password-123'})}));
@@ -868,6 +886,14 @@ test('research-fit pages retain canonical scores and ranks while requiring curre
  invalidateStateCache();
  const full=await readState({runId,limit:20});
  const fullBySymbol=new Map(full.snapshots.map((row,index)=>[row.symbol,{rank:full.rankPositions[index],score:full.storedEvaluations[index].opportunity.score}]));
+ const projection=await db().prepare('SELECT revision,rubric_hash,projection_version FROM opportunity_rank_projection_versions WHERE run_id=?').bind(runId).first();
+ assert.equal(projection.revision,full.release.revision);assert.equal(projection.rubric_hash,full.release.rubricHash);assert.equal(projection.projection_version,'research-fit-v1');
+ const projected=(await db().prepare('SELECT symbol,research_fit,research_fit_financing_pass,rank_position FROM opportunity_rankings WHERE run_id=? ORDER BY rank_position').bind(runId).all()).results;
+ const eligible=new Set(['FIT-A','FIT-B','FIT-MICRO']);
+ assert.deepEqual(projected.filter(row=>row.research_fit===1).map(row=>row.symbol).sort(),[...eligible].sort());
+ for(const row of projected){const evaluation=full.storedEvaluations[full.snapshots.findIndex(snapshot=>snapshot.symbol===row.symbol)].opportunity;assert.equal(row.research_fit_financing_pass===1,evaluation.checks.some(check=>check.id==='thesis-financing'&&check.status==='PASS'));}
+ const projectedPlan=sqlite.prepare('EXPLAIN QUERY PLAN SELECT s.payload,s.evaluation,r.rank_position FROM opportunity_rankings r INDEXED BY opportunity_research_fit_idx JOIN fundamental_snapshots s ON s.run_id=r.run_id AND s.symbol=r.symbol WHERE r.run_id=? AND r.research_fit=1 ORDER BY r.research_fit_financing_pass DESC,r.rank_position LIMIT ? OFFSET ?').all(runId,40,0);
+ assert(projectedPlan.some(row=>row.detail.includes('opportunity_research_fit_idx')));assert(!projectedPlan.some(row=>row.detail.includes('TEMP B-TREE')));
  const firstResponse=await GET(new Request('https://radar.test/api/radar?fit=research&limit=1'));
  assert.equal(firstResponse.status,200);const first=await firstResponse.json();
  assert.equal(first.page.hasMore,true);assert.equal(first.snapshots.length,1);
@@ -877,7 +903,7 @@ test('research-fit pages retain canonical scores and ranks while requiring curre
  assert.equal(secondResponse.status,200);const second=await secondResponse.json();
  const third=await (await GET(new Request(`https://radar.test/api/radar?fit=research&limit=1&offset=2&${pin}`))).json();
  const rows=[...first.snapshots,...second.snapshots,...third.snapshots];
- assert.deepEqual(new Set(rows.map(row=>row.symbol)),new Set(['FIT-A','FIT-B','FIT-MICRO']));
+ assert.deepEqual(rows.map(row=>row.symbol),[...eligible].map(symbol=>({symbol,...fullBySymbol.get(symbol),financing:full.storedEvaluations[full.snapshots.findIndex(snapshot=>snapshot.symbol===symbol)].opportunity.checks.some(check=>check.id==='thesis-financing'&&check.status==='PASS')})).sort((left,right)=>Number(right.financing)-Number(left.financing)||left.rank-right.rank).map(row=>row.symbol));
  assert.equal(third.page.hasMore,false);
  for(const page of [first,second,third]){
   assert.equal(page.summary.total,8);
@@ -889,9 +915,28 @@ test('research-fit pages retain canonical scores and ranks while requiring curre
  const searched=await (await GET(new Request(`https://radar.test/api/radar?fit=research&q=FIT-MICRO&${pin}`))).json();
  assert.deepEqual(searched.snapshots.map(row=>row.symbol),['FIT-MICRO']);
  assert.equal(searched.rankPositions[0],fullBySymbol.get('FIT-MICRO').rank);
+ // Simulate a previous projection format and concurrent isolates observing a
+ // current rating release. Exactly one lease holder should rebuild the flags.
+ await db().prepare("UPDATE opportunity_rank_projection_versions SET projection_version='research-fit-v0' WHERE run_id=?").bind(runId).run();
+ await db().prepare('UPDATE opportunity_rankings SET research_fit=0,research_fit_financing_pass=0 WHERE run_id=?').bind(runId).run();
+ const [storageA,storageB]=await Promise.all([
+  import(`../../.test-build/storage.mjs?projection-isolate-a=${Date.now()}`),
+  import(`../../.test-build/storage.mjs?projection-isolate-b=${Date.now()}`),
+ ]);
+ const originalPrepare=runtimeEnv.DB.prepare;let projectionsBuilt=0;
+ runtimeEnv.DB.prepare=sql=>{if(sql.startsWith('UPDATE opportunity_rankings AS r SET research_fit='))projectionsBuilt++;return originalPrepare(sql)};
+ try{await Promise.all([storageA.ensureRunEvaluations(runId),storageB.ensureRunEvaluations(runId)]);await storageA.ensureRunEvaluations(runId);}
+ finally{runtimeEnv.DB.prepare=originalPrepare;}
+ assert.equal(projectionsBuilt,1,'concurrent cold readers share a single projection backfill, and the current version is idempotent');
+ assert.equal((await db().prepare('SELECT projection_version FROM opportunity_rank_projection_versions WHERE run_id=?').bind(runId).first()).projection_version,'research-fit-v1');
+ invalidateStateCache();
+ const normal=await readState({runId,researchFit:false,opportunityState:'ranked',limit:20});
+ assert.deepEqual(normal.rankPositions,full.rankPositions);assert.deepEqual(normal.snapshots.map(row=>row.symbol),full.snapshots.map(row=>row.symbol));
  await db().prepare('DELETE FROM fundamental_snapshots WHERE run_id=?').bind(runId).run();
  await db().prepare('DELETE FROM opportunity_rankings WHERE run_id=?').bind(runId).run();
  await db().prepare('DELETE FROM opportunity_rank_versions WHERE run_id=?').bind(runId).run();
+ await db().prepare('DELETE FROM opportunity_rank_projection_versions WHERE run_id=?').bind(runId).run();
+ await db().prepare('DELETE FROM opportunity_rank_projection_leases WHERE run_id=?').bind(runId).run();
  await db().prepare('DELETE FROM strategy_runs WHERE id=?').bind(runId).run();invalidateStateCache();
 });
 
