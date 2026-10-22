@@ -1182,6 +1182,16 @@ test('recoverable failed acquisitions retain source checkpoints during historica
  assert.equal((await db().prepare('SELECT payload FROM raw_cache WHERE key=?').bind(`universe:${id}:quotes:0`).first()).payload,'[]');assert.equal((await db().prepare('SELECT payload FROM bulk_fundamentals WHERE run_id=?').bind(id).first()).payload,'{"revenue":123}');assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM snapshot_archives WHERE id=?').get(id+':RECOVERABLE').n,0);
 });
 
+test('historical maintenance archives issuers in bounded multi-row transactions',async()=>{
+ const {maintainHistoricalStorage}=await import('../../.test-build/snapshot-archive.mjs'),id='0000-archive-batch-fixture',now=new Date().toISOString();
+ await db().prepare("INSERT OR REPLACE INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,strategy_hash) VALUES(?,?,?,'complete','archive batch fixture',12,13,?)").bind(id,now,now,currentHash()).run();
+ for(let index=0;index<12;index++)await insertSnapshot(id,{...base,symbol:`ARCHIVE-BATCH-${String(index).padStart(2,'0')}`}).run();
+ const original=runtimeEnv.DB.batch.bind(runtimeEnv.DB),sizes=[];runtimeEnv.DB.batch=statements=>{sizes.push(statements.length);return original(statements);};
+ try{await maintainHistoricalStorage(12);}finally{runtimeEnv.DB.batch=original;}
+ assert(sizes.includes(20),'first archive group should batch ten payload/evaluation pairs');assert(sizes.includes(4),'final archive group should batch the remaining two pairs');
+ assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM snapshot_archives WHERE id LIKE ?').get(`${id}:%`).n,12);
+});
+
 test('verified inventory recovery resumes failed initialization without a new scan or retry delay',async()=>{
  const {saveCompleteDirectory}=await import('../../.test-build/directory-cache.mjs'),id='directory-outage-recovered',now=new Date().toISOString(),company={ticker:'RECOVERY-LISTED',name:'Synthetic only',cik:0,exchange:'Nasdaq',securityType:'common',securityName:'Common Stock',directoryUrl:'https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt'};
  await saveCompleteDirectory({retrievedAt:now,rows:[company]});

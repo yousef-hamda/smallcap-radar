@@ -48,7 +48,13 @@ export async function maintainHistoricalStorage(limit=50){
  const recoverable=await db().prepare("SELECT id FROM strategy_runs WHERE status='failed' AND stage<13 AND source LIKE 'Bulk Quotes/%' AND updated_at>? ORDER BY updated_at DESC,created_at DESC LIMIT 1").bind(new Date(Date.now()-24*60*60_000).toISOString()).first() as any;
  const excluded=[...protectedRuns.map(row=>String(row.id)),...(recoverable?[String(recoverable.id)]:[])];
  const candidates=(await db().prepare(`SELECT s.id,s.payload,s.evaluation FROM (SELECT s.id FROM fundamental_snapshots s JOIN strategy_runs r ON r.id=s.run_id LEFT JOIN snapshot_archives a ON a.id=s.id WHERE r.status IN ('complete','partial','failed') AND (r.stage>=13 OR r.status='failed') AND a.id IS NULL ${excluded.length?`AND s.run_id NOT IN (${excluded.map(()=>'?').join(',')})`:''} ORDER BY s.id LIMIT ?) candidates JOIN fundamental_snapshots s ON s.id=candidates.id`).bind(...excluded,limit).all()).results as any[];
- for(const row of candidates)await db().batch(await archivedWriteStatements(row.id,row.payload,row.evaluation));
+ // D1 batch round-trips dominate archive maintenance on the persistent volume.
+ // Compress and write small bounded groups instead of issuing one transaction
+ // per issuer; keep each transaction bounded to limit memory and WAL spikes.
+ for(let offset=0;offset<candidates.length;offset+=10){
+  const statements=await Promise.all(candidates.slice(offset,offset+10).map(row=>archivedWriteStatements(row.id,row.payload,row.evaluation)));
+  await db().batch(statements.flat());
+ }
  // Terminal runs never resume provider/scoring cursors. These derived caches
  // are separate from saved source evidence, favorites and portfolio state.
  await db().batch([
