@@ -88,7 +88,8 @@ export async function ensureSchema(){
   d.prepare("CREATE INDEX IF NOT EXISTS idx_radar_sessions_account ON radar_sessions(account_id)"),
   d.prepare("CREATE INDEX IF NOT EXISTS idx_radar_sessions_expiry ON radar_sessions(expires_at)")
   ,d.prepare("CREATE TABLE IF NOT EXISTS bulk_fundamentals (run_id TEXT NOT NULL, cik INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(run_id,cik))"),
-  d.prepare("CREATE TABLE IF NOT EXISTS company_facts_outcomes (run_id TEXT NOT NULL,cik INTEGER NOT NULL,state TEXT NOT NULL,attempt INTEGER NOT NULL DEFAULT 0,last_error TEXT,updated_at TEXT NOT NULL,PRIMARY KEY(run_id,cik))")
+  d.prepare("CREATE TABLE IF NOT EXISTS company_facts_outcomes (run_id TEXT NOT NULL,cik INTEGER NOT NULL,state TEXT NOT NULL,attempt INTEGER NOT NULL DEFAULT 0,last_error TEXT,updated_at TEXT NOT NULL,PRIMARY KEY(run_id,cik))"),
+  d.prepare("CREATE TABLE IF NOT EXISTS request_rate_limits (bucket TEXT PRIMARY KEY NOT NULL,requests INTEGER NOT NULL,expires_at INTEGER NOT NULL)")
  ]);
  for(const [name,definition] of Object.entries({
   directory_version:'directory_version INTEGER NOT NULL DEFAULT 0',
@@ -100,6 +101,7 @@ export async function ensureSchema(){
   sec_requests:'sec_requests INTEGER NOT NULL DEFAULT 0',
   sec_success:'sec_success INTEGER NOT NULL DEFAULT 0',
   sec_failed:'sec_failed INTEGER NOT NULL DEFAULT 0',
+  frames_retry_count:'frames_retry_count INTEGER NOT NULL DEFAULT 0',
   fundamental_coverage:'fundamental_coverage INTEGER NOT NULL DEFAULT 0',
  }))await ensureColumn(d,'strategy_runs',name,definition);
  await ensureColumn(d,'push_subscriptions','owner',"owner TEXT NOT NULL DEFAULT ''");

@@ -184,7 +184,7 @@ export function calculatePortfolio(transactions: PortfolioTransaction[], quotes:
   const weights = positions.map(position => position.weight).filter((weight): weight is number => weight != null);
   const hhi = weights.reduce((total, weight) => total + weight ** 2, 0);
   const effectiveHoldings = hhi > 0 ? 1 / hhi : 0;
-  const diversificationScore = positions.length <= 1 ? 0 : Math.min(100, Math.max(0, (effectiveHoldings - 1) / (Math.min(10, positions.length) - 1) * 100));
+  const diversificationScore = missingQuoteCount ? null : positions.length <= 1 ? 0 : Math.min(100, Math.max(0, (effectiveHoldings - 1) / (Math.min(10, positions.length) - 1) * 100));
   const sectorValues = new Map<string, number>();
   for (const position of positions) if (position.marketValue != null) sectorValues.set(position.sector || 'غير مصنف', (sectorValues.get(position.sector || 'غير مصنف') ?? 0) + position.marketValue);
   const sectors = [...sectorValues.entries()].map(([name, value]) => ({ name, value, weight: marketValue > 0 ? value / marketValue : 0 })).sort((a, b) => b.value - a.value);
@@ -215,8 +215,8 @@ export function calculatePortfolio(transactions: PortfolioTransaction[], quotes:
       openPositions: positions.length,
       missingQuoteCount,
       diversificationScore,
-      effectiveHoldings,
-      topWeight: positions[0]?.weight ?? null,
+      effectiveHoldings: missingQuoteCount ? null : effectiveHoldings,
+      topWeight: missingQuoteCount ? null : positions[0]?.weight ?? null,
     },
   };
 }

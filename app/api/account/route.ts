@@ -4,8 +4,10 @@ import { body, json, sameOrigin, statusOf } from '@/lib/http';
 import { resolveVisitor } from '@/lib/visitor';
 import { invalidatePortfolioCache } from '@/lib/portfolio-storage';
 import { invalidateStateCache } from '@/lib/storage';
+import { enforceRequestLimit } from '@/lib/request-rate-limit';
 
 const cookieExpired = (request: Request) => sessionCookie('', request, 0);
+const MAX_ACCOUNT_COUNT=10_000;
 
 function withCookies(response: Response, request: Request, cookies: string[]) {
   for (const cookie of cookies) response.headers.append('Set-Cookie', cookie);
@@ -46,15 +48,21 @@ export async function POST(request: Request) {
     if (action !== 'signup' && action !== 'login') return json({ error: 'عملية الحساب غير معروفة.' }, 400);
     if (!accountUsernamePattern.test(username)) return json({ error: 'اسم المستخدم يجب أن يكون من 3 إلى 32 حرفًا أو رقمًا.' }, 400);
     if (password.length < 8 || password.length > 128) return json({ error: 'كلمة المرور يجب أن تكون من 8 إلى 128 حرفًا.' }, 400);
+    await enforceRequestLimit(request, `account:${action}:ip`, action === 'signup' ? 8 : 20, 60_000);
+    await enforceRequestLimit(request, `account:${action}:user:${username}`, action === 'signup' ? 3 : 6, 10 * 60_000);
+    if(action==='signup')await enforceRequestLimit(request,'account:signup:daily',5,24*60*60_000);
 
     let account: any;
     if (action === 'signup') {
+      const total=Number((await db().prepare('SELECT COUNT(*) AS count FROM radar_accounts').first() as any)?.count??0);
+      if(total>=MAX_ACCOUNT_COUNT)return json({error:'تم بلوغ سعة الحسابات الحالية؛ تواصل مع مشغّل الخدمة.'},503);
       const existing = await db().prepare('SELECT id FROM radar_accounts WHERE lower(username)=lower(?)').bind(username).first();
       if (existing) return json({ error: 'اسم المستخدم مستخدم بالفعل.' }, 409);
       const id = crypto.randomUUID(), now = new Date().toISOString(), credentials = await hashPassword(password);
       try {
-        await db().prepare('INSERT INTO radar_accounts(id,username,password_salt,password_hash,created_at,updated_at) VALUES(?,?,?,?,?,?)')
-          .bind(id, username, credentials.salt, credentials.hash, now, now).run();
+        const inserted=await db().prepare('INSERT INTO radar_accounts(id,username,password_salt,password_hash,created_at,updated_at) SELECT ?,?,?,?,?,? WHERE (SELECT COUNT(*) FROM radar_accounts)<?')
+          .bind(id, username, credentials.salt, credentials.hash, now, now, MAX_ACCOUNT_COUNT).run();
+        if(Number(inserted?.meta?.changes||0)!==1)return json({error:'تم بلوغ سعة الحسابات الحالية؛ تواصل مع مشغّل الخدمة.'},503);
       } catch (error) {
         // The preflight check above is for a useful common-case response; the
         // unique constraint remains the concurrency-safe authority.

@@ -416,7 +416,13 @@ export async function yahooBulkQuotes(companies: Company[]): Promise<Company[]> 
   }
 }
 
-function isoDate(date: string) { const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(date); return match ? `${match[3]}-${match[1]}-${match[2]}` : '' }
+function isoDate(date: string) {
+ const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(date);
+ if(!match)return '';
+ const value=`${match[3]}-${match[1]}-${match[2]}`;
+ const parsed=new Date(`${value}T00:00:00Z`);
+ return Number.isFinite(parsed.getTime())&&parsed.toISOString().slice(0,10)===value?value:'';
+}
 function dateOffset(iso: string, days: number) { const date = new Date(iso); date.setUTCDate(date.getUTCDate() + days); return date.toISOString().slice(0, 10) }
 function applyBundledFundamentals(snapshot:Snapshot,cik:number,now:string){
  const facts=(bundledFrames as any).fundamentals?.[String(cik)];
@@ -653,6 +659,11 @@ export function parseCboeDaily(payload:any,from:string,to:string):MarketBar[]{
  return rows.filter((row):row is {date:string;close:number;open?:number;high?:number;low?:number;volume?:number}=>validDate(row.date)&&row.date>=from&&row.date<=to&&row.close!=null&&row.close>0).sort((a,b)=>a.date.localeCompare(b.date));
 }
 
+export function parseNasdaqDaily(payload:any,from:string,to:string):MarketBar[]{
+ const rows=(payload?.data?.tradesTable?.rows??[]).map((row:any)=>({date:isoDate(String(row.date??'')),close:numeric(row.close),open:numeric(row.open)??undefined,high:numeric(row.high)??undefined,low:numeric(row.low)??undefined,volume:numeric(row.volume)??undefined}));
+ return rows.filter((row:any)=>row.date&&row.date>=from&&row.date<=to&&row.close!=null&&row.close>0&&row.low!=null&&row.low>0).sort((a:any,b:any)=>a.date.localeCompare(b.date)) as MarketBar[];
+}
+
 export async function historicalMarketData(symbol: string, asOf = new Date().toISOString(), days = 1900):Promise<HistoricalResult> {
   const cached = (quickCache.symbols as Record<string, CachedQuick>)[symbol];
   const to = asOf.slice(0, 10), from = dateOffset(asOf, -days);
@@ -684,9 +695,14 @@ export async function historicalMarketData(symbol: string, asOf = new Date().toI
    if(!history.length){if(yahooNotFound&&cboeNotFound&&nasdaqNoData)throw new HistoricalSessionsUnavailableError(symbol);throw Error(`${symbol}: provider history unavailable and dated bundled fallback has no sessions in the requested range`);}
    return {url,history,splits:null,source:'Nasdaq historical · bundled dated fallback',retrievedAt:quickCache.generatedAt,availableAt:quickCache.generatedAt};
   }
-  const history = (payload.data?.tradesTable?.rows ?? []).map((row) => ({ date: isoDate(row.date), close: numeric(row.close), open: numeric(row.open), high: numeric(row.high), low: numeric(row.low), volume: numeric(row.volume) }))
-    .filter((row) => row.date && row.date<=to && row.date>=from && row.close != null && row.close > 0 && row.low != null && row.low > 0).sort((a, b) => a.date.localeCompare(b.date));
-  if(!history.length)throw Error(`${symbol}: no historical sessions returned; successful empty responses may reflect temporary upstream or schema failures`);
+  const history=parseNasdaqDaily(payload,from,to);
+  if(!history.length){
+   if(cached?.history?.length){
+    const fallback=cached.history.filter(row=>row.date>=from&&row.date<=to&&Number.isFinite(Date.parse(`${row.date}T00:00:00Z`))&&new Date(`${row.date}T00:00:00Z`).toISOString().slice(0,10)===row.date&&Number.isFinite(row.close)&&row.close>0);
+    if(fallback.length){recordProviderIssue(`${symbol}: Nasdaq returned no usable sessions; using dated bundled history fallback`);return {url,history:fallback,splits:null,source:'Nasdaq historical · bundled dated fallback after empty response',retrievedAt:quickCache.generatedAt,availableAt:quickCache.generatedAt};}
+   }
+   throw Error(`${symbol}: no historical sessions returned; successful empty responses may reflect temporary upstream or schema failures`);
+  }
   return { url, history:history as MarketBar[], splits:null,source:'Nasdaq historical API · corporate actions unavailable',retrievedAt:new Date().toISOString(),availableAt:`${history.at(-1)!.date}T21:00:00.000Z` };
 }
 

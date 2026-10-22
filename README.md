@@ -16,7 +16,7 @@ Arabic RTL mobile-first PWA, currently deployed on Railway with an older separat
 
 ## Implemented
 
-- Professional Arabic RTL research terminal with one Opportunity category, separate favorites and portfolio tools, responsive company evidence sheet, seven chart periods including on-demand 1D intraday view, persistent favorites, JSON snapshot import and audit export.
+- Professional Arabic RTL research terminal with one Opportunity category, separate favorites and portfolio tools, responsive company evidence sheet, seven chart periods including on-demand 1D intraday view, persistent favorites, and audit export. Imported rankings require the operator `RANK_IMPORT_SECRET` and are capped at three publications per hour across all clients.
 - Private durable portfolio ledger with stock search, buy/sell transactions, weighted-average cost, fees, realized/unrealized P&L, live batched quotes with dated fallback, sourced historical performance, allocation treemap, company logos with deterministic fallback, concentration/sector alerts, strategy-weighted diagnostics and CSV export. See [PORTFOLIO_AR.md](docs/PORTFOLIO_AR.md).
 - Cloudflare D1 self-initializing schema and migrations, immutable run identifiers and per-run snapshots/evaluations, explicit provider errors and a server-owned cursor with lease/offset concurrency protection. The secret-protected native scheduler advances durable scan checkpoints without an open browser; global provider quotas and SQLite leases coordinate requests.
 - Standards-based Web Push completion notifications with VAPID signing and an explicit subscribe-and-test panel. On iPhone, install the PWA on the Home Screen, open it from the icon, and use the separate **تفعيل الإشعارات** and **اختبار الإشعار** buttons.
@@ -81,7 +81,7 @@ The owner repository exists at `https://github.com/yousef-hamda/smallcap-radar`;
 
 ## Secrets and access
 
-No supplied Cloudflare token or R2 key is used or embedded. The Sites publication is public at the owner's explicit request. Scan state remains shared; new favorites are scoped server-side and use idempotent explicit save/remove operations. Anonymous visitors retain their list through an HttpOnly cookie; deleting that cookie loses access to that anonymous list. Broader scan/push authorization and production failure-injection testing remain open work.
+No supplied Cloudflare token or R2 key is used or embedded. The Sites publication is public at the owner's explicit request. Scan state remains shared; new favorites are scoped server-side and use idempotent explicit save/remove operations. Anonymous visitors retain their list through an HttpOnly cookie; deleting that cookie loses access to that anonymous list. Public scan, account, and radar-write endpoints use shared database-backed request limits. Imported ranking publication is disabled unless `RANK_IMPORT_SECRET` is configured and supplied by an operator; do not put that secret in client code. Production secret rotation and deployment status are recorded in the current handoff.
 
 ## Sources
 

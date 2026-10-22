@@ -9,6 +9,7 @@ import { db, ensureSchema, log } from "../lib/storage";
 import { body, sameOrigin, sameSecret, secureResponse, statusOf } from "../lib/http";
 import { visitor } from "../lib/visitor";
 import { validPushSubscription } from "../lib/push-validation";
+import { enforceRequestLimit } from "../lib/request-rate-limit";
 
 interface Env {
   ASSETS: Fetcher;
@@ -226,6 +227,7 @@ const worker = {
     if (url.pathname === "/api/background-scan/start" && request.method === "POST") {
       try {
         sameOrigin(request);
+        await enforceRequestLimit(request, 'background-scan-start', 2, 60_000);
         const input = await body(request,8_000) as any;
         if(!input||typeof input!=='object'||Array.isArray(input))return json({error:'الطلب غير صالح'},400);
         const run = await startScan(input.mode);
@@ -237,6 +239,7 @@ const worker = {
     if (url.pathname === "/api/background-scan/resume" && request.method === "POST") {
       try {
         sameOrigin(request);
+        await enforceRequestLimit(request, 'background-scan-resume', 6, 60_000);
         const input=await body(request,8_000) as any;
         if(typeof input?.runId!=="string"||!UUID.test(input.runId))return json({error:"معرّف الفحص غير صالح"},400);
         await ensureSchema();

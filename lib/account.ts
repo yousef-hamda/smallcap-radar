@@ -54,6 +54,7 @@ export async function createSession(accountId: string, request: Request) {
   await ensureSchema();
   const token = toBase64Url(crypto.getRandomValues(new Uint8Array(32)));
   const now = new Date().toISOString();
+  await db().prepare('DELETE FROM radar_sessions WHERE expires_at<?').bind(Date.now()).run();
   await db().prepare('INSERT INTO radar_sessions(token_hash,account_id,created_at,last_seen_at,expires_at) VALUES(?,?,?,?,?)')
     .bind(await digest(token), accountId, now, now, Date.now() + SESSION_TTL * 1000).run();
   return { token, cookie: sessionCookie(token, request) };

@@ -20,6 +20,7 @@ import {GET as reportGET} from '../../.test-build/scan-report-api.mjs';
 import {GET as companyGET} from '../../.test-build/company-api.mjs';
 import {GET as exportGET} from '../../.test-build/export-api.mjs';
 import {reserveProviderRequest} from '../../.test-build/provider-quota.mjs';
+import {enforceRequestLimit} from '../../.test-build/request-rate-limit.mjs';
 import {publishDirectoryRatings} from '../../.test-build/directory-rating.mjs';
 import {scheduledScanTick} from '../../.test-build/scheduled-scan.mjs';
 import {archivedWriteStatements,restoreArchivedRow} from '../../.test-build/snapshot-archive.mjs';
@@ -42,6 +43,19 @@ import {secUserAgent,secUserAgentCacheVersion} from '../../.test-build/sec-user-
 await ensureSchema();
 const base=fixtures[0];
 process.env.SEC_USER_AGENT??='SmallCapRadar/2.2 (contact: tests@example.com)';
+test('database-backed request limiter coordinates fixed-window quotas by client',async()=>{
+ const request=new Request('https://radar.test/api/rate-limit',{headers:{'cf-connecting-ip':'192.0.2.77'}}),now=1_800_000_000_000;
+ await enforceRequestLimit(request,'rate-test',2,60_000,now);await enforceRequestLimit(request,'rate-test',2,60_000,now+1);
+ await assert.rejects(()=>enforceRequestLimit(request,'rate-test',2,60_000,now+2),error=>error.status===429);
+ await enforceRequestLimit(new Request(request.url,{headers:{'cf-connecting-ip':'192.0.2.78'}}),'rate-test',2,60_000,now+2);
+ await enforceRequestLimit(request,'global-rate-test',1,60_000,now,'global');
+ await assert.rejects(()=>enforceRequestLimit(new Request(request.url,{headers:{'cf-connecting-ip':'192.0.2.78'}}),'global-rate-test',1,60_000,now+1,'global'),error=>error.status===429);
+});
+test('public snapshot import fails closed unless an operator publication secret is configured',async()=>{
+ const previous=runtimeEnv.RANK_IMPORT_SECRET;delete runtimeEnv.RANK_IMPORT_SECRET;
+ try{const response=await POST(new Request('https://radar.test/api/radar',{method:'POST',headers:{origin:'https://radar.test','content-type':'application/json'},body:JSON.stringify({action:'import',records:[base]})}));assert.equal(response.status,403);}
+ finally{if(previous===undefined)delete runtimeEnv.RANK_IMPORT_SECRET;else runtimeEnv.RANK_IMPORT_SECRET=previous;}
+});
 test('qualitative opportunity proxies produce auditable bounded grades without claiming full coverage',()=>{
  const now='2200-01-01T00:00:00.000Z';
  const snapshot={...base,asOf:now,evSales:2,revenueGrowth:0.2,grossMargin:0.4,operatingMarginTrend:0.03,cash:100,debt:50,dilution:0.02,price:12,low52w:8,high52w:16,ma30w:10,return12m:0.15,nextEarnings:'2200-02-01',provenance:Object.fromEntries(['evSales','revenueGrowth','grossMargin','operatingMarginTrend','cash','debt','dilution','price','low52w','high52w','ma30w','return12m'].map(key=>[key,{source:'SEC EDGAR Company Facts',url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0000000000.json',periodEnd:now.slice(0,10),availableAt:now,retrievedAt:now,rightsStatus:'public-domain',confidence:'high'}]))};
@@ -250,6 +264,11 @@ test('portfolio full close and reopen resets cost basis instead of leaking an ol
  const row=(id,side,quantity,price,tradeDate)=>({id,symbol:'TEST',companyName:'Synthetic',side,quantity,price,fees:0,tradeDate,createdAt:tradeDate,updatedAt:tradeDate});
  const value=calculatePortfolio([row('1','buy',10,10,'2026-01-01'),row('2','sell',10,12,'2026-01-02'),row('3','buy',5,20,'2026-01-03')],{TEST:{symbol:'TEST',name:'Synthetic',price:22,dailyChange:null,asOf:'2026-01-04'}});
  assert.equal(value.positions[0].averageCost,20);assert.equal(value.summary.realizedPnl,20);assert.equal(value.summary.unrealizedPnl,10);
+});
+test('portfolio concentration indicators stay unavailable when any open holding lacks a quote',()=>{
+ const tx=(id,symbol,quantity)=>({id,symbol,companyName:symbol,side:'buy',quantity,price:10,fees:0,tradeDate:'2026-01-01',createdAt:'2026-01-01',updatedAt:'2026-01-01'});
+ const value=calculatePortfolio([tx('1','PRICED',10),tx('2','MISSING',100)],{PRICED:{symbol:'PRICED',name:'Priced',price:20,asOf:'2026-01-04'}});
+ assert.equal(value.summary.missingQuoteCount,1);assert.equal(value.summary.diversificationScore,null);assert.equal(value.summary.effectiveHoldings,null);assert.equal(value.summary.topWeight,null);
 });
 test('portfolio history refuses to fabricate a continuous line from stale or missing prices',()=>{
  const transaction={id:'1',symbol:'TEST',companyName:'Synthetic',side:'buy',quantity:2,price:10,fees:0,tradeDate:'2026-01-01',createdAt:'2026-01-01',updatedAt:'2026-01-01'};

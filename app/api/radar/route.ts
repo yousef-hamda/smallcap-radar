@@ -7,6 +7,7 @@ import {resolveVisitor} from '@/lib/visitor';
 import {env} from 'cloudflare:workers';
 import {secUserAgentCacheVersion} from '@/lib/sec-user-agent';
 import {scanCapacityPaused} from '@/lib/scan-capacity';
+import {enforceRequestLimit} from '@/lib/request-rate-limit';
 
 const tokenPattern=/^[a-f0-9]{48}$/;
 async function tokenHash(token:string){const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(token));return [...new Uint8Array(bytes)].map(value=>value.toString(16).padStart(2,'0')).join('');}
@@ -43,7 +44,7 @@ export async function GET(req:Request){
 }
 export async function POST(req:Request){
  try {
-  sameOrigin(req);await ensureSchema();const b=await body(req);
+  sameOrigin(req);await enforceRequestLimit(req,'radar-write',120,60_000);await ensureSchema();const b=await body(req);
   if(!b||typeof b!=='object'||Array.isArray(b))return json({error:'الطلب غير صالح'},400);
   if(b.action==='favorite'){
    if(typeof b.symbol!=='string'||!/^[A-Z0-9.^-]{1,16}$/.test(b.symbol)||typeof b.saved!=='boolean')return json({error:'رمز أو حالة حفظ غير صالحة'},400);
@@ -72,6 +73,10 @@ export async function POST(req:Request){
    return response;
   }
   if(b.action==='import'){
+   const importSecret=String((env as any).RANK_IMPORT_SECRET||'');
+   if(!importSecret||!sameSecret(req.headers.get('x-radar-import'),importSecret))return json({error:'استيراد النتائج العامة متاح للمشغّل فقط.'},403);
+   await enforceRequestLimit(req,'published-import',3,60*60_000);
+   await enforceRequestLimit(req,'published-import-global',3,60*60_000,Date.now(),'global');
    const parsed=importSchema.safeParse(b.records);
    if(!parsed.success)return json({error:'ملف غير صالح: '+parsed.error.issues.slice(0,3).map(i=>i.path.join('.')+': '+i.message).join('؛ ')},400);
    const id=await createRun('import',parsed.data.length);

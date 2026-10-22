@@ -1019,7 +1019,8 @@ export function scoreFairValue(input: FairValueAssessment): FairValueScore {
             : marginOfSafety < 0.3 ? 7
               : marginOfSafety < 0.5 ? 8 : 9;
 
-  if (input.conservativeValue.value < price) score = Math.min(score, 4);
+  const bearMarginOfSafety=input.conservativeValue.value/price-1;
+  score=Math.min(score,bearCaseScoreCap(input.conservativeValue.value,price));
 
   const sources = [...requiredValues.map(item => item.source),
     ...input.scenarioCalculations.conservative.assumptions.map(assumption => assumption.source),
@@ -1029,7 +1030,7 @@ export function scoreFairValue(input: FairValueAssessment): FairValueScore {
   const confidence: FairValueScore['confidence'] = methodSpread <= 0.2 ? 'high' : 'medium';
   return {
     score,
-    rationale: `Base-case margin of safety ${(marginOfSafety * 100).toFixed(1)}%; ${distinctMethods.length} suitable methods; spread ${(methodSpread * 100).toFixed(1)}%. Capitalization reconciliation and normalization are source-backed.${input.conservativeValue.value < price ? ' Score capped at 4 because conservative value is below the current price.' : ''}`,
+    rationale: `Base-case margin of safety ${(marginOfSafety * 100).toFixed(1)}%; conservative-case downside ${(bearMarginOfSafety * 100).toFixed(1)}%; ${distinctMethods.length} suitable methods; spread ${(methodSpread * 100).toFixed(1)}%. Capitalization reconciliation and normalization are source-backed.`,
     sources,
     confidence,
     marginOfSafety: rounded(marginOfSafety),
@@ -1072,4 +1073,13 @@ export function scoreFairValue(input: FairValueAssessment): FairValueScore {
       ],
     },
   };
+}
+
+export function bearCaseScoreCap(conservativeValue:number,currentPrice:number):number{
+ const bearRatio=conservativeValue/currentPrice;
+ if(bearRatio<.5)return 0;
+ if(bearRatio<=.75)return 1;
+ if(bearRatio<=.9)return 2;
+ if(bearRatio<1)return 3;
+ return 10;
 }

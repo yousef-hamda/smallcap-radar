@@ -40,7 +40,7 @@ async function cachedMarketHistory(payload:string):Promise<Awaited<ReturnType<ty
   const value:any=await decodeHistoryCache(payload);
   if(!value||typeof value.source!=='string'||typeof value.url!=='string'||typeof value.retrievedAt!=='string'||typeof value.availableAt!=='string'
     ||!Array.isArray(value.history)||!value.history.length
-    ||!value.history.every((bar:any)=>/^\d{4}-\d{2}-\d{2}$/.test(bar?.date)&&Number.isFinite(bar.close)&&bar.close>0))return null;
+    ||!value.history.every((bar:any)=>{if(!/^\d{4}-\d{2}-\d{2}$/.test(bar?.date)||!Number.isFinite(bar.close)||bar.close<=0)return false;const date=new Date(`${bar.date}T00:00:00Z`);return Number.isFinite(date.getTime())&&date.toISOString().slice(0,10)===bar.date;}))return null;
   return value;
  }catch{return null;}
 }
@@ -216,9 +216,15 @@ export async function processScanBatch(runId: string) {
       const effectiveSuccess = Number(run.sec_success||0)+bulk.success+bulk.optionalSuccess;
       const effectiveFailed = Number(run.sec_failed||0)+bulk.failed+bulk.optionalFailed;
       const error = effectiveFailed ? `SEC Frames: ${effectiveSuccess}/${effectiveRequests} طلبًا ناجحًا. ${bulk.errors.join('؛ ')||run.error||''}` : '';
-      const nextStage = bulk.done ? (run.total ? 5 : 9) : 4;
-      await database.prepare("UPDATE strategy_runs SET stage=?,offset=?,processed=0,sec_requests=?,sec_success=?,sec_failed=?,fundamental_coverage=?,error=?,updated_at=?,lease_until=0,retry_queue='[]' WHERE id=?").bind(nextStage,bulk.done?0:bulk.nextOffset,effectiveRequests, effectiveSuccess, effectiveFailed, bulk.fundamentals.size, error.slice(0,4000), new Date().toISOString(), run.id).run();
-      await log(run.id, 'sec_frames', `SEC Frames baseline ${effectiveSuccess}/${effectiveRequests}; optional IFRS ${bulk.optionalSuccess}/${bulk.optionalRequests}; coverage ${bulk.fundamentals.size}/${companies.length}; annual ${bulk.annual}; instant ${bulk.instant}; source ${bulk.fallbackUsed ? 'bundled official dated snapshot' : 'live API'}${bulk.done && run.total ? '؛ ستبدأ الآن استعادة Company Facts للحقول الناقصة' : ''}`);
+      const frameFailures=bulk.failed+bulk.optionalFailed;
+      const transientFrameFailure=bulk.errors.some(message=>!(/HTTP (?:400|401|403|404|405|410)\b/.test(message)));
+      const retryCount=Number(run.frames_retry_count||0);
+      const retryPage=frameFailures>0&&transientFrameFailure&&retryCount<2;
+      const nextStage=retryPage?4:bulk.done?(run.total?5:9):4;
+      const nextOffset=retryPage?Number(run.offset):bulk.done?0:bulk.nextOffset;
+      const nextRetryCount=retryPage?retryCount+1:0;
+      await database.prepare("UPDATE strategy_runs SET stage=?,offset=?,frames_retry_count=?,processed=0,sec_requests=?,sec_success=?,sec_failed=?,fundamental_coverage=?,error=?,updated_at=?,lease_until=0,retry_queue='[]' WHERE id=?").bind(nextStage,nextOffset,nextRetryCount,effectiveRequests,effectiveSuccess,effectiveFailed,bulk.fundamentals.size,error.slice(0,4000),new Date().toISOString(),run.id).run();
+      await log(run.id, 'sec_frames', `SEC Frames baseline ${effectiveSuccess}/${effectiveRequests}; optional IFRS ${bulk.optionalSuccess}/${bulk.optionalRequests}; coverage ${bulk.fundamentals.size}/${companies.length}; annual ${bulk.annual}; instant ${bulk.instant}; source ${bulk.fallbackUsed ? 'bundled official dated snapshot' : 'live API'}${retryPage?`; retrying failed frame page (${nextRetryCount}/2)`:bulk.done && run.total ? '؛ ستبدأ الآن استعادة Company Facts للحقول الناقصة' : ''}`);
       run = await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first();
       return { run: publicRun(run), done: false };
     } catch (error) {

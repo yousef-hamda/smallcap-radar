@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {scoreCatalysts,scoreFinancialStrength,scoreFinancialStrengthPartial,scoreEarningsQualityPartial} from '../../.test-build/opportunity-scoring.mjs';
+import {scoreCatalysts,scoreFinancialStrength,scoreFinancialStrengthPartial,scoreEarningsQualityPartial,bearCaseScoreCap} from '../../.test-build/opportunity-scoring.mjs';
 import {assessFinancingRisk,applyFinancingRisk} from '../../.test-build/financing-risk.mjs';
 import {buildOpportunityThesis} from '../../.test-build/opportunity-thesis.mjs';
 import {peerObservation,peerContext} from '../../.test-build/opportunity-peers.mjs';
@@ -14,6 +14,13 @@ const finance=()=>({industryModel:'industrial-operating-company',asOf,unrestrict
 const event=(overrides={})=>({id:'contract',title:'Executed customer agreement',classification:'binding-contract',announcedAt:'2026-08-01',expectedAt:'2026-11-01',source:source(),impactAsPctTtmRevenue:sv(20),conditions:[],progressVerified:true,marketPricing:'not-priced',...overrides});
 const impact=(value,unit)=>({value,unit,source:source()});
 const catalyst=events=>scoreCatalysts({asOf,horizonMonths:6,searchCompleted:true,searchSources:[source()],events});
+test('valuation bear-case cap responds to downside severity instead of a binary below-price check',()=>{
+ assert.equal(bearCaseScoreCap(99,100),3);
+ assert.equal(bearCaseScoreCap(90,100),2);
+ assert.equal(bearCaseScoreCap(75,100),1);
+ assert.equal(bearCaseScoreCap(49,100),0);
+ assert.equal(bearCaseScoreCap(110,100),10);
+});
 const knownEvent=(overrides={})=>event({impactAsPctTtmRevenue:impact(20,'percent-of-ttm-revenue'),...overrides});
 
  test('many nonbinding announcements cannot overwhelm one evidenced binding catalyst',()=>{

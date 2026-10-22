@@ -4,7 +4,7 @@ import {fixtures} from '../../.test-build/fixtures.mjs';
 import {simulateForwardReturn,horizonDate,pointInTime,firmHoldout,firmBootstrap,bonferroni,splitAdjustedDilution,ma30Weeks,opportunityHistoryMetrics,completedSessionQuote} from '../../.test-build/research.mjs';
 import {trailingAnnual,insiderPurchases,latestInstant,REVENUE_TAGS} from '../../.test-build/sec.mjs';
 import {preliminarySnapshot,parseCompanyFacts,needsCompanyFacts,fetchCompanyFactsFallback,fetchBulkFundamentals} from '../../.test-build/bulk.mjs';
-import {yahooPercentAsRatio,parseYahooDaily,parseCboeDaily,yahooSymbol,yahooBulkQuotes,parseSecFilingNews,parseSecFilingIndex,parseSec8KItemReferences,fetchSec8KItemIndex,selectRecentForm4Filings,fetchInsiderPurchases,fetchJson,enrichSnapshotsWithSecOpportunity,resolveCompanyBySymbol,searchListedCompanies} from '../../.test-build/providers.mjs';
+import {yahooPercentAsRatio,parseYahooDaily,parseCboeDaily,parseNasdaqDaily,yahooSymbol,yahooBulkQuotes,parseSecFilingNews,parseSecFilingIndex,parseSec8KItemReferences,fetchSec8KItemIndex,selectRecentForm4Filings,fetchInsiderPurchases,fetchJson,enrichSnapshotsWithSecOpportunity,resolveCompanyBySymbol,searchListedCompanies} from '../../.test-build/providers.mjs';
 import {reviewShareSplits,hasVerifiedShareRatio,shareReviewHistoryDays} from '../../.test-build/research.mjs';
 import {enrichFinancials} from '../../.test-build/financials.mjs';
 import {derivedEvidence} from '../../.test-build/evidence.mjs';
@@ -309,6 +309,10 @@ test('Cboe fallback parser keeps only bounded positive dated OHLCV rows',()=>{
  const rows=parseCboeDaily({data:[{date:'2026-01-02',close:12,open:11,high:13,low:10,volume:100},{date:'2025-12-31',close:9},{date:'2026-02-01',close:0},{date:'2026-02-30',close:20},{date:'bad',close:20}]},'2026-01-01','2026-01-31');
  assert.deepEqual(rows.map(row=>row.date),['2026-01-02']);assert.equal(rows[0].volume,100);
 });
+test('Nasdaq history parser rejects impossible calendar dates before lexical range checks',()=>{
+ const rows=parseNasdaqDaily({data:{tradesTable:{rows:[{date:'01/02/2026',close:'12.00',low:'11.00'},{date:'02/30/2026',close:'20.00',low:'19.00'},{date:'13/01/2026',close:'30.00',low:'29.00'}]}}},'2026-01-01','2026-12-31');
+ assert.deepEqual(rows.map(row=>row.date),['2026-01-02']);
+});
 test('SEC filing index becomes profile events when RSS is unavailable',()=>{
  const news=parseSecFilingNews({filings:{recent:{form:['8-K','4','10-Q'],accessionNumber:['0000000000-26-000001','0000000000-26-000002','0000000000-26-000003'],primaryDocument:['current.htm','form4.xml','quarter.htm'],filingDate:['2026-08-01','2026-08-02','2026-07-01']}}},123,'2026-09-01T00:00:00Z');
  assert.equal(news.length,2);assert.match(news[0].link,/Archives\/edgar\/data\/123\/000000000026000001\/current.htm/);assert.equal(news[1].source,'SEC EDGAR filings');
@@ -494,7 +498,7 @@ test('fair value rejects stale quotes, stale model inputs, mixed balance dates, 
 });
 test('fair-value rubric caps or withholds scores for unresolved inputs, unsuitable methods, unit mismatch, spread and scenario conflicts',()=>{
  assert.equal(scoreFairValue(fairValueInput({capitalizationReview:undefined})).score,null);
- assert.equal(scoreFairValue(fairValueInput({conservativeValue:{value:9,unit:'USD/share',source:opportunityProvenance}})).score,4);
+ assert.equal(scoreFairValue(fairValueInput({conservativeValue:{value:9,unit:'USD/share',source:opportunityProvenance}})).score,2);
  assert.equal(scoreFairValue(fairValueInput({methods:[fairMethod('normalized-dcf',16,true)]})).score,null);
  assert.equal(scoreFairValue(fairValueInput({methods:[fairMethod('normalized-dcf',16,true),fairMethod('peer-multiples',40)]})).conflicts.length,1);
  assert.equal(scoreFairValue(fairValueInput({methods:[fairMethod('normalized-dcf',16,true),{...fairMethod('peer-multiples',15),assumptions:[]}]})).score,null,'a method with no sourced assumptions is not a valuation cross-check');

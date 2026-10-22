@@ -1,9 +1,11 @@
 import { body, json, sameOrigin, statusOf } from '@/lib/http';
 import { processScanBatch, startScan } from '@/lib/scanner';
+import { enforceRequestLimit } from '@/lib/request-rate-limit';
 
 export async function POST(request: Request) {
   try {
     sameOrigin(request);
+    await enforceRequestLimit(request, 'legacy-scan-route', 6, 60_000);
     const input = await body(request,8_000);
     if(!input||typeof input!=='object'||Array.isArray(input))return json({error:'الطلب غير صالح'},400);
     if (input.action === 'start') return json({ run: await startScan(input.mode) });
