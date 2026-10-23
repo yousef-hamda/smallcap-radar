@@ -11,7 +11,7 @@ import {evaluateStrategy} from '../../.test-build/engine.mjs';
 import {proxyOpportunityEvidence} from '../../.test-build/opportunity-proxies.mjs';
 import {opportunitySpecHash} from '../../.test-build/opportunity-spec.mjs';
 import {fixtures} from '../../.test-build/fixtures.mjs';
-import {ensureSchema,db,currentHash,readState,insertSnapshot,invalidateStateCache,readResearchConflictCount,migrateCompatibleAcquisitionRuns,publishResearchFitRankProjectionBatch,publishRunAggregatesBatch} from '../../.test-build/storage.mjs';
+import {ensureSchema,db,currentHash,readState,insertSnapshot,invalidateStateCache,readResearchConflictCount,migrateCompatibleAcquisitionRuns,publishResearchFitRankProjectionBatch,publishRunAggregatesBatch,advanceRunEvaluationsBatch} from '../../.test-build/storage.mjs';
 import {processScanBatch,startScan,historyCandidate,preliminaryCandidates} from '../../.test-build/scanner.mjs';
 import {decodeHistoryCache} from '../../.test-build/history-cache.mjs';
 import {hasVerifiedShareRatio} from '../../.test-build/research.mjs';
@@ -35,6 +35,7 @@ import {fetchBulkFundamentals} from '../../.test-build/bulk.mjs';
 import {importSchema} from '../../.test-build/validation.mjs';
 import {apiJson} from '../../.test-build/client-json.mjs';
 import {calculatePortfolio,buildPerformanceSeries,validateLedger} from '../../.test-build/portfolio.mjs';
+import {peerContext,peerObservation,uniqueIssuerPeers} from '../../.test-build/opportunity-peers.mjs';
 import {GET as portfolioGET,POST as portfolioPOST,PUT as portfolioPUT,DELETE as portfolioDELETE} from '../../.test-build/portfolio-api.mjs';
 import {GET as portfolioHistoryGET} from '../../.test-build/portfolio-history-api.mjs';
 import {GET as portfolioLogoGET} from '../../.test-build/portfolio-logo-api.mjs';
@@ -44,6 +45,7 @@ import webpush from 'web-push';
 import {secUserAgent,secUserAgentCacheVersion} from '../../.test-build/sec-user-agent.mjs';
 await ensureSchema();
 const base=fixtures[0];
+async function finishEvaluation(runId,batchSize=80){let result=await advanceRunEvaluationsBatch(runId,batchSize),ticks=0;while(!result.done&&ticks++<2000)result=await advanceRunEvaluationsBatch(runId,batchSize);assert.equal(result.done,true,`evaluation repair should finish for ${runId}`);return result;}
 process.env.SEC_USER_AGENT??='SmallCapRadar/2.2 (contact: tests@example.com)';
 test('database-backed request limiter coordinates fixed-window quotas by client',async()=>{
  const request=new Request('https://radar.test/api/rate-limit',{headers:{'cf-connecting-ip':'198.51.100.1','x-forwarded-for':'192.0.2.77, 198.51.100.9'}}),now=1_800_000_000_000;
@@ -89,6 +91,7 @@ test('a running scan with partial rows does not replace the last completed full 
  const old='2200-01-01T00:00:00.000Z',active='2201-01-01T00:00:00.000Z';
  await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES('prior-complete',?,?,'complete','Bulk Quotes/SEC Frames · full',1,1,13,'prior-rubric')").bind(old,old).run();
  await insertSnapshot('prior-complete',{...base,symbol:'PRIOR'}).run();
+ await finishEvaluation('prior-complete');
  await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES('new-running',?,?,'running','Bulk Quotes/SEC Frames · full',1,1,10,?)").bind(active,active,currentHash()).run();
  await insertSnapshot('new-running',{...base,symbol:'INCOMPLETE',opportunityResearch:undefined}).run();
  invalidateStateCache();const state=await readState({strategy:'opportunity',opportunityState:'all',limit:10});
@@ -104,6 +107,7 @@ test('a running scan with partial rows does not replace the last completed full 
  try{const unchanged=await readState({strategy:'opportunity',opportunityState:'all',limit:10});assert.equal(unchanged.dataRunId,'prior-complete');}
  finally{runtimeEnv.DB.prepare=originalPrepare;}
  await db().prepare("UPDATE strategy_runs SET status='complete',stage=13 WHERE id='new-running'").run();
+ await finishEvaluation('new-running');
  invalidateStateCache();const completed=await readState({strategy:'opportunity',opportunityState:'all',limit:10});
  assert.equal(completed.dataRunId,'new-running');assert.equal(completed.summary.stale,false);
  assert.deepEqual(completed.snapshots.map(snapshot=>snapshot.symbol),['INCOMPLETE']);
@@ -113,6 +117,7 @@ test('a running scan with partial rows does not replace the last completed full 
 test('legacy scoring snapshots are re-evaluated in bounded batches and preserve their visible evidence queue',async()=>{
  const now='2201-01-01T00:00:00.000Z';await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES('legacy-rating',?,?,'complete','Legacy full scan',2,2,13,'retired-opportunity-hash')").bind(now,now).run();
  await insertSnapshot('legacy-rating',{...base,symbol:'LEGACY-B'}).run();await insertSnapshot('legacy-rating',{...base,symbol:'LEGACY-A'}).run();
+ await finishEvaluation('legacy-rating');
  invalidateStateCache();const result=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:1});
  assert.equal(result.summary.stale,true);assert.equal(result.summary.total,2);assert.equal(result.summary.opportunityRanked,2);assert.equal(result.snapshots.length,1);assert.equal(result.snapshots[0].symbol,'LEGACY-A');assert.equal(result.page.hasMore,true);
  const persisted=await db().prepare("SELECT evaluation FROM fundamental_snapshots WHERE run_id='legacy-rating' AND symbol='LEGACY-A'").first();
@@ -125,6 +130,7 @@ test('large legacy evaluator backfill persists current-hash rows across keyset b
  const now='2202-01-01T00:00:00.000Z',count=501;
  await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES('legacy-backfill',?,?,'complete','Legacy full scan',?,?,13,'retired-opportunity-hash')").bind(now,now,count,count).run();
  for(let start=0;start<count;start+=100){const batch=[];for(let index=start;index<Math.min(count,start+100);index++){const symbol=`MIGRATE-${String(index).padStart(4,'0')}`,snapshot={...base,symbol,asOf:now};batch.push(db().prepare('INSERT INTO fundamental_snapshots(id,run_id,symbol,as_of,payload,evaluation) VALUES(?,?,?,?,?,?)').bind(`legacy-backfill:${symbol}`,'legacy-backfill',symbol,now,JSON.stringify(snapshot),JSON.stringify({opportunity:{hash:'retired-opportunity-hash'}})));}await db().batch(batch);}
+ await finishEvaluation('legacy-backfill',80);
  const originalPrepare=runtimeEnv.DB.prepare;
  runtimeEnv.DB.prepare=sql=>{
   if(/^SELECT payload,evaluation FROM fundamental_snapshots WHERE run_id=\? AND/.test(sql)&&!/LIMIT/.test(sql))throw Error('stale scan attempted an unbounded payload read');
@@ -188,8 +194,8 @@ test('protected recovery restores one durable run and a one-time favorite claim'
  const claimToken='a'.repeat(48),origin='https://example.test',visitorId='12345678-1234-4234-8234-123456789abc',cookie=`radar-visitor=${visitorId}`,owner=`visitor:${visitorId}`;
  const unauthorized=await POST(new Request(`${origin}/api/radar`,{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({action:'restore',records:[base],final:true})}));assert.equal(unauthorized.status,401);
  const archived={...base,symbol:'RECOVER-ARCHIVED',name:'Archived recovery fixture'};
- const restored=await POST(new Request(`${origin}/api/radar`,{method:'POST',headers:{origin,'content-type':'application/json','x-radar-recovery':'TEST-ONLY-RECOVERY-SECRET'},body:JSON.stringify({action:'restore',records:[base,archived],final:true,claimToken,favoriteSymbols:[base.symbol,archived.symbol]})}));assert.equal(restored.status,200);const restoreResult=await restored.json();assert.equal(restoreResult.recovered,2);
- const archivedRow=await db().prepare('SELECT id,payload,evaluation FROM fundamental_snapshots WHERE run_id=? AND symbol=?').bind(restoreResult.runId,archived.symbol).first();await db().batch(await archivedWriteStatements(archivedRow.id,archivedRow.payload,archivedRow.evaluation));
+ const restored=await POST(new Request(`${origin}/api/radar`,{method:'POST',headers:{origin,'content-type':'application/json','x-radar-recovery':'TEST-ONLY-RECOVERY-SECRET'},body:JSON.stringify({action:'restore',records:[base,archived],final:true,claimToken,favoriteSymbols:[base.symbol,archived.symbol]})}));assert.equal(restored.status,200);const restoreResult=await restored.json();assert.equal(restoreResult.recovered,2);await finishEvaluation(restoreResult.runId);
+ const archivedRow=await db().prepare('SELECT id,payload,evaluation FROM fundamental_snapshots WHERE run_id=? AND symbol=?').bind(restoreResult.runId,archived.symbol).first();await db().batch(await archivedWriteStatements(archivedRow.id,archivedRow.payload,archivedRow.evaluation,undefined,true));
  await db().prepare('INSERT INTO personal_watchlist(owner,symbol,created_at,payload) VALUES(?,?,?,?)').bind(owner,base.symbol,'2000-01-01','{"symbol":"ORIGINAL-FAVORITE","name":"Saved before recovery"}').run();
  // Seed the per-owner radar response cache before the recovery mutation.
  await GET(new Request(`${origin}/api/radar`,{headers:{cookie}}));
@@ -317,7 +323,7 @@ test('stage9 persists rows and hands every in-range category row to history scor
  assert.equal((await db().prepare("SELECT COUNT(*) AS n FROM fundamental_snapshots WHERE run_id='scan-test'").first()).n,1);
  const initialEvaluation=JSON.parse((await db().prepare("SELECT evaluation FROM fundamental_snapshots WHERE run_id='scan-test'").first()).evaluation);assert.equal(initialEvaluation.opportunity.strategy,'UNIFIED_OPPORTUNITY');assert.equal(initialEvaluation.opportunity.researchState,'needs-research');assert.equal(initialEvaluation.opportunity.sourceEligible,false);
  const now=new Date().toISOString(),completed=new Date(now);if(completed.getUTCHours()<21)completed.setUTCDate(completed.getUTCDate()-1);while([0,6].includes(completed.getUTCDay()))completed.setUTCDate(completed.getUTCDate()-1);const today=completed.toISOString().slice(0,10);completed.setUTCDate(completed.getUTCDate()-1);while([0,6].includes(completed.getUTCDay()))completed.setUTCDate(completed.getUTCDate()-1);const previous=completed.toISOString().slice(0,10);setHistoryResult({history:[{date:previous,open:10,high:10,low:10,close:10,volume:1000},{date:today,open:11,high:11,low:11,close:11,volume:1000}],splits:[],source:'TEST_ONLY',url:'https://example.test',availableAt:now,retrievedAt:now});
- try { const researchStage=await processScanBatch('scan-test');assert.equal(researchStage.done,false);assert.equal(researchStage.run.stage,11);assert.equal(researchStage.run.total,1,'issuer-linked financial research is attempted even when liquidity is below the safety floor');const final=await processScanBatch('scan-test');assert.equal(final.done,true);assert.equal(final.run.stage,13);assert.equal(final.run.processed,1);assert.equal(final.run.status,'complete');const stored=JSON.parse((await db().prepare("SELECT payload FROM fundamental_snapshots WHERE run_id='scan-test'").first()).payload);assert.equal(stored.price,11);assert.ok(Math.abs(stored.dailyChange-.1)<1e-12);assert.match(stored.provenance.dailyChange.tag,/completed close/);assert.equal(stored.opportunityResearch.earnings.providerStatus,'retrieved');const opportunity=await GET(new Request('https://radar.test/api/radar'));assert.equal(opportunity.status,200);const body=await opportunity.json();assert.equal(body.page.strategy,'opportunity','the API defaults to the unified category');assert.equal(body.summary.opportunityRanked,1);assert.equal(body.summary.opportunityNeedsResearch,0);assert.equal(body.snapshots.length,1,'scanner-only data has a final numeric grade with separate evidence diagnostics');const oldAlias=await GET(new Request('https://radar.test/api/radar?strategy=core'));assert.equal((await oldAlias.json()).page.strategy,'opportunity','retired category requests are mapped to the unified category');const research=await GET(new Request('https://radar.test/api/radar?strategy=opportunity&state=needs-research'));assert.equal((await research.json()).snapshots[0].symbol,'TEST'); }
+ try { const researchStage=await processScanBatch('scan-test');assert.equal(researchStage.done,false);assert.equal(researchStage.run.stage,11);assert.equal(researchStage.run.total,1,'issuer-linked financial research is attempted even when liquidity is below the safety floor');const final=await processScanBatch('scan-test');assert.equal(final.done,true);assert.equal(final.run.stage,13);assert.equal(final.run.processed,1);assert.equal(final.run.status,'complete');await finishEvaluation('scan-test');const stored=JSON.parse((await db().prepare("SELECT payload FROM fundamental_snapshots WHERE run_id='scan-test'").first()).payload);assert.equal(stored.price,11);assert.ok(Math.abs(stored.dailyChange-.1)<1e-12);assert.match(stored.provenance.dailyChange.tag,/completed close/);assert.equal(stored.opportunityResearch.earnings.providerStatus,'retrieved');const opportunity=await GET(new Request('https://radar.test/api/radar'));assert.equal(opportunity.status,200);const body=await opportunity.json();assert.equal(body.page.strategy,'opportunity','the API defaults to the unified category');assert.equal(body.summary.opportunityRanked,1);assert.equal(body.summary.opportunityNeedsResearch,0);assert.equal(body.snapshots.length,1,'scanner-only data has a final numeric grade with separate evidence diagnostics');const oldAlias=await GET(new Request('https://radar.test/api/radar?strategy=core'));assert.equal((await oldAlias.json()).page.strategy,'opportunity','retired category requests are mapped to the unified category');const research=await GET(new Request('https://radar.test/api/radar?strategy=opportunity&state=needs-research'));assert.equal((await research.json()).snapshots[0].symbol,'TEST'); }
  finally { setHistoryResult(null); }
 });
 test('stage9 quarantines a damaged saved Company Facts row and continues scoring with one explicit data gap',async()=>{
@@ -345,6 +351,7 @@ test('newest finished full universe remains canonical despite partial provider c
   const description='شركة اختبار تقدم خدمات دفع محلية لعملاء تجاريين.';
   setObservedCompanyDescription({description,source:{source:'Nasdaq company profile fixture',url:'https://api.nasdaq.com/api/company/PARTIAL-A/company-profile',periodEnd:created.slice(0,10),availableAt:created,retrievedAt:created,confidence:'medium'}});
   await insertSnapshot(id,{...base,symbol:'PARTIAL-A'}).run();await insertSnapshot(id,{symbol:'PARTIAL-Z',name:'Missing provider data',asOf:base.asOf,securityType:'unknown',provenance:{}}).run();
+  await finishEvaluation(id);
   invalidateStateCache();const current=await readState({limit:10});assert.equal(current.dataRunId,id);assert.equal(current.summary.opportunityRanked,2);assert.equal(current.summary.missingFinalGrades,0);
   const report=await(await reportGET(new Request('https://radar.test/api/scan-report?runId='+id))).json();assert.equal(report.counts.passed,2);
   for(const [index,snapshot]of current.snapshots.entries()){
@@ -490,6 +497,7 @@ test('historical scan report counts the same saved rubric states it displays',as
   const saved=JSON.parse(row.evaluation);saved.opportunity.hash='retired-rubric';saved.opportunity.state=state;
   await db().prepare('UPDATE fundamental_snapshots SET evaluation=? WHERE run_id=? AND symbol=?').bind(JSON.stringify(saved),'report-retired',symbol).run();
  }
+ await finishEvaluation('report-retired');
  const response=await reportGET(new Request('https://radar.test/api/scan-report?runId=report-retired&strategy=opportunity'));
  assert.equal(response.status,200);const report=await response.json();
  assert.deepEqual(report.counts,{total:2,passed:2,failed:0,unknown:0,withEvidence:0,stale:true});
@@ -752,9 +760,13 @@ test('concurrent quick/full starts share one durable run before any network call
  const results=await Promise.all([startScan('full'),startScan('quick'),startScan('full')]);
  assert.equal(new Set(results.map(r=>r.id)).size,1);assert.equal(results[0].stage,0);assert.equal(universeCalls,before);
  setUniverse([{ticker:'INIT',name:'Synthetic initialized company',price:10,marketCap:100e6,cik:123}]);
- const initialized=await processScanBatch(results[0].id);assert.equal(initialized.done,false);assert.equal(initialized.run.total,1);assert.equal(initialized.run.stage,1);
- const quoted=await processScanBatch(results[0].id);assert.equal(quoted.run.stage,4);assert.equal(quoted.run.total,1);
- await db().prepare("UPDATE strategy_runs SET stage=13,status='complete' WHERE id=?").bind(results[0].id).run();setUniverse([]);
+ try{
+  const initialized=await processScanBatch(results[0].id);assert.equal(initialized.done,false);assert.equal(initialized.run.total,1);assert.equal(initialized.run.stage,1);
+  let quoted=await processScanBatch(results[0].id),publicationTicks=0;
+  while(quoted.ratingPublication&&!quoted.ratingPublication.done&&publicationTicks++<20)quoted=await processScanBatch(results[0].id);
+  assert.equal(quoted.run.stage,4);assert.equal(quoted.run.total,1);
+  await db().prepare("UPDATE strategy_runs SET stage=13,status='complete' WHERE id=?").bind(results[0].id).run();
+ }finally{setUniverse([]);}
 });
 test('initialization outage retries after restart and terminates after three attempts',async()=>{
  await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,strategy_hash) VALUES('init-outage','2000-01-01','2000-01-01','running','Bulk Quotes/SEC Frames v7 · full',?)").bind(currentHash()).run();
@@ -857,7 +869,7 @@ test('15000 directory rows use bounded durable pages and resume quote progress',
  try{
   const initialized=await processScanBatch('large-directory');assert.equal(initialized.run.total,15000);assert.equal(initialized.run.stage,1);
   const max=sqlite.prepare("SELECT MAX(length(payload)) AS bytes,COUNT(*) AS pages FROM raw_cache WHERE key LIKE 'universe:large-directory:quotes:%'").get();assert.equal(max.pages,150);assert(max.bytes<1_000_000);
-  for(let chunk=0;chunk<188;chunk++)await publishDirectoryRatings(initialized.run,100);
+  let ratingProgress;for(let chunk=0;chunk<188;chunk++)ratingProgress=await publishDirectoryRatings(initialized.run,100);let repairTicks=0,finalRankMs=0;while(!ratingProgress.done&&repairTicks++<1000){const publishing=ratingProgress.phase==='publish',started=Date.now();ratingProgress=await publishDirectoryRatings(initialized.run,100);if(publishing)finalRankMs=Date.now()-started;}assert.equal(ratingProgress.done,true);assert(finalRankMs<10_000,`15,000-row atomic rank publication took ${finalRankMs}ms`);console.log(`15,000-row atomic rank publication: ${finalRankMs}ms`);
   const pendingAggregates=await readState({runId:'large-directory:ratings-v5',limit:1});assert.equal(pendingAggregates.aggregatesReady,false);assert.equal(pendingAggregates.summary.opportunityRanked,null);assert.equal(pendingAggregates.coverage,null);
   const pendingReport=await reportGET(new Request('https://radar.test/api/scan-report?runId=large-directory:ratings-v5&strategy=opportunity&offset=0'));assert.equal(pendingReport.status,200);const pendingReportPayload=await pendingReport.json();assert.equal(pendingReportPayload.aggregatesReady,false);assert.equal(pendingReportPayload.counts,null);assert.deepEqual(pendingReportPayload.blockers,[]);
   let aggregates=await publishRunAggregatesBatch('large-directory:ratings-v5',100),aggregateTicks=1;while(!aggregates.done&&aggregateTicks++<200)aggregates=await publishRunAggregatesBatch('large-directory:ratings-v5',100);assert.equal(aggregates.done,true);const persistedAggregate=sqlite.prepare("SELECT complete,json_extract(summary_json,'$.summary.total') AS total,json_extract(summary_json,'$.summary.opportunityRanked') AS ranked,cursor_symbol FROM opportunity_run_aggregates WHERE run_id='large-directory:ratings-v5'").get();assert.equal(persistedAggregate.total,15000);assert.equal(persistedAggregate.ranked,15000,JSON.stringify(persistedAggregate));
@@ -881,6 +893,7 @@ test('unified opportunity pages keep incomplete companies in research and never 
  await researched('RANK-GROWTH',[[100,20,24,8],[150,30,35,10],[225,45,55,15]]).run();
  await researched('RANK-LOSS',[[100,-5,0,3],[130,-4,2,3],[180,-2,4,4]]).run();
  await researched('RANK-UNVERIFIED',[[500,100,150,10],[600,120,180,10],[700,140,210,10]],'unknown').run();
+ await finishEvaluation('ranked-order');
  const ranked=await readState({strategy:'opportunity',opportunityState:'ranked',limit:10});assert.equal(ranked.summary.total,7);assert.equal(ranked.summary.opportunityRanked,7);assert.equal(ranked.snapshots.length,7);
  const first=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:1});assert.equal(first.summary.opportunityRanked,7);assert.equal(first.snapshots.length,1);assert.equal(first.page.hasMore,true);
  const second=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:10,offset:1});assert.equal(second.snapshots.length,6);
@@ -905,6 +918,7 @@ test('research-fit pages retain canonical scores and ranks while requiring curre
  const cases=[make('FIT-A'),make('FIT-MICRO',{marketCap:5_000_000}),make('FIT-B',{marketCap:4_500_000_000}),make('FIT-MEGA',{marketCap:5_000_000_001}),make('FIT-WARRANT',{securityType:'warrant'}),make('FIT-RISK',{debt:300_000_000}),make('FIT-LIQUIDITY',{medianDollarVolume20d:100_000}),make('FIT-ISSUER',{opportunityResearch:wrongIssuerResearch})];
  for(const snapshot of cases)await insertSnapshot(runId,snapshot).run();
  invalidateStateCache();
+ await finishEvaluation(runId);
  const full=await readState({runId,limit:20});
  const fullBySymbol=new Map(full.snapshots.map((row,index)=>[row.symbol,{rank:full.rankPositions[index],score:full.storedEvaluations[index].opportunity.score}]));
  assert.equal(await db().prepare('SELECT run_id FROM opportunity_rank_projection_versions WHERE run_id=?').bind(runId).first(),null,'ordinary ranked reads do not start a full research-fit backfill');
@@ -980,6 +994,7 @@ test('radar preserves canonical scored quotes when a deep cache is newer',async(
  for(const symbol of symbols)await insertSnapshot('large-radar-page',{...base,symbol,name:`Synthetic ${symbol}`}).run();
  const quote={price:17,dailyChange:.125,provenance:{price:{source:'test',periodEnd:'2026-09-30',tag:'last completed session close'},dailyChange:{source:'test',periodEnd:'2026-09-30',tag:'previous completed close'}}};
  await db().prepare('INSERT INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind('deep:v11:PAGE0','test',now,JSON.stringify({...quote,symbol:'PAGE0'})).run();
+ await finishEvaluation('large-radar-page');
  const result=await readState({strategy:'opportunity',opportunityState:'needs-research',limit:20});
  assert.equal(result.snapshots.length,20);assert.equal(result.snapshots.find(snapshot=>snapshot.symbol==='PAGE0').dailyChange,base.dailyChange);assert.equal(result.snapshots.find(snapshot=>snapshot.symbol==='PAGE0').price,base.price);
 });
@@ -995,6 +1010,7 @@ test('latest scan report uses the same recomputed factor coverage as opportunity
  evaluation.opportunity.score=partial.points;evaluation.opportunity.coveragePct=partial.weight*.7;
  await db().prepare("UPDATE fundamental_snapshots SET evaluation=? WHERE run_id='report-current' AND symbol='REPORT-CURRENT'").bind(JSON.stringify(evaluation)).run();
  invalidateStateCache();
+ await finishEvaluation('report-current');
  const response=await reportGET(new Request('https://radar.test/api/scan-report?runId=report-current&strategy=opportunity'));
  assert.equal(response.status,200);const payload=await response.json();
  assert.equal(payload.run.id,'report-current');assert.equal(payload.counts.total,1);assert.equal(payload.counts.withEvidence,0);
@@ -1017,7 +1033,7 @@ test('all listings retain canonical saved grades, full-universe ranks, reports a
   if(index===1)snapshot.opportunityResearch={earnings:{conflicts:['Partial malformed historical section']}};
   await db().prepare('INSERT INTO fundamental_snapshots(id,run_id,symbol,as_of,payload,evaluation) VALUES(?,?,?,?,?,?)').bind(`${id}:${symbol}`,id,symbol,snapshot.asOf,JSON.stringify(snapshot),'{}').run();
  }
- await readState({runId:id,limit:1});let releaseAggregate=await publishRunAggregatesBatch(id,100),releaseAggregateTicks=1;while(!releaseAggregate.done&&releaseAggregateTicks++<10)releaseAggregate=await publishRunAggregatesBatch(id,100);assert.equal(releaseAggregate.done,true);
+ await finishEvaluation(id);await readState({runId:id,limit:1});let releaseAggregate=await publishRunAggregatesBatch(id,100),releaseAggregateTicks=1;while(!releaseAggregate.done&&releaseAggregateTicks++<10)releaseAggregate=await publishRunAggregatesBatch(id,100);assert.equal(releaseAggregate.done,true);
  invalidateStateCache();const symbols=[],evaluations=new Map();
  for(let offset=0;offset<260;offset+=37){
   const response=await GET(new Request(`https://radar.test/api/radar?limit=37&offset=${offset}`));assert.equal(response.status,200);const page=await response.json();
@@ -1030,7 +1046,7 @@ test('all listings retain canonical saved grades, full-universe ranks, reports a
  // Repair a current-version row with a null factor, and rebuild stable ranks.
  const corrupted=structuredClone(evaluations.get(symbols[100]));corrupted.factors[0].score=null;
  await db().prepare('UPDATE fundamental_snapshots SET evaluation=? WHERE run_id=? AND symbol=?').bind(JSON.stringify({opportunity:corrupted}),id,symbols[100]).run();
- invalidateStateCache();const repaired=await GET(new Request('https://radar.test/api/radar?limit=250'));const page=await repaired.json();assert.equal(page.summary.opportunityRanked,260);assert.deepEqual(page.storedEvaluations[100].opportunity,evaluations.get(symbols[100]));
+ invalidateStateCache();await assert.rejects(readState({limit:1}),error=>error.code==='evaluation_pending');await finishEvaluation(id);const repaired=await GET(new Request('https://radar.test/api/radar?limit=250'));const page=await repaired.json();assert.equal(page.summary.opportunityRanked,260);assert.deepEqual(page.storedEvaluations[100].opportunity,evaluations.get(symbols[100]));
  const searched=await GET(new Request(`https://radar.test/api/radar?q=${symbols[259]}`));const search=await searched.json();assert.equal(search.rankPositions[0],260);
  invalidateStateCache();const reload=await GET(new Request('https://radar.test/api/radar?limit=37'));assert.deepEqual((await reload.json()).storedEvaluations,page.storedEvaluations.slice(0,37));
  await db().prepare('INSERT INTO personal_watchlist(owner,symbol,created_at,payload) VALUES(?,?,?,?)').bind('complete-rating-owner',symbols[5],created,JSON.stringify({...base,symbol:symbols[5]})).run();
@@ -1057,7 +1073,7 @@ test('publication pins pages, profiles, reports and complete export; rejects mut
  await db().prepare("UPDATE strategy_runs SET created_at='9998-12-31T23:59:59.999Z',updated_at='9998-12-31T23:59:59.999Z' WHERE id=?").bind(prior.dataRunId).run();
  const now='9999-12-31T23:59:59.999Z',id='release-new-full';
  await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES(?,?,?,'complete','Release · full',1,1,13,?)").bind(id,now,now,currentHash()).run();
- await insertSnapshot(id,{...base,symbol:'NEW-RELEASE'}).run();invalidateStateCache();
+ await insertSnapshot(id,{...base,symbol:'NEW-RELEASE'}).run();await finishEvaluation(id);invalidateStateCache();
  assert.equal((await readState({limit:1})).dataRunId,id);
  const pinned=await (await GET(new Request(`https://radar.test/api/radar?${pin}`))).json();assert.equal(pinned.dataRunId,prior.dataRunId);
  const symbol=prior.snapshots[0].symbol;
@@ -1074,6 +1090,7 @@ test('publication pins pages, profiles, reports and complete export; rejects mut
  assert.equal((await companyGET(new Request(`https://radar.test/api/company?symbol=${symbol}&${pin}`))).status,409);
  assert.equal((await reportGET(new Request(`https://radar.test/api/scan-report?${pin}`))).status,409);
  assert.equal((await GET(new Request('https://radar.test/api/radar?release=unbound'))).status,400);
+ await finishEvaluation(String(prior.dataRunId));
  await db().prepare('DELETE FROM fundamental_snapshots WHERE run_id=?').bind(id).run();await db().prepare('DELETE FROM strategy_runs WHERE id=?').bind(id).run();invalidateStateCache();
 });
 
@@ -1109,10 +1126,10 @@ test('unattended scan resumes a durable scoring cursor after a lease expires',as
 test('compressed history restores exact source/evaluation bytes and preserves report/profile parity',async()=>{
  const id='archive-acceptance',now='2020-01-01T00:00:00.000Z';
  await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES(?,?,?,'complete','Historical · full',1,1,13,?)").bind(id,now,now,currentHash()).run();
- await insertSnapshot(id,{...base,symbol:'ARCHIVED',cik:400}).run();const original=await readState({runId:id,limit:1});
+ await insertSnapshot(id,{...base,symbol:'ARCHIVED',cik:400}).run();await finishEvaluation(id);const original=await readState({runId:id,limit:1});
  const row=await db().prepare('SELECT id,payload,evaluation FROM fundamental_snapshots WHERE run_id=?').bind(id).first();
  const userCounts=await db().prepare('SELECT (SELECT COUNT(*) FROM personal_watchlist) AS favorites,(SELECT COUNT(*) FROM portfolio_transactions) AS transactions').first();
- await db().batch(await archivedWriteStatements(row.id,row.payload,row.evaluation));
+ await db().batch(await archivedWriteStatements(row.id,row.payload,row.evaluation,undefined,true));
  const inline=await db().prepare('SELECT id,payload,evaluation FROM fundamental_snapshots WHERE run_id=?').bind(id).first();assert(JSON.parse(inline.payload).__archiveId);
  const restored=await restoreArchivedRow(inline);assert.equal(restored.payload,row.payload);assert.equal(restored.evaluation,row.evaluation);
  invalidateStateCache();const after=await readState({runId:id,limit:1});assert.deepEqual(after.storedEvaluations,original.storedEvaluations);
@@ -1125,15 +1142,18 @@ test('compressed history restores exact source/evaluation bytes and preserves re
 test('a source mutation during publication cannot publish a mixed revision or erase the prior ranks',async()=>{
  const id='publication-race',now='2020-01-01T00:00:00.000Z';
  await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES(?,?,?,'complete','Race · full',1,1,13,?)").bind(id,now,now,currentHash()).run();
- await insertSnapshot(id,{...base,symbol:'RACE',cik:990}).run();const before=await readState({runId:id});
+ await insertSnapshot(id,{...base,symbol:'RACE',cik:990}).run();await finishEvaluation(id);const before=await readState({runId:id});
  await db().prepare("UPDATE fundamental_snapshots SET evaluation='{}' WHERE run_id=?").bind(id).run();
+ let progress=await advanceRunEvaluationsBatch(id,80);while(!progress.done&&progress.phase!=='publish')progress=await advanceRunEvaluationsBatch(id,80);
+ assert.equal(progress.phase,'publish');
  const originalPrepare=runtimeEnv.DB.prepare;let mutated=false;
  runtimeEnv.DB.prepare=sql=>{
   if(!mutated&&sql.startsWith('INSERT INTO opportunity_rankings')){mutated=true;sqlite.prepare('UPDATE fundamental_snapshots SET payload=? WHERE run_id=?').run(JSON.stringify({...base,symbol:'RACE',cik:990,price:20}),id);}
   return originalPrepare(sql);
  };
- try{invalidateStateCache();await assert.rejects(readState({runId:id}),error=>error.status===409);}finally{runtimeEnv.DB.prepare=originalPrepare;}
- assert(mutated);assert.equal((await db().prepare('SELECT COUNT(*) AS n FROM opportunity_rankings WHERE run_id=?').bind(id).first()).n,1);
+ try{invalidateStateCache();progress=await advanceRunEvaluationsBatch(id,80);}finally{runtimeEnv.DB.prepare=originalPrepare;}
+ assert(mutated);assert.equal(progress.phase,'restart');assert.equal((await db().prepare('SELECT COUNT(*) AS n FROM opportunity_rankings WHERE run_id=?').bind(id).first()).n,1,'the failed final CAS keeps the prior rank rows intact');
+ await finishEvaluation(id);
  invalidateStateCache();const repaired=await readState({runId:id});assert.notEqual(repaired.storedEvaluations[0].opportunity.snapshotHash,before.storedEvaluations[0].opportunity.snapshotHash);assert.equal(repaired.rankPositions[0],1);
  await db().prepare('DELETE FROM fundamental_snapshots WHERE run_id=?').bind(id).run();await db().prepare('DELETE FROM strategy_runs WHERE id=?').bind(id).run();invalidateStateCache();
 });
@@ -1161,6 +1181,7 @@ test('directory publication preserves dated issuer facts, retains missing CIKs a
  await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,strategy_hash) VALUES(?,?,?,'complete','Directory fixture · full',3,13,?)").bind(priorId,new Date(Date.now()-10800000).toISOString(),date,currentHash()).run();await insertSnapshot(priorId,old).run();await insertSnapshot(priorId,{...old,symbol:'CHANGED-ISSUER',cik:888,revenue:123}).run();await insertSnapshot(priorId,{...old,symbol:'NEW-NO-CIK',cik:undefined,securityType:'unknown',revenue:123}).run();
  await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,universe_total,stage,strategy_hash) VALUES(?,?,?,'running','Bulk Quotes/SEC Frames · full',3,3,1,?)").bind(runId,date,date,currentHash()).run();
  const olderFinished='directory-older-finished';await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,strategy_hash) VALUES(?,?,?,'partial','Directory ratings · full',1,13,?)").bind(olderFinished,new Date(Date.now()-7200000).toISOString(),new Date(Date.now()-5400000).toISOString(),currentHash()).run();await insertSnapshot(olderFinished,{...old,revenue:123}).run();
+ for(const repairId of [priorId,olderFinished]){let repair=await advanceRunEvaluationsBatch(repairId,80),ticks=0;while(!repair.done&&ticks++<20)repair=await advanceRunEvaluationsBatch(repairId,80);assert.equal(repair.done,true);}
  const directory=[{ticker:old.symbol,name:'same issuer',cik:777,securityType:'common',exchange:'NYSE',price:10,marketCap:100e6,priceSource:'Nasdaq screener live',priceAvailableAt:old.provenance.price.availableAt,marketCapSource:'Nasdaq screener live',marketCapAvailableAt:old.provenance.marketCap.availableAt},{ticker:'NEW-NO-CIK',name:'missing CIK',securityType:'unknown'},{ticker:'CHANGED-ISSUER',name:'another issuer',cik:999,securityType:'common'}];
  await db().prepare("INSERT INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)").bind(`universe:${runId}:quotes:0`,'fixture',date,JSON.stringify(directory)).run();
  const first=await publishDirectoryRatings({id:runId,strategy_hash:currentHash(),universe_total:3},1000,1);assert.equal(first.offset,1);assert.equal(first.done,false);
@@ -1168,7 +1189,7 @@ test('directory publication preserves dated issuer facts, retains missing CIKs a
  const saved=JSON.parse((await db().prepare('SELECT payload FROM fundamental_snapshots WHERE run_id=? AND symbol=?').bind(first.id,old.symbol).first()).payload);
  assert.equal(saved.provenance.price.url,'https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=10000&download=true');assert.equal(saved.provenance.marketCap.url,saved.provenance.price.url);assert.equal(saved.provenance.price.availableAt,old.provenance.price.availableAt,'repairing a source URL must not invent a newer quote date');
  assert.equal(saved.revenue,old.revenue);assert.deepEqual(saved.provenance.revenue,old.provenance.revenue);assert.notEqual(saved.asOf,old.asOf,'rating cut advances while factual dates remain unchanged');
- const finished=await publishDirectoryRatings({id:runId,strategy_hash:currentHash(),universe_total:3},1000,2);assert.equal(finished.done,true);
+ let finished=await publishDirectoryRatings({id:runId,strategy_hash:currentHash(),universe_total:3},1000,2),publicationTicks=0;while(!finished.done&&publicationTicks++<20)finished=await publishDirectoryRatings({id:runId,strategy_hash:currentHash(),universe_total:3},1000,2);assert.equal(finished.done,true);
  const state=await readState({runId:first.id,limit:10});assert.equal(state.summary.total,3);assert.equal(state.summary.opportunityRanked,3);assert.deepEqual(new Set(state.snapshots.map(row=>row.symbol)),new Set(directory.map(row=>row.ticker)));
  for(const stored of state.storedEvaluations){assert.equal(stored.opportunity.factors.length,8);assert.ok(Number.isFinite(stored.opportunity.score));}
  for(const symbol of ['CHANGED-ISSUER','NEW-NO-CIK']){const snapshot=JSON.parse((await db().prepare('SELECT payload FROM fundamental_snapshots WHERE run_id=? AND symbol=?').bind(first.id,symbol).first()).payload);assert.equal(snapshot.revenue,undefined,'unmatched or missing CIK must not inherit issuer financials');}
@@ -1192,7 +1213,7 @@ test('legacy quote checkpoints convert without dropping listings and long source
  setBulkQuoteTransform(rows=>rows.map(row=>({...row,price:10,priceUrl:sourceUrl,priceAvailableAt:now,marketCap:100e6,marketCapUrl:sourceUrl,marketCapAvailableAt:now})));
  try{
   const migrated=await processScanBatch(id);assert.equal((await db().prepare('SELECT universe FROM strategy_runs WHERE id=?').bind(id).first()).universe,'paged-v2');assert.equal(migrated.run.offset,0);
-  for(let offset=0;offset<1000;offset+=80)await publishDirectoryRatings(migrated.run,100);
+  let ratingProgress;for(let offset=0;offset<1000;offset+=80)ratingProgress=await publishDirectoryRatings(migrated.run,100);let ratingTicks=0;while(!ratingProgress.done&&ratingTicks++<100)ratingProgress=await publishDirectoryRatings(migrated.run,100);assert.equal(ratingProgress.done,true);
   for(let page=0;page<10;page++){const result=await processScanBatch(id);assert.equal(result.run.offset,page===9?0:(page+1)*100);assert.equal(result.run.stage,page===9?4:1);}
   const pages=(await db().prepare('SELECT payload FROM raw_cache WHERE key LIKE ? ORDER BY key').bind(`universe:${id}:quotes:%`).all()).results;
   assert.equal(pages.length,10);const records=pages.flatMap(row=>{assert.ok(Buffer.byteLength(row.payload)<2_000_000);return JSON.parse(row.payload);});assert.equal(records.length,1000);assert.equal(new Set(records.map(row=>row.ticker)).size,1000);assert.ok(records.every(row=>row.priceUrl===sourceUrl&&row.marketCapUrl===sourceUrl));
@@ -1204,7 +1225,7 @@ test('finished enrichment supersedes its directory publication despite an earlie
  const root='finish-after-directory',baseline=root+':ratings',cut='9999-12-31T23:59:59.999Z';
  await db().prepare("UPDATE strategy_runs SET updated_at='2000-01-01'").run();invalidateStateCache();
  await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,strategy_hash) VALUES(?,'2001-01-01',?,'partial','Directory ratings · full',1,13,?)").bind(baseline,'9999-12-30',currentHash()).run();await insertSnapshot(baseline,{...base,symbol:'NEW-DIRECTORY'}).run();
- await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,strategy_hash) VALUES(?,'2000-01-01',?,'complete','Bulk Quotes/SEC Frames · full',1,13,?)").bind(root,cut,currentHash()).run();await insertSnapshot(root,{...base,symbol:'ENRICHED-LATER'}).run();
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,strategy_hash) VALUES(?,'2000-01-01',?,'complete','Bulk Quotes/SEC Frames · full',1,13,?)").bind(root,cut,currentHash()).run();await insertSnapshot(root,{...base,symbol:'ENRICHED-LATER'}).run();await finishEvaluation(root);
  const current=await readState({limit:10});assert.equal(current.dataRunId,root);assert.equal(current.snapshots[0].symbol,'ENRICHED-LATER');const profile=await(await companyGET(new Request('https://radar.test/api/company?symbol=ENRICHED-LATER'))).json();assert.equal(profile.ranking.runId,root);assert.deepEqual(profile.evaluation,current.storedEvaluations[0].opportunity);
 });
 
@@ -1239,7 +1260,7 @@ test('active inventory repair appends listings without losing provider cursor, r
   const run=await db().prepare('SELECT * FROM strategy_runs WHERE id=?').bind(id).first();assert.equal(run.total,3);assert.equal(run.stage,5);assert.equal(run.offset,1);assert.equal(run.directory_version,1);assert.equal(run.retry_queue,original.retry_queue);
   const quote=JSON.parse((await db().prepare('SELECT payload FROM raw_cache WHERE key=?').bind(`universe:${id}:quotes:0`).first()).payload);assert.deepEqual(quote.map(row=>row.ticker),['KEEP','ABSENT','ADDED']);assert.equal(quote[0].price,3);assert.equal(quote[0].priceAvailableAt,old[0].priceAvailableAt);assert.equal(quote[0].exchange,'Texas Stock Exchange');assert.equal(quote[1].listingStatus,'not-confirmed-current');
   assert.equal((await db().prepare('SELECT payload FROM bulk_fundamentals WHERE run_id=? AND cik=1').bind(id).first()).payload,'{"revenue":123}');assert.equal(await reconcileAcquisitionDirectory(run),false);
-  const published=await publishDirectoryRatings(run,100,80);assert.equal(published.done,true);const ranked=await readState({runId:id+':ratings-v5',limit:10});assert.equal(ranked.summary.total,3);assert.equal(ranked.summary.opportunityRanked,3);assert.equal(ranked.storedEvaluations.find((_,index)=>ranked.snapshots[index].symbol==='ABSENT').opportunity.score,0);
+  let published=await publishDirectoryRatings(run,100,80),ticks=0;while(!published.done&&ticks++<20)published=await publishDirectoryRatings(run,100,80);assert.equal(published.done,true);const ranked=await readState({runId:id+':ratings-v5',limit:10});assert.equal(ranked.summary.total,3);assert.equal(ranked.summary.opportunityRanked,3);assert.equal(ranked.storedEvaluations.find((_,index)=>ranked.snapshots[index].symbol==='ABSENT').opportunity.score,0);
  }finally{setUniverse([]);}
 });
 
@@ -1276,8 +1297,17 @@ test('historical maintenance archives issuers in bounded multi-row transactions'
  for(let index=0;index<12;index++)await insertSnapshot(id,{...base,symbol:`ARCHIVE-BATCH-${String(index).padStart(2,'0')}`}).run();
  const original=runtimeEnv.DB.batch.bind(runtimeEnv.DB),sizes=[];runtimeEnv.DB.batch=statements=>{sizes.push(statements.length);return original(statements);};
  try{await maintainHistoricalStorage(12);}finally{runtimeEnv.DB.batch=original;}
- assert(sizes.includes(20),'first archive group should batch ten payload/evaluation pairs');assert(sizes.includes(4),'final archive group should batch the remaining two pairs');
+ assert(sizes.includes(40),'first archive group should batch ten payload/evaluation pairs with two revision-guard statements each');assert(sizes.includes(8),'final archive group should batch the remaining two pairs');
  assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM snapshot_archives WHERE id LIKE ?').get(`${id}:%`).n,12);
+});
+
+test('orphaned evaluation staging cleanup removes thousands of bounded rows per maintenance tick',async()=>{
+ const {maintainHistoricalStorage}=await import('../../.test-build/snapshot-archive.mjs'),runId='orphan-evaluation-staging',generation='old-generation',count=2001;
+ for(let start=0;start<count;start+=100){const writes=[];for(let index=start;index<Math.min(count,start+100);index++)writes.push(db().prepare('INSERT INTO opportunity_peer_candidates(run_id,generation,symbol,cik,payload) VALUES(?,?,?,?,?)').bind(runId,generation,`ORPHAN-${String(index).padStart(5,'0')}`,index+1,'{}'));await db().batch(writes);}
+ await db().prepare("INSERT INTO opportunity_evaluation_jobs(run_id,generation,input_revision,expected_revision,rubric_hash,phase) VALUES(?,?,0,0,'invalid-rubric','failed')").bind(runId,generation).run();
+ const seeded=Number((await db().prepare('SELECT COUNT(*) AS n FROM opportunity_peer_candidates WHERE run_id=?').bind(runId).first()).n),before=Number((await db().prepare('SELECT COUNT(*) AS n FROM opportunity_peer_candidates').first()).n),result=await maintainHistoricalStorage(25),after=Number((await db().prepare('SELECT COUNT(*) AS n FROM opportunity_peer_candidates').first()).n);
+ assert.equal(seeded,2001);assert.equal(before-after,2000);assert(result.peerRowsPruned>=2000,'cleanup drains a multi-thousand bounded slice instead of ten rows per table');assert.equal(result.more,true);
+ await db().prepare('DELETE FROM opportunity_peer_candidates WHERE run_id=?').bind(runId).run();await db().prepare('DELETE FROM opportunity_evaluation_jobs WHERE run_id=?').bind(runId).run();
 });
 
 test('historical maintenance checkpoints archive keys and bounds terminal cache cleanup',async()=>{
@@ -1325,6 +1355,82 @@ test('snapshot import preserves legitimate ten-digit SEC peer identifiers and re
  const value={...base,peerContext:{version:'sec-sic-size-period-v1',asOf:base.asOf,method:'Synthetic comparable SEC issuer only',grade:null,peers:[{symbol:'SYN-PEER',cik:1700000,sic:2834,end:'2025-12-31',revenue:100,grossMargin:.3,sources:[]}],gaps:[]}};
  const parsed=importSchema.parse([value]);assert.equal(parsed[0].peerContext.peers[0].cik,1700000);
  for(const cik of [0,1.5,10_000_000_000])assert.equal(importSchema.safeParse([{...value,peerContext:{...value.peerContext,peers:[{...value.peerContext.peers[0],cik}]}}]).success,false);
+});
+
+test('evaluation repair resumes bounded phases, keeps the prior rank release, and publishes deterministic ranks once',async()=>{
+ const id='resumable-evaluation-repair',now='2026-10-01T00:00:00.000Z',symbols=Array.from({length:21},(_,index)=>`REPAIR-${String(index).padStart(2,'0')}`);
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES(?,?,?,'complete','Repair fixture · full',21,21,13,?)").bind(id,now,now,currentHash()).run();
+ for(const symbol of symbols)await insertSnapshot(id,{...base,symbol,cik:undefined}).run();
+ const revision=Number((await db().prepare('SELECT revision FROM opportunity_rating_versions WHERE run_id=?').bind(id).first()).revision);
+ await db().prepare('INSERT INTO opportunity_rankings(run_id,symbol,score,evaluation_hash,rank_position,rubric_hash) SELECT ?,symbol,999,\'prior\',ROW_NUMBER() OVER(ORDER BY symbol),? FROM fundamental_snapshots WHERE run_id=?').bind(id,opportunitySpecHash(),id).run();
+ await db().prepare('INSERT INTO opportunity_rank_versions(run_id,revision,rubric_hash) VALUES(?,?,?)').bind(id,revision,opportunitySpecHash()).run();
+ await db().prepare("UPDATE fundamental_snapshots SET evaluation='{}' WHERE run_id=?").bind(id).run();invalidateStateCache();
+ const priorVersion=await db().prepare('SELECT revision,rubric_hash FROM opportunity_rank_versions WHERE run_id=?').bind(id).first();
+ await assert.rejects(readState({runId:id,limit:1}),error=>error.status===409&&error.code==='evaluation_pending','ordinary reads return a stable retryable pending result without advancing repair');
+ assert.equal(await db().prepare('SELECT run_id FROM opportunity_evaluation_jobs WHERE run_id=?').bind(id).first(),null,'the reader does not create a repair job');
+ let result=await advanceRunEvaluationsBatch(id,8);assert.equal(result.done,false);assert.equal(result.phase,'peers');
+ assert.equal((await db().prepare('SELECT COUNT(*) AS n FROM opportunity_rankings WHERE run_id=? AND score=999').bind(id).first()).n,21,'the previous immutable rank rows stay in place during repair');
+ assert.deepEqual(await db().prepare('SELECT revision,rubric_hash FROM opportunity_rank_versions WHERE run_id=?').bind(id).first(),priorVersion);
+ await db().prepare('UPDATE opportunity_evaluation_jobs SET lease_until=? WHERE run_id=?').bind(Date.now()+60000,id).run();
+ const busy=await advanceRunEvaluationsBatch(id,8);assert.equal(busy.busy,true,'a live lease prevents a concurrent worker from advancing the cursor');
+ await db().prepare('UPDATE opportunity_evaluation_jobs SET lease_until=0 WHERE run_id=?').bind(id).run();
+ const oldGeneration=(await db().prepare('SELECT generation FROM opportunity_evaluation_jobs WHERE run_id=?').bind(id).first()).generation;
+ const firstSnapshot=JSON.parse((await db().prepare('SELECT payload FROM fundamental_snapshots WHERE run_id=? ORDER BY symbol LIMIT 1').bind(id).first()).payload);firstSnapshot.price=firstSnapshot.price===null?1:firstSnapshot.price+1;
+ await db().prepare('UPDATE fundamental_snapshots SET payload=? WHERE run_id=? AND symbol=?').bind(JSON.stringify(firstSnapshot),id,symbols[0]).run();
+ result=await advanceRunEvaluationsBatch(id,8);assert.notEqual((await db().prepare('SELECT generation FROM opportunity_evaluation_jobs WHERE run_id=?').bind(id).first()).generation,oldGeneration,'a source revision change restarts staged peer/count/evaluation work');
+ let peerBindCount=0,ticks=0;const originalPrepare=runtimeEnv.DB.prepare;
+ runtimeEnv.DB.prepare=sql=>{const statement=originalPrepare(sql);if(String(sql).includes("FROM json_each(?)")){const bind=statement.bind.bind(statement);statement.bind=(...values)=>{peerBindCount=values.length;return bind(...values);};}return statement;};
+ try{while(!result.done&&ticks++<40){result=await advanceRunEvaluationsBatch(id,8);assert.notEqual(result.phase,'restart');}}finally{runtimeEnv.DB.prepare=originalPrepare;}
+ assert.equal(peerBindCount,3,'the peer lookup uses one JSON target bind plus run and generation, staying below D1’s 100-bind limit');
+ assert.equal(result.done,true);assert(ticks>3,'peers, canonical, listing counts, evaluation and publication resume on separate bounded calls');
+ const ranks=(await db().prepare('SELECT r.symbol,r.rank_position,r.score FROM opportunity_rankings r WHERE r.run_id=? ORDER BY r.rank_position').bind(id).all()).results;
+ assert.deepEqual(ranks.map(row=>row.symbol),[...symbols].sort(),'equal scores use the existing binary symbol tie-break');
+ assert.deepEqual(ranks.map(row=>row.rank_position),symbols.map((_,index)=>index+1));
+ assert.equal((await db().prepare('SELECT COUNT(*) AS n FROM opportunity_rankings WHERE run_id=? AND score=999').bind(id).first()).n,0);
+ const release=await db().prepare('SELECT revision,rubric_hash FROM opportunity_rank_versions WHERE run_id=?').bind(id).first();
+ assert.equal(Number(release.revision),Number((await db().prepare('SELECT revision FROM opportunity_rating_versions WHERE run_id=?').bind(id).first()).revision));
+ const stored=(await db().prepare('SELECT symbol,evaluation FROM fundamental_snapshots WHERE run_id=? ORDER BY symbol').bind(id).all()).results;
+ assert(stored.every(row=>JSON.parse(row.evaluation).opportunity?.evaluationHash),'every published rank has a current evaluation');
+ const savedSnapshots=(await db().prepare('SELECT payload FROM fundamental_snapshots WHERE run_id=?').bind(id).all()).results.map(row=>JSON.parse(row.payload));
+ assert(savedSnapshots.every(snapshot=>JSON.stringify(snapshot.peerContext)===JSON.stringify(peerContext(snapshot,[]))),'persisted peer contexts exactly match the canonical empty-universe calculation for these ineligible issuers');
+ await db().prepare('DELETE FROM fundamental_snapshots WHERE run_id=?').bind(id).run();await db().prepare('DELETE FROM strategy_runs WHERE id=?').bind(id).run();invalidateStateCache();
+});
+
+test('peer context canonicalization and rank ties retain the existing peer/rank semantics',()=>{
+ const sources=[{source:'one',url:'https://example.com/1'},{source:'two',url:'https://example.com/2'}],basePeer={cik:100,sic:2834,end:'2025-12-31',revenue:100,grossMargin:.3,sources};
+ const peers=uniqueIssuerPeers([{...basePeer,symbol:'A',end:'2024-12-31',revenue:90},{...basePeer,symbol:'B'},{...basePeer,symbol:'C',cik:101,revenue:120}]);
+ assert.deepEqual(peers.map(peer=>peer.symbol),['B','C'],'latest issuer period wins and distinct issuers remain separate');
+ assert.deepEqual(uniqueIssuerPeers([{...basePeer,symbol:'B'},{...basePeer,symbol:'AMBIGUOUS',revenue:120}]),[],'conflicting current-period alternate listings invalidate the issuer');
+ const context=peerContext({...base,cik:200,symbol:'TARGET'},[{...basePeer,symbol:'PEER'}]);
+ assert.deepEqual(context.peers,[]);assert.equal(context.grade,null,'an ineligible target cannot claim a peer grade');
+});
+
+test('missing archive inputs terminate evaluation repair instead of pinning the cursor',async()=>{
+ const id='missing-evaluation-archive',now='2026-10-02T00:00:00.000Z';
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES(?,?,?,'complete','Archive recovery · full',1,1,13,?)").bind(id,now,now,currentHash()).run();
+ await insertSnapshot(id,{...base,symbol:'MISSING-ARCHIVE'}).run();await finishEvaluation(id);
+ const version=Number((await db().prepare('SELECT revision FROM opportunity_rating_versions WHERE run_id=?').bind(id).first()).revision),row=await db().prepare('SELECT id,payload,evaluation FROM fundamental_snapshots WHERE run_id=?').bind(id).first();
+ await db().batch(await archivedWriteStatements(row.id,row.payload,row.evaluation,undefined,true));
+ assert.equal(Number((await db().prepare('SELECT revision FROM opportunity_rating_versions WHERE run_id=?').bind(id).first()).revision),version,'archive compaction preserves the semantic rating revision');
+ await db().prepare('DELETE FROM snapshot_archives WHERE id=?').bind(row.id).run();await db().prepare("UPDATE fundamental_snapshots SET evaluation='{}' WHERE id=?").bind(row.id).run();
+ const failed=await advanceRunEvaluationsBatch(id,80);assert.equal(failed.failed,true);assert.equal(failed.phase,'failed');
+ const job=await db().prepare('SELECT error,phase FROM opportunity_evaluation_jobs WHERE run_id=?').bind(id).first();assert.equal(job.phase,'failed');assert.equal(job.error,'Source snapshot or archive is malformed or unavailable');
+ await assert.rejects(readState({runId:id}),error=>error.status===503&&error.code==='evaluation_failed');
+ assert.equal((await advanceRunEvaluationsBatch(id,80)).failed,true,'a terminal input error is stable and is not retried on every tick');
+ await db().prepare('DELETE FROM fundamental_snapshots WHERE run_id=?').bind(id).run();await db().prepare('DELETE FROM strategy_runs WHERE id=?').bind(id).run();invalidateStateCache();
+});
+
+test('staged peer lookup matches canonical peer selection at the exact 45-day boundary',async()=>{
+ const id='peer-boundary-parity',now='2026-10-01T00:00:00.000Z',targetEnd='2025-12-31T12:00:00Z';
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,processed,stage,strategy_hash) VALUES(?,?,?,'complete','Peer boundary · full',7,7,13,?)").bind(id,now,now,currentHash()).run();
+ const make=(symbol,cik,revenue,margin,end)=>{const start=new Date(Date.parse(end)-365*864e5).toISOString(),evidence={source:'SEC test facts',url:`https://data.sec.gov/api/xbrl/companyfacts/CIK${String(cik).padStart(10,'0')}.json`,periodStart:start,periodEnd:end,availableAt:'2026-03-01T00:00:00Z',retrievedAt:'2026-03-02T00:00:00Z',currency:'USD',scope:'consolidated',rightsStatus:'redistribution-permitted',confidence:'high'},model={...evidence,periodStart:undefined,tag:'SIC 2834: synthetic manufacturing'},metric=value=>({value,unit:'USD',source:evidence});return{...base,symbol,cik,asOf:now,securityType:'common',listingStatus:'current',opportunityResearch:{earnings:{annual:[{start,end,metrics:{revenue:metric(revenue),grossProfit:metric(revenue*margin)}}],conflicts:[]},financialStrength:{industryModel:'industrial-operating-company'}},provenance:{...base.provenance,industryModel:model}};};
+ const snapshots=[make('PEER-TARGET',700,100,.4,targetEnd),make('PEER-1',701,90,.3,targetEnd),make('PEER-2',702,110,.35,targetEnd),make('PEER-3',703,130,.25,targetEnd),make('PEER-4',704,80,.42,'2026-02-14T12:00:00Z'),make('PEER-OUTSIDE',705,120,.2,'2026-02-15T13:00:00Z'),make('PEER-ALT',704,80,.42,'2026-02-14T12:00:00Z')];
+ for(const snapshot of snapshots)await insertSnapshot(id,snapshot).run();await finishEvaluation(id,80);
+ const persisted=(await db().prepare('SELECT payload FROM fundamental_snapshots WHERE run_id=? ORDER BY symbol').bind(id).all()).results.map(row=>JSON.parse(row.payload)),observations=persisted.map(peerObservation).filter(Boolean);
+ const target=persisted.find(snapshot=>snapshot.symbol==='PEER-TARGET'),storedTarget=persisted.find(snapshot=>snapshot.symbol==='PEER-TARGET');
+ assert.deepEqual(storedTarget.peerContext,peerContext(target,observations),'SQL staging and the canonical in-memory peer implementation agree on source checks, issuer dedupe, nearest peers, and exact date distance');
+ assert(!storedTarget.peerContext.peers.some(peer=>peer.symbol==='PEER-OUTSIDE'));assert(storedTarget.peerContext.peers.some(peer=>peer.symbol==='PEER-4'));
+ await db().prepare('DELETE FROM fundamental_snapshots WHERE run_id=?').bind(id).run();await db().prepare('DELETE FROM strategy_runs WHERE id=?').bind(id).run();invalidateStateCache();
 });
 
 
@@ -1415,7 +1521,7 @@ test('archive summaries bound duplicate trace storage while restoring exact evid
  const id='archive-rich-summary',snapshot={...base,symbol:'ARCHIVE-RICH',description:'source description '.repeat(1000)},value={opportunity:{...(await import('../../.test-build/opportunity-dossier.mjs')).evaluateOpportunityDossier(snapshot,{asOf:snapshot.asOf})}};
  for(const f of value.opportunity.factors)f.rationale='Synthetic detailed audit rationale '.repeat(1000);
  await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,strategy_hash) VALUES(?,'2000-01-01','2000-01-01','complete','Archive fixture · full',1,13,?)").bind(id,currentHash()).run();await insertSnapshot(id,snapshot).run();
- const rowId=id+':'+snapshot.symbol,payload=JSON.stringify(snapshot),evaluation=JSON.stringify(value);await db().batch(await archivedWriteStatements(rowId,payload,evaluation));
+ const rowId=id+':'+snapshot.symbol,payload=JSON.stringify(snapshot),evaluation=JSON.stringify(value);await db().batch(await archivedWriteStatements(rowId,payload,evaluation,undefined,true));
  const row=await db().prepare('SELECT id,payload,evaluation FROM fundamental_snapshots WHERE id=?').bind(rowId).first();assert(Buffer.byteLength(row.payload)+Buffer.byteLength(row.evaluation)<7000);assert.equal(JSON.parse(row.payload).__archiveSummaryVersion,2);
  const restored=await restoreArchivedRow(row);assert.equal(restored.payload,payload);assert.equal(restored.evaluation,evaluation);assert.deepEqual(JSON.parse(row.evaluation).opportunity.factors.map(f=>f.score),value.opportunity.factors.map(f=>f.score));assert.equal(JSON.parse(row.evaluation).opportunity.evaluationHash,value.opportunity.evaluationHash);
  const inlineGrade=JSON.parse(row.evaluation).opportunity;

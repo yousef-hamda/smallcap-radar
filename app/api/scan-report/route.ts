@@ -54,5 +54,5 @@ export async function GET(req:Request){
    const rows=(await database.prepare("SELECT symbol,payload,evaluation,ROW_NUMBER() OVER (ORDER BY json_extract(evaluation,'$.opportunity.score') DESC,symbol COLLATE BINARY ASC) AS rank_position FROM fundamental_snapshots WHERE run_id=? ORDER BY json_extract(evaluation,'$.opportunity.score') DESC,symbol COLLATE BINARY ASC LIMIT ? OFFSET ?").bind(runId,limit+1,offset).all()).results as any[];
    return json({run,strategy,counts:{total,passed,failed,unknown:Math.max(0,total-passed-failed),withEvidence:Number(counts?.withEvidence||0)},blockers,rows:rows.slice(0,limit).map(row=>{const snapshot=JSON.parse(row.payload),evaluation=JSON.parse(row.evaluation).opportunity??currentOpportunityEvaluation(snapshot,undefined);return {symbol:row.symbol,name:snapshot.name,asOf:snapshot.asOf,rank:Number(row.rank_position),evaluation};}),page:{offset,limit,hasMore:rows.length>limit}});
   }
- }catch(error){return json({error:statusOf(error,503)===409&&error instanceof Error?error.message:'تعذّر تحميل تقرير الجولة المحفوظة؛ حاول مجددًا'},statusOf(error,503));}
+ }catch(error){return json({error:statusOf(error,503)===409&&error instanceof Error?error.message:'تعذّر تحميل تقرير الجولة المحفوظة؛ حاول مجددًا',...(typeof (error as any)?.code==='string'?{code:(error as any).code}:{})},statusOf(error,503));}
 }

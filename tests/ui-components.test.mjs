@@ -394,7 +394,8 @@ test('opportunity report uses the unified evaluation and factor blockers',async(
  assert.match(component,/evaluation\.factors\.map/);
  assert.match(component,/opportunityStateText/);
  assert.match(component,/هذه الجولة لا تزال قيد التنفيذ/);
- assert.match(component,/stillRunning\?10_000:2_000/);
+ assert.match(component,/stillRunning\?10_000:5_000/);
+ assert.match(component,/evaluation_pending/);
 });
 
 test('opening a profile synchronizes its completed-session quote back into the visible card',async()=>{

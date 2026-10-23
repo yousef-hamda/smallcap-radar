@@ -85,7 +85,7 @@ export default function RadarApp(){
      }).catch(()=>{if(!controller.signal.aborted&&view==='favorites')setNotice('تعذّر تحديث أسعار المفضلة؛ عُرضت آخر لقطة محفوظة.')});
     }
    }
-  }catch(e){if(!controller.signal.aborted){const message=e instanceof Error?e.message:'تعذّر تحميل البيانات';if((e as any)?.code==='projection_pending'&&projectionRetries.current<4){projectionRetries.current++;window.setTimeout(()=>{if(!controller.signal.aborted)void refreshRef.current?.(false)},1200*projectionRetries.current)}else{setListError(message);setError(message)}}}
+  }catch(e){if(!controller.signal.aborted){const message=e instanceof Error?e.message:'تعذّر تحميل البيانات';if((e as any)?.code==='evaluation_pending'){window.setTimeout(()=>{if(!controller.signal.aborted)void refreshRef.current?.(false)},5_000)}else if((e as any)?.code==='projection_pending'&&projectionRetries.current<8){projectionRetries.current++;window.setTimeout(()=>{if(!controller.signal.aborted)void refreshRef.current?.(false)},Math.min(10_000,1200*projectionRetries.current))}else{setListError(message);setError(message)}}}
   finally{if(!controller.signal.aborted){setLoading(false);loadingRequest.current=false;}}
  },[opportunityState,researchFit]);
  useEffect(()=>{refreshRef.current=refresh},[refresh]);

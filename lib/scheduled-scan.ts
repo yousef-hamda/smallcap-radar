@@ -1,7 +1,7 @@
 import {recordScanCapacity,MIN_SCAN_FILESYSTEM_BYTES} from './scan-capacity';
 import {readCompleteDirectory} from './directory-cache';
 import {maintainHistoricalStorage} from './snapshot-archive';
-import {db,ensureSchema,currentHash,ensureRunEvaluations,publishResearchFitRankProjectionBatch,publishRunAggregatesBatch} from './storage';
+import {db,ensureSchema,currentHash,advanceRunEvaluationsBatch,publishResearchFitRankProjectionBatch,publishRunAggregatesBatch} from './storage';
 import {opportunitySpecHash} from './opportunity-spec';
 import {processScanBatch,startScan} from './scanner';
 
@@ -16,6 +16,10 @@ export async function scheduledScanTick(now=Date.now(),capacity?:{reusableBytes:
  if(recoverable&&await readCompleteDirectory())await db().prepare("UPDATE strategy_runs SET status='running',error=NULL,retry_queue='[]',lease_until=0,updated_at=? WHERE id=? AND status='failed' AND stage=0").bind(new Date(now).toISOString(),recoverable.id).run();
  const active=await db().prepare("SELECT id,lease_until,stage,offset,processed,total,status FROM strategy_runs WHERE strategy_hash=? AND source LIKE 'Bulk Quotes/%' AND status IN ('running','partial') AND stage<13 ORDER BY updated_at DESC,created_at DESC LIMIT 1").bind(currentHash()).first() as any;
  if(active&&Number(active.lease_until)>now){const aggregateRun=await db().prepare("SELECT r.id FROM strategy_runs r JOIN opportunity_rank_versions v ON v.run_id=r.id LEFT JOIN opportunity_rating_versions rv ON rv.run_id=v.run_id WHERE r.status IN ('complete','partial') AND r.stage>=13 AND r.source LIKE '%· full' AND v.rubric_hash=? AND v.revision=COALESCE(rv.revision,0) ORDER BY r.updated_at DESC,r.created_at DESC LIMIT 1").bind(opportunitySpecHash()).first() as any;const aggregatePublication=aggregateRun?await publishRunAggregatesBatch(String(aggregateRun.id),200):null;return {busy:true,run:active,...(aggregatePublication?{aggregatePublication}:{})};}
+ if(!active){
+  const candidate=await db().prepare("SELECT r.id,v.revision,v.rubric_hash,COALESCE(rv.revision,0) AS current_revision FROM strategy_runs r LEFT JOIN opportunity_rank_versions v ON v.run_id=r.id LEFT JOIN opportunity_rating_versions rv ON rv.run_id=r.id WHERE r.status IN ('complete','partial') AND (r.stage>=13 OR r.source='import') AND EXISTS(SELECT 1 FROM fundamental_snapshots s WHERE s.run_id=r.id) AND NOT EXISTS(SELECT 1 FROM opportunity_evaluation_jobs j WHERE j.run_id=r.id AND j.phase='failed' AND j.rubric_hash=? AND j.expected_revision=COALESCE(rv.revision,0)) ORDER BY CASE WHEN r.source LIKE '%· full' THEN 0 ELSE 1 END,r.updated_at DESC,r.created_at DESC LIMIT 1").bind(opportunitySpecHash()).first() as any;
+  if(candidate&&(!candidate.rubric_hash||candidate.rubric_hash!==opportunitySpecHash()||Number(candidate.revision)!==Number(candidate.current_revision))){const evaluationRepair=await advanceRunEvaluationsBatch(String(candidate.id),80);return {evaluationRepair};}
+ }
  // Publish the exact research-fit flags in small resumable slices before
  // maintenance or scan writes can compete for SQLite. Reads return 409 until
  // this projection is complete, rather than starting a full backfill inline.
@@ -37,6 +41,5 @@ export async function scheduledScanTick(now=Date.now(),capacity?:{reusableBytes:
   id=(await startScan('full')).id;
  }
  const result=await processScanBatch(String(id));
- if(result.done&&['complete','partial'].includes(result.run.status))await ensureRunEvaluations(String(id));
  return {...result,...(maintenance?{maintenance}:{}),...(projectionPublication?{projectionPublication}:{}),...(aggregatePublication?{aggregatePublication}:{})};
 }

@@ -16,10 +16,20 @@ export async function restoreArchivedRow<T extends {id?:string;payload:string;ev
  const [payload,evaluation]=await Promise.all([decode(archived.payload_gzip),decode(archived.evaluation_gzip)]);
  return {...row,payload,evaluation};
 }
-export async function archivedWriteStatements(id:string,payload:string,evaluation:string){
+export async function archivedWriteStatements(id:string,payload:string,evaluation:string,guard?:{runId:string;generation:string;owner:string;batchToken:string},preserveRevision=false){
  await schema();
  const [payloadGzip,evaluationGzip]=await Promise.all([encode(payload),encode(evaluation)]);
  const summary=archiveInlineSummary(id,payload,evaluation);
+ if(guard)return [
+  db().prepare('INSERT OR REPLACE INTO snapshot_archives(id,payload_gzip,evaluation_gzip,archived_at) SELECT ?,?,?,? WHERE EXISTS(SELECT 1 FROM opportunity_evaluation_jobs WHERE run_id=? AND generation=? AND owner=? AND batch_token=?)').bind(id,payloadGzip,evaluationGzip,new Date().toISOString(),guard.runId,guard.generation,guard.owner,guard.batchToken),
+  db().prepare('UPDATE fundamental_snapshots SET payload=?,evaluation=? WHERE id=? AND EXISTS(SELECT 1 FROM opportunity_evaluation_jobs WHERE run_id=? AND generation=? AND owner=? AND batch_token=?)').bind(summary.payload,summary.evaluation,id,guard.runId,guard.generation,guard.owner,guard.batchToken),
+ ];
+ if(preserveRevision)return [
+  db().prepare('INSERT OR IGNORE INTO opportunity_archive_write_guard(snapshot_id) VALUES(?)').bind(id),
+  db().prepare('INSERT OR REPLACE INTO snapshot_archives(id,payload_gzip,evaluation_gzip,archived_at) VALUES(?,?,?,?)').bind(id,payloadGzip,evaluationGzip,new Date().toISOString()),
+  db().prepare('UPDATE fundamental_snapshots SET payload=?,evaluation=? WHERE id=?').bind(summary.payload,summary.evaluation,id),
+  db().prepare('DELETE FROM opportunity_archive_write_guard WHERE snapshot_id=?').bind(id),
+ ];
  return [
   db().prepare('INSERT OR REPLACE INTO snapshot_archives(id,payload_gzip,evaluation_gzip,archived_at) VALUES(?,?,?,?)').bind(id,payloadGzip,evaluationGzip,new Date().toISOString()),
   db().prepare('UPDATE fundamental_snapshots SET payload=?,evaluation=? WHERE id=?').bind(summary.payload,summary.evaluation,id),
@@ -80,7 +90,7 @@ export async function maintainHistoricalStorage(limit=50){
  if(!state.exhausted){
   candidates=(await d.prepare(`SELECT s.id,s.payload,s.evaluation FROM (SELECT s.id FROM fundamental_snapshots s JOIN strategy_runs r ON r.id=s.run_id LEFT JOIN snapshot_archives a ON a.id=s.id WHERE r.status IN ('complete','partial','failed') AND (r.stage>=13 OR r.status='failed') AND a.id IS NULL AND s.id>? ${excluded.length?`AND s.run_id NOT IN (${excluded.map(()=>'?').join(',')})`:''} ORDER BY s.id LIMIT ?) candidates JOIN fundamental_snapshots s ON s.id=candidates.id`).bind(state.cursor,...excluded,boundedLimit).all()).results as any[];
   for(let offset=0;offset<candidates.length;offset+=10){
-   const statements=await Promise.all(candidates.slice(offset,offset+10).map(row=>archivedWriteStatements(row.id,row.payload,row.evaluation)));
+   const statements=await Promise.all(candidates.slice(offset,offset+10).map(row=>archivedWriteStatements(row.id,row.payload,row.evaluation,undefined,true)));
    await d.batch(statements.flat());
   }
   if(candidates.length)state.cursor=String(candidates.at(-1).id);
@@ -92,5 +102,13 @@ export async function maintainHistoricalStorage(limit=50){
  const diagnosticLimit=Math.min(10,boundedLimit),retentionCutoff=new Date(Date.now()-90*24*60*60_000).toISOString();
  const oldDiagnostics=(await d.prepare('SELECT rowid AS rowId FROM diag WHERE created_at<? ORDER BY created_at,rowid LIMIT ?').bind(retentionCutoff,diagnosticLimit).all()).results as any[];
  if(oldDiagnostics.length)await d.batch(oldDiagnostics.map(row=>d.prepare('DELETE FROM diag WHERE rowid=?').bind(row.rowId)));
- return {archived:candidates.length,compacted:summaries.compacted,cleaned,diagnosticsPruned:oldDiagnostics.length,more:!cleanupDone||!state.exhausted||summaries.more||oldDiagnostics.length===diagnosticLimit};
+ const peerCleanupLimit=Math.min(2000,Math.max(100,boundedLimit*80)),peerCandidates=(await d.prepare("SELECT c.rowid AS rowId FROM opportunity_peer_candidates c WHERE NOT EXISTS(SELECT 1 FROM opportunity_evaluation_jobs j WHERE j.run_id=c.run_id AND j.generation=c.generation AND j.phase NOT IN ('complete','failed')) ORDER BY c.rowid LIMIT ?").bind(peerCleanupLimit+1).all()).results as any[],peerObservations=(await d.prepare("SELECT p.rowid AS rowId FROM opportunity_peer_observations p WHERE NOT EXISTS(SELECT 1 FROM opportunity_evaluation_jobs j WHERE j.run_id=p.run_id AND j.generation=p.generation AND j.phase NOT IN ('complete','failed')) ORDER BY p.rowid LIMIT ?").bind(peerCleanupLimit+1).all()).results as any[],issuerCounts=(await d.prepare("SELECT c.rowid AS rowId FROM opportunity_issuer_listing_counts c WHERE NOT EXISTS(SELECT 1 FROM opportunity_evaluation_jobs j WHERE j.run_id=c.run_id AND j.generation=c.generation AND j.phase NOT IN ('complete','failed')) ORDER BY c.rowid LIMIT ?").bind(peerCleanupLimit+1).all()).results as any[];
+ const peerCleanup=[
+  peerCandidates.length?d.prepare("DELETE FROM opportunity_peer_candidates WHERE rowid IN (SELECT c.rowid FROM opportunity_peer_candidates c WHERE NOT EXISTS(SELECT 1 FROM opportunity_evaluation_jobs j WHERE j.run_id=c.run_id AND j.generation=c.generation AND j.phase NOT IN ('complete','failed')) ORDER BY c.rowid LIMIT ?)").bind(peerCleanupLimit):null,
+  peerObservations.length?d.prepare("DELETE FROM opportunity_peer_observations WHERE rowid IN (SELECT p.rowid FROM opportunity_peer_observations p WHERE NOT EXISTS(SELECT 1 FROM opportunity_evaluation_jobs j WHERE j.run_id=p.run_id AND j.generation=p.generation AND j.phase NOT IN ('complete','failed')) ORDER BY p.rowid LIMIT ?)").bind(peerCleanupLimit):null,
+  issuerCounts.length?d.prepare("DELETE FROM opportunity_issuer_listing_counts WHERE rowid IN (SELECT c.rowid FROM opportunity_issuer_listing_counts c WHERE NOT EXISTS(SELECT 1 FROM opportunity_evaluation_jobs j WHERE j.run_id=c.run_id AND j.generation=c.generation AND j.phase NOT IN ('complete','failed')) ORDER BY c.rowid LIMIT ?)").bind(peerCleanupLimit):null,
+ ].filter(Boolean);
+ if(peerCleanup.length)await d.batch(peerCleanup);
+ const peerRowsPruned=Math.min(peerCandidates.length,peerCleanupLimit)+Math.min(peerObservations.length,peerCleanupLimit)+Math.min(issuerCounts.length,peerCleanupLimit);
+ return {archived:candidates.length,compacted:summaries.compacted,cleaned,diagnosticsPruned:oldDiagnostics.length,peerRowsPruned,more:!cleanupDone||!state.exhausted||summaries.more||oldDiagnostics.length===diagnosticLimit||peerCandidates.length>peerCleanupLimit||peerObservations.length>peerCleanupLimit||issuerCounts.length>peerCleanupLimit};
 }
