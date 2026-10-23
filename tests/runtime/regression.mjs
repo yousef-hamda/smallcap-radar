@@ -1252,6 +1252,22 @@ test('historical maintenance archives issuers in bounded multi-row transactions'
  assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM snapshot_archives WHERE id LIKE ?').get(`${id}:%`).n,12);
 });
 
+test('historical maintenance checkpoints archive keys and skips repeated terminal cache cleanup',async()=>{
+ const {maintainHistoricalStorage}=await import('../../.test-build/snapshot-archive.mjs'),id='zzzz-archive-cursor-fixture',now=new Date(Date.now()+1000).toISOString();
+ await db().prepare("INSERT OR REPLACE INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,strategy_hash) VALUES(?,?,?,'complete','archive cursor fixture',12,13,?)").bind(id,now,now,currentHash()).run();
+ for(let index=0;index<12;index++)await insertSnapshot(id,{...base,symbol:`CURSOR-${String(index).padStart(2,'0')}`}).run();
+ await maintainHistoricalStorage(5);const first=JSON.parse((await db().prepare("SELECT payload FROM raw_cache WHERE key='maintenance:archive-candidate-v1'").first()).payload);
+ await db().prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(`universe:${id}`,'test',now,'synthetic').run();
+ await maintainHistoricalStorage(5);const second=JSON.parse((await db().prepare("SELECT payload FROM raw_cache WHERE key='maintenance:archive-candidate-v1'").first()).payload);
+ assert.equal(first.fingerprint,second.fingerprint);assert.notEqual(second.cursor,first.cursor,'archive cursor resumes after the prior id');
+ assert.equal((await db().prepare('SELECT key FROM raw_cache WHERE key=?').bind(`universe:${id}`).first())?.key,`universe:${id}`,'terminal cache cleanup is not repeated within a stable terminal-run fingerprint');
+ const lateId='0000-late-terminal-fixture',lateAt=new Date(Date.now()+2000).toISOString();
+ await db().prepare("INSERT OR REPLACE INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,strategy_hash) VALUES(?,?,?,'complete','late terminal cursor fixture',2,13,?)").bind(lateId,lateAt,lateAt,currentHash()).run();
+ for(let index=0;index<2;index++)await insertSnapshot(lateId,{...base,symbol:`LATE-${String(index).padStart(2,'0')}`}).run();
+ await maintainHistoricalStorage(100);
+ assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM snapshot_archives WHERE id LIKE ?').get(`${lateId}:%`).n,2,'a new terminal run invalidates the UUID keyset, including rows before its prior cursor');
+});
+
 test('verified inventory recovery resumes failed initialization without a new scan or retry delay',async()=>{
  const {saveCompleteDirectory}=await import('../../.test-build/directory-cache.mjs'),id='directory-outage-recovered',now=new Date().toISOString(),company={ticker:'RECOVERY-LISTED',name:'Synthetic only',cik:0,exchange:'Nasdaq',securityType:'common',securityName:'Common Stock',directoryUrl:'https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt'};
  await saveCompleteDirectory({retrievedAt:now,rows:[company]});

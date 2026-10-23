@@ -43,25 +43,38 @@ async function compactHistoricalSummaries(limit:number) {
  if(updates.length)await db().batch(updates);return {compacted:updates.length-(rows.length?1:0),more:rows.length===limit};
 }
 export async function maintainHistoricalStorage(limit=50){
- await schema();
- const protectedRuns=(await db().prepare("SELECT id FROM strategy_runs WHERE status IN ('complete','partial') AND stage>=13 AND source LIKE '%· full' ORDER BY updated_at DESC,created_at DESC LIMIT 1").all()).results as any[];
- const recoverable=await db().prepare("SELECT id FROM strategy_runs WHERE status='failed' AND stage<13 AND source LIKE 'Bulk Quotes/%' AND updated_at>? ORDER BY updated_at DESC,created_at DESC LIMIT 1").bind(new Date(Date.now()-24*60*60_000).toISOString()).first() as any;
- const excluded=[...protectedRuns.map(row=>String(row.id)),...(recoverable?[String(recoverable.id)]:[])];
- const candidates=(await db().prepare(`SELECT s.id,s.payload,s.evaluation FROM (SELECT s.id FROM fundamental_snapshots s JOIN strategy_runs r ON r.id=s.run_id LEFT JOIN snapshot_archives a ON a.id=s.id WHERE r.status IN ('complete','partial','failed') AND (r.stage>=13 OR r.status='failed') AND a.id IS NULL ${excluded.length?`AND s.run_id NOT IN (${excluded.map(()=>'?').join(',')})`:''} ORDER BY s.id LIMIT ?) candidates JOIN fundamental_snapshots s ON s.id=candidates.id`).bind(...excluded,limit).all()).results as any[];
- // D1 batch round-trips dominate archive maintenance on the persistent volume.
- // Compress and write small bounded groups instead of issuing one transaction
- // per issuer; keep each transaction bounded to limit memory and WAL spikes.
- for(let offset=0;offset<candidates.length;offset+=10){
-  const statements=await Promise.all(candidates.slice(offset,offset+10).map(row=>archivedWriteStatements(row.id,row.payload,row.evaluation)));
-  await db().batch(statements.flat());
+ await schema();const d=db(),cursorKey='maintenance:archive-candidate-v1',cleanupKey='maintenance:terminal-cache-cleanup-v1';
+ const protectedRun=await d.prepare("SELECT id,updated_at FROM strategy_runs WHERE status IN ('complete','partial') AND stage>=13 AND source LIKE '%· full' ORDER BY updated_at DESC,created_at DESC LIMIT 1").first() as any;
+ const terminalStats=await d.prepare("SELECT COUNT(*) AS count,MAX(updated_at) AS updated_at FROM strategy_runs WHERE status IN ('complete','partial','failed') AND (stage>=13 OR status='failed')").first() as any;
+ const recoverable=await d.prepare("SELECT id,updated_at FROM strategy_runs WHERE status='failed' AND stage<13 AND source LIKE 'Bulk Quotes/%' AND updated_at>? ORDER BY updated_at DESC,created_at DESC LIMIT 1").bind(new Date(Date.now()-24*60*60_000).toISOString()).first() as any;
+ const excluded=[...new Set([...(protectedRun?[String(protectedRun.id)]:[]),...(recoverable?[String(recoverable.id)]:[])])];
+ // UUID snapshot IDs are not chronological. Invalidate the keyset whenever a
+ // terminal run is added or updated so late-arriving rows cannot sit behind it.
+ const fingerprint=JSON.stringify([Number(terminalStats?.count??0),terminalStats?.updated_at??'',protectedRun?.id??'',protectedRun?.updated_at??'',recoverable?.id??'',recoverable?.updated_at??'']);
+ const stateRow=await d.prepare('SELECT payload FROM raw_cache WHERE key=?').bind(cursorKey).first() as any;
+ let state:any;try{state=stateRow?JSON.parse(stateRow.payload):null}catch{state=null;}
+ if(!state||state.fingerprint!==fingerprint||typeof state.cursor!=='string'||typeof state.exhausted!=='boolean'||typeof state.completedAt!=='number'||!Number.isFinite(state.completedAt)||state.exhausted&&Date.now()-state.completedAt>24*60*60_000)state={fingerprint,cursor:'',exhausted:false,completedAt:0};
+ const cleanup=await d.prepare('SELECT payload FROM raw_cache WHERE key=?').bind(cleanupKey).first() as any;
+ if(cleanup?.payload!==fingerprint){
+  await d.batch([
+   d.prepare("DELETE FROM bulk_fundamentals WHERE run_id<>? AND run_id IN (SELECT id FROM strategy_runs WHERE status='failed' OR (status IN ('complete','partial') AND stage>=13))").bind(recoverable?.id??''),
+   d.prepare("DELETE FROM company_facts_outcomes WHERE run_id<>? AND run_id IN (SELECT id FROM strategy_runs WHERE status='failed' OR (status IN ('complete','partial') AND stage>=13))").bind(recoverable?.id??''),
+   d.prepare("DELETE FROM raw_cache WHERE key LIKE 'universe:%' AND EXISTS(SELECT 1 FROM strategy_runs r WHERE r.id<>? AND r.id=substr(raw_cache.key,10,36) AND (r.status='failed' OR (r.status IN ('complete','partial') AND r.stage>=13)))").bind(recoverable?.id??''),
+   d.prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(cleanupKey,'terminal cache cleanup checkpoint',new Date().toISOString(),fingerprint),
+  ]);
  }
- // Terminal runs never resume provider/scoring cursors. These derived caches
- // are separate from saved source evidence, favorites and portfolio state.
- await db().batch([
-  db().prepare("DELETE FROM bulk_fundamentals WHERE run_id<>? AND run_id IN (SELECT id FROM strategy_runs WHERE status='failed' OR (status IN ('complete','partial') AND stage>=13))").bind(recoverable?.id??''),
-  db().prepare("DELETE FROM company_facts_outcomes WHERE run_id<>? AND run_id IN (SELECT id FROM strategy_runs WHERE status='failed' OR (status IN ('complete','partial') AND stage>=13))").bind(recoverable?.id??''),
-  db().prepare("DELETE FROM raw_cache WHERE key LIKE 'universe:%' AND EXISTS(SELECT 1 FROM strategy_runs r WHERE r.id<>? AND r.id=substr(raw_cache.key,10,36) AND (r.status='failed' OR (r.status IN ('complete','partial') AND r.stage>=13)))").bind(recoverable?.id??''),
- ]);
+ let candidates:any[]=[];
+ if(!state.exhausted){
+  candidates=(await d.prepare(`SELECT s.id,s.payload,s.evaluation FROM (SELECT s.id FROM fundamental_snapshots s JOIN strategy_runs r ON r.id=s.run_id LEFT JOIN snapshot_archives a ON a.id=s.id WHERE r.status IN ('complete','partial','failed') AND (r.stage>=13 OR r.status='failed') AND a.id IS NULL AND s.id>? ${excluded.length?`AND s.run_id NOT IN (${excluded.map(()=>'?').join(',')})`:''} ORDER BY s.id LIMIT ?) candidates JOIN fundamental_snapshots s ON s.id=candidates.id`).bind(state.cursor,...excluded,limit).all()).results as any[];
+  for(let offset=0;offset<candidates.length;offset+=10){
+   const statements=await Promise.all(candidates.slice(offset,offset+10).map(row=>archivedWriteStatements(row.id,row.payload,row.evaluation)));
+   await d.batch(statements.flat());
+  }
+  if(candidates.length)state.cursor=String(candidates.at(-1).id);
+  state.exhausted=candidates.length<limit;
+  if(state.exhausted)state.completedAt=Date.now();
+  await d.prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(cursorKey,'historical archive keyset checkpoint',new Date().toISOString(),JSON.stringify(state)).run();
+ }
  const summaries=await compactHistoricalSummaries(limit);
- return {archived:candidates.length,compacted:summaries.compacted,more:candidates.length===limit||summaries.more};
+ return {archived:candidates.length,compacted:summaries.compacted,more:!state.exhausted||summaries.more};
 }

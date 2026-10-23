@@ -6,6 +6,14 @@ This section is authoritative. Every checkpoint below it is historical and must 
 
 The initial bullets preserve the state before the October 22 deep-audit release. The `October 22 deep audit remediation continuation` and the October 23 continuation below supersede their deployment, scan, and security status.
 
+### October 23 archive maintenance checkpoint follow-up
+
+- A follow-up code review found that idle backoff alone did not bound the cost of an individual historical-storage maintenance call: every call repeated broad terminal-cache deletion queries and restarted the archive candidate scan at the beginning. UUID snapshot keys are not chronological, so a durable keyset also needs invalidation when terminal runs change.
+- Local remediation now stores the archive candidate cursor and terminal-cache cleanup fingerprint in `raw_cache`. It advances through indexed snapshot IDs in bounded batches, invalidates when terminal run count/update time or protected/recoverable run identity changes, retries a completed sweep after 24 hours, and runs broad terminal-cache cleanup once per stable fingerprint. Existing per-call archive row limit and summary-compaction cursor remain in place.
+- Regression coverage verifies multi-call cursor progress, idempotent cleanup, and that a newly terminal run with an earlier ID invalidates the saved keyset. Full local checks pass: typecheck, lint, 279 engine tests, 114 runtime/API tests, 21 research tests, production build, 91 repository/UI tests, and `git diff --check`.
+- This follow-up is local and has not yet been committed or deployed. Production remains Railway deployment `971c1832-d44c-4d96-abee-4353412e16ae` (`SUCCESS`, commit `775f83a`) until a new release is verified. Production scan status and external HTTP reachability must be checked after deployment; the last known saved scan was partial, not a source-complete result.
+- Railway CLI can read the production app deployment list, but it remains linked by default to the `Postgres` service. Supported Postgres credential rotation and Railway audit/activity-log review still require authenticated Database View/dashboard access; no credential value or portfolio data was accessed during this continuation.
+
 ### October 23 current release and cold-read follow-up
 
 - Railway deployment `0b840a5c-6e57-4aed-8606-b9c2d43211bc` runs commit `4408003` (`SUCCESS`). The app service was restarted without touching the mounted `/app/data` volume or SQLite database. `/api/source-registry` returned HTTP 200 in about 0.5s; `/api/radar?status=1` returned HTTP 200 in about 3s while the scan advanced.
