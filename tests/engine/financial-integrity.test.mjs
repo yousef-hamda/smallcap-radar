@@ -250,7 +250,7 @@ test('pricing ratios withhold incompatible currencies and invalid dependencies',
 
 
 test('stale technical assessments cannot suppress independently sourced current timing grades',()=>{
- const s=valuationFixture();s.ma30w=9;s.low52w=8;s.high52w=12;s.return12m=.2;for(const key of ['ma30w','low52w','high52w','return12m'])s.provenance[key]={...s.provenance.price};
+ const s=valuationFixture();s.ma30w=9;s.low52w=8;s.high52w=12;s.return12m=.2;for(const key of ['ma30w','low52w','high52w','return12m'])s.provenance[key]={...s.provenance.price,source:'Yahoo Finance chart API · split-adjusted daily history and split events'};
  const expected=evaluateOpportunity(s).factors.find(f=>f.id==='technicalTiming');assert(expected.score>0);
  const actual=evaluateOpportunityDossier(s,{asOf:s.asOf,technicalTimingScore:{asOf:'2026-09-30T12:00:00Z',score:9}}).factors.find(f=>f.id==='technicalTiming');assert.equal(actual.score,expected.score);assert.equal(actual.proxy,true);assert.equal(actual.complete,false);assert.deepEqual(actual.conflicts,[]);assert.match(actual.rationale,/timestamp does not match/);
  const conflict=evaluateOpportunityDossier({...s,sourceConflicts:['actual vendor-price contradiction']},{asOf:s.asOf,technicalTimingScore:{asOf:'2026-09-30T12:00:00Z',score:9}}).factors.find(f=>f.id==='technicalTiming');assert.equal(conflict.score,0);assert(conflict.conflicts.includes('actual vendor-price contradiction'));
@@ -262,7 +262,7 @@ test('typed source conflicts withhold only dependent model components while unkn
  s.backlog={kind:'remaining-performance-obligation',amount:100,expectedRecognitionBy:'2026-12-31',currency:'USD'};
  s.provenance.backlog={...source(),periodStart:undefined};
  s.ma30w=9;s.low52w=8;s.high52w=12;s.return12m=.2;
- for(const key of ['price','ma30w','low52w','high52w','return12m'])s.provenance[key]={...source(),periodStart:undefined,periodEnd:'2026-10-02',availableAt:'2026-10-02T21:00:00Z'};
+ for(const key of ['price','ma30w','low52w','high52w','return12m'])s.provenance[key]={...source(),...(key==='price'?{}:{source:'Yahoo Finance chart API · split-adjusted daily history and split events'}),periodStart:undefined,periodEnd:'2026-10-02',availableAt:'2026-10-02T21:00:00Z'};
  const clean=proxyOpportunityEvidence(s);
  assert.equal(clean.catalysts.score,0);assert.equal(clean.catalysts.coveragePct,30);assert(clean.financialStrength.score>0);assert(clean.technicalTiming.score>0);
  const backlogConflict='backlog: 1 (frames) مقابل 2 (Company Facts) في 2026-06-30; same fiscal window/unit/scope; symmetric difference 50.000000% > 1%';

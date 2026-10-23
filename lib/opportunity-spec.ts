@@ -1,7 +1,7 @@
 /** Single shared contract for the unified opportunity category. */
 export const OPPORTUNITY_SPEC = {
   id: 'UNIFIED_OPPORTUNITY',
-  version: '1.5.5-technical-bar-cadence',
+  version: '1.5.6-market-signal-edge-cases',
   defaultHorizonMonths: 6,
   inventoryPolicy:'complete-official-files-plus-unconfirmed-tracked-listings',
   supportedExchanges:['Nasdaq','NYSE','NYSE American','NYSE Arca','Cboe BZX','IEX','Texas Stock Exchange'],

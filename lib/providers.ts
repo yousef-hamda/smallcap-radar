@@ -27,6 +27,17 @@ export type Company = { cik: number; name: string; ticker: string; exchange: str
 type NasdaqRow = { symbol: string; name?: string; lastsale?: string; marketCap?: string; volume?: string; sector?: string; industry?: string };
 type CachedQuick = { history: NonNullable<Snapshot['history']>; financials: Record<string, number>; provenance: Record<string, Provenance>; issues: string[] };
 type MarketBar = NonNullable<Snapshot['history']>[number];
+/** Invalid OHLC fields are discarded while an independently valid close remains usable. */
+export function sanitizeHistoricalBar(bar: MarketBar): MarketBar {
+  const optionalPositive = (value: unknown) => value == null || (typeof value === 'number' && Number.isFinite(value) && value > 0);
+  const volumeValid = bar.volume == null || (Number.isFinite(bar.volume) && bar.volume >= 0);
+  const pricesValid = optionalPositive(bar.open) && optionalPositive(bar.high) && optionalPositive(bar.low);
+  const consistent = pricesValid
+    && (bar.high == null || bar.high >= Math.max(bar.close, bar.open ?? bar.close, bar.low ?? bar.close))
+    && (bar.low == null || bar.low <= Math.min(bar.close, bar.open ?? bar.close, bar.high ?? bar.close));
+  if (!consistent) return { ...bar, open: undefined, high: undefined, low: undefined, volume: volumeValid ? bar.volume : undefined };
+  return { ...bar, volume: volumeValid ? bar.volume : undefined };
+}
 export type HistoricalResult = { url:string; history:MarketBar[]; splits:{date:string;factor:number}[]|null; source:string; retrievedAt:string; availableAt:string; meta?:any; splitReviewCoverageStart?:string; requestedLookbackDays?:number };
 export class HistoricalSessionsUnavailableError extends Error {
   readonly retryable=false;
@@ -656,12 +667,12 @@ export function parseYahooDaily(payload:any,asOf=new Date().toISOString()){
 export function parseCboeDaily(payload:any,from:string,to:string):MarketBar[]{
  const rows:Array<{date:string;close:number|null;open?:number;high?:number;low?:number;volume?:number}>=(Array.isArray(payload?.data)?payload.data:[]).map((row:any)=>({date:String(row.date??''),close:numeric(row.close),open:numeric(row.open)??undefined,high:numeric(row.high)??undefined,low:numeric(row.low)??undefined,volume:numeric(row.volume)??undefined}));
  const validDate=(value:string)=>/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(`${value}T00:00:00Z`))&&new Date(`${value}T00:00:00Z`).toISOString().slice(0,10)===value;
- return rows.filter((row):row is {date:string;close:number;open?:number;high?:number;low?:number;volume?:number}=>validDate(row.date)&&row.date>=from&&row.date<=to&&row.close!=null&&row.close>0).sort((a,b)=>a.date.localeCompare(b.date));
+ return rows.filter((row):row is {date:string;close:number;open?:number;high?:number;low?:number;volume?:number}=>validDate(row.date)&&row.date>=from&&row.date<=to&&row.close!=null&&row.close>0).map(sanitizeHistoricalBar).sort((a,b)=>a.date.localeCompare(b.date));
 }
 
 export function parseNasdaqDaily(payload:any,from:string,to:string):MarketBar[]{
  const rows=(payload?.data?.tradesTable?.rows??[]).map((row:any)=>({date:isoDate(String(row.date??'')),close:numeric(row.close),open:numeric(row.open)??undefined,high:numeric(row.high)??undefined,low:numeric(row.low)??undefined,volume:numeric(row.volume)??undefined}));
- return rows.filter((row:any)=>row.date&&row.date>=from&&row.date<=to&&row.close!=null&&row.close>0&&row.low!=null&&row.low>0).sort((a:any,b:any)=>a.date.localeCompare(b.date)) as MarketBar[];
+ return rows.filter((row:any)=>row.date&&row.date>=from&&row.date<=to&&row.close!=null&&row.close>0).map(sanitizeHistoricalBar).sort((a:any,b:any)=>a.date.localeCompare(b.date)) as MarketBar[];
 }
 
 export async function historicalMarketData(symbol: string, asOf = new Date().toISOString(), days = 1900):Promise<HistoricalResult> {

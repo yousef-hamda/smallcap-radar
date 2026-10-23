@@ -15,10 +15,11 @@ export async function GET(req:Request){
   const run=await database.prepare('SELECT id,status,stage,source,created_at,updated_at,failed,error FROM strategy_runs WHERE id=?').bind(runId).first();
   if(!run)return json({error:'الجولة غير موجودة'},404);
   await ensureRunEvaluations(runId);
-  const researchConflictCount=await readResearchConflictCount(runId);
   const published=['complete','partial'].includes(String(run.status))&&(Number(run.stage)>=13||run.source==='import');
   const current=await readState({strategy:'opportunity',opportunityState:'all',limit,offset,...(published?{runId,releaseToken:params.get('release')||undefined}:{})});
   if(current.dataRunId===runId){
+   if(!current.aggregatesReady)return json({run,release:current.release,strategy,aggregatesReady:false,counts:null,blockers:[],rows:[],page:{offset,limit,hasMore:false}});
+   const researchConflictCount=await readResearchConflictCount(runId);
    const total=current.summary.total,passed=current.summary.opportunityRanked,failed=current.summary.opportunityExcluded;
    const incompleteById=current.summary.opportunityFactorIncomplete??{};
    const blockers:Array<{id:string;label:string;status:'FAIL'|'UNKNOWN';count:number}>=OPPORTUNITY_SPEC.factors.map(factor=>({id:factor.id,label:factor.label,status:'UNKNOWN' as const,count:Math.max(0,Number(incompleteById[factor.id]??total))})).filter(blocker=>blocker.count>0);
@@ -33,6 +34,7 @@ export async function GET(req:Request){
    return json({run,release:current.release,strategy,counts:{total,passed,failed,unknown:Math.max(0,total-passed-failed),withEvidence:current.summary.opportunityWithEvidence,stale:current.summary.stale},blockers,rows,page:{offset,limit,hasMore:current.page.hasMore}});
   }
   {
+   const researchConflictCount=await readResearchConflictCount(runId);
    const counts=await database.prepare(`SELECT COUNT(*) AS total,
     SUM(CASE WHEN json_extract(evaluation,'$.opportunity.state')='ranked' THEN 1 ELSE 0 END) AS passed,
     SUM(CASE WHEN json_extract(evaluation,'$.opportunity.state')='excluded' THEN 1 ELSE 0 END) AS failed,

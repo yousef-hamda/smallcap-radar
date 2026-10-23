@@ -77,11 +77,13 @@ export async function ensureSchema(){
   d.prepare("CREATE TABLE IF NOT EXISTS personal_watchlist (owner TEXT NOT NULL, symbol TEXT NOT NULL, created_at TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(owner,symbol))"),
   d.prepare("CREATE TABLE IF NOT EXISTS raw_cache (key TEXT PRIMARY KEY NOT NULL, source TEXT NOT NULL, retrieved_at TEXT NOT NULL, payload TEXT NOT NULL)"),
   d.prepare("CREATE TABLE IF NOT EXISTS diag (id TEXT PRIMARY KEY NOT NULL, run_id TEXT, stage TEXT NOT NULL, created_at TEXT NOT NULL, message TEXT NOT NULL)"),
+  d.prepare("CREATE INDEX IF NOT EXISTS idx_diag_created_at ON diag(created_at)"),
   d.prepare("CREATE TABLE IF NOT EXISTS experiment_registry (id TEXT PRIMARY KEY NOT NULL, hypothesis TEXT NOT NULL, parameters TEXT NOT NULL, created_at TEXT NOT NULL, dataset_version TEXT NOT NULL, result TEXT, p_value REAL, adjusted_p REAL, status TEXT NOT NULL)"),
   d.prepare("CREATE TABLE IF NOT EXISTS holdout_sets (firm_id TEXT PRIMARY KEY NOT NULL, membership TEXT NOT NULL, salt_hash TEXT NOT NULL, consumed_at TEXT)"),
   d.prepare("CREATE TABLE IF NOT EXISTS backtest_runs (id TEXT PRIMARY KEY NOT NULL, created_at TEXT NOT NULL, strategy_hash TEXT NOT NULL, dataset_version TEXT NOT NULL, parameters TEXT NOT NULL, metrics TEXT NOT NULL)"),
   d.prepare("CREATE TABLE IF NOT EXISTS push_subscriptions (endpoint TEXT PRIMARY KEY NOT NULL, owner TEXT NOT NULL DEFAULT '', subscription TEXT NOT NULL, created_at TEXT NOT NULL, last_success_at TEXT, failure_count INTEGER NOT NULL DEFAULT 0)"),
   d.prepare("CREATE TABLE IF NOT EXISTS portfolio_transactions (id TEXT PRIMARY KEY NOT NULL, owner TEXT NOT NULL, symbol TEXT NOT NULL, company_name TEXT NOT NULL, side TEXT NOT NULL, quantity REAL NOT NULL, price REAL NOT NULL, fees REAL NOT NULL DEFAULT 0, trade_date TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', metadata TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"),
+  d.prepare("CREATE TRIGGER IF NOT EXISTS portfolio_anonymous_row_cap BEFORE INSERT ON portfolio_transactions WHEN NEW.owner>='visitor:' AND NEW.owner<'visitor;' AND (SELECT COUNT(*) FROM portfolio_transactions WHERE owner>='visitor:' AND owner<'visitor;')>=100000 BEGIN SELECT RAISE(ABORT,'anonymous portfolio storage limit reached'); END"),
   d.prepare("CREATE TABLE IF NOT EXISTS portfolio_revisions (owner TEXT PRIMARY KEY NOT NULL, revision INTEGER NOT NULL DEFAULT 0)"),
   d.prepare("CREATE TABLE IF NOT EXISTS radar_accounts (id TEXT PRIMARY KEY NOT NULL, username TEXT UNIQUE NOT NULL, password_salt TEXT NOT NULL, password_hash TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"),
   d.prepare("CREATE TABLE IF NOT EXISTS radar_sessions (token_hash TEXT PRIMARY KEY NOT NULL, account_id TEXT NOT NULL, created_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, expires_at INTEGER NOT NULL, FOREIGN KEY (account_id) REFERENCES radar_accounts(id))"),
@@ -340,8 +342,8 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
    queryForPage=`SELECT s.payload,s.evaluation,r.rank_position FROM opportunity_rankings r INDEXED BY opportunity_research_fit_idx JOIN fundamental_snapshots s ON s.run_id=r.run_id AND s.symbol=r.symbol WHERE r.run_id=? AND r.research_fit=1 AND (?='' OR instr(lower(s.symbol),?)>0 OR instr(lower(json_extract(s.payload,'$.name')),?)>0) ORDER BY r.research_fit_financing_pass DESC,r.rank_position LIMIT ? OFFSET ?`;
    queryParams=[latest.id,search,search,search,limit+1,offset];
   } else if (!search && (requested==='all'||requested==='ranked')) {
-   // Rank keys drive the page. LIMIT is applied before any large JSON payload
-   // is joined; the outer order sorts only the requested page, not the universe.
+   // Every record has a canonical numeric rank; research eligibility is a
+   // separate status and remains visible in each evaluation.
    queryForPage=`SELECT s.payload,s.evaluation,r.rank_position FROM (SELECT run_id,symbol,rank_position FROM opportunity_rankings INDEXED BY opportunity_rank_position_idx WHERE run_id=? ORDER BY rank_position LIMIT ? OFFSET ?) r JOIN fundamental_snapshots s ON s.run_id=r.run_id AND s.symbol=r.symbol ORDER BY r.rank_position`;
    queryParams=[latest.id,limit+1,offset];
   }

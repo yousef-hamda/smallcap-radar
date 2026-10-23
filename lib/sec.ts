@@ -18,7 +18,7 @@ export const AGGREGATE_BORROWING_TAGS=['DebtAndCapitalLeaseObligations','Borrowi
 export type Fact={start?:string;end:string;val:number;filed:string;form:string;accn?:string;fy?:number;fp?:string;tag?:string};
 const annualForms=['10-K','10-K/A','20-F','20-F/A','40-F','40-F/A'];
 const interimForms=['10-Q','10-Q/A','6-K','6-K/A'];
-function validCalendarDate(value:unknown):value is string{
+export function validCalendarDate(value:unknown):value is string{
  if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(value))return false;
  const time=Date.parse(`${value}T00:00:00.000Z`);
  return Number.isFinite(time)&&new Date(time).toISOString().slice(0,10)===value;

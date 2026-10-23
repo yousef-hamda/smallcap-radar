@@ -306,12 +306,12 @@ test('deep financial enrichment separates contract liabilities from backlog',()=
  assert.equal(s.grossMargin,.6);assert.equal(s.backlog,undefined);assert.equal(s.contractLiabilities.amount,25);assert.equal(s.provenance.grossMargin.source,'SEC revenue and cost of revenue');assert.equal(s.provenance.contractLiabilities.source,'SEC EDGAR');
 });
 test('Cboe fallback parser keeps only bounded positive dated OHLCV rows',()=>{
- const rows=parseCboeDaily({data:[{date:'2026-01-02',close:12,open:11,high:13,low:10,volume:100},{date:'2025-12-31',close:9},{date:'2026-02-01',close:0},{date:'2026-02-30',close:20},{date:'bad',close:20}]},'2026-01-01','2026-01-31');
- assert.deepEqual(rows.map(row=>row.date),['2026-01-02']);assert.equal(rows[0].volume,100);
+ const rows=parseCboeDaily({data:[{date:'2026-01-02',close:12,open:11,high:13,low:10,volume:100},{date:'2026-01-05',close:10,low:11,high:100000,volume:100},{date:'2025-12-31',close:9},{date:'2026-02-01',close:0},{date:'2026-02-30',close:20},{date:'bad',close:20}]},'2026-01-01','2026-01-31');
+ assert.deepEqual(rows.map(row=>row.date),['2026-01-02','2026-01-05']);assert.equal(rows[0].volume,100);assert.equal(rows[1].high,undefined);assert.equal(rows[1].low,undefined);
 });
 test('Nasdaq history parser rejects impossible calendar dates before lexical range checks',()=>{
- const rows=parseNasdaqDaily({data:{tradesTable:{rows:[{date:'01/02/2026',close:'12.00',low:'11.00'},{date:'02/30/2026',close:'20.00',low:'19.00'},{date:'13/01/2026',close:'30.00',low:'29.00'}]}}},'2026-01-01','2026-12-31');
- assert.deepEqual(rows.map(row=>row.date),['2026-01-02']);
+ const rows=parseNasdaqDaily({data:{tradesTable:{rows:[{date:'01/02/2026',close:'12.00',low:'11.00',high:'13.00'},{date:'01/05/2026',close:'10.00',low:'11.00',high:'100000'},{date:'02/30/2026',close:'20.00',low:'19.00'},{date:'13/01/2026',close:'30.00',low:'29.00'}]}}},'2026-01-01','2026-12-31');
+ assert.deepEqual(rows.map(row=>row.date),['2026-01-02','2026-01-05']);assert.equal(rows[1].low,undefined);assert.equal(rows[1].high,undefined);
 });
 test('SEC filing index becomes profile events when RSS is unavailable',()=>{
  const news=parseSecFilingNews({filings:{recent:{form:['8-K','4','10-Q'],accessionNumber:['0000000000-26-000001','0000000000-26-000002','0000000000-26-000003'],primaryDocument:['current.htm','form4.xml','quarter.htm'],filingDate:['2026-08-01','2026-08-02','2026-07-01']}}},123,'2026-09-01T00:00:00Z');
@@ -642,7 +642,7 @@ test('downside-risk rubric withholds incomplete, unavailable, contradictory and 
 });
 function technicalInput(overrides={}){const bizDays=(count,endDate)=>{const days=[];let date=new Date(`${endDate}T00:00:00Z`);while(days.length<count){const day=date.getUTCDay();if(day!==0&&day!==6)days.unshift(date.toISOString().slice(0,10));date.setUTCDate(date.getUTCDate()-1)}return days};const dates=bizDays(220,'2026-09-29');const daily=dates.map((date,index)=>({date,close:100*(1.001)**index,volume:100000,completed:true}));const benchmarkDaily=dates.map((date,index)=>({date,close:100*(1.0003)**index,volume:100000,completed:true}));const weekly=Array.from({length:32},(_,index)=>{const date=new Date(Date.UTC(2026,8,25-(31-index)*7)).toISOString().slice(0,10);return {date,close:100*(1.01)**index,volume:100000,completed:true}});const monthEnds=Array.from({length:12},(_,index)=>{const d=new Date(Date.UTC(2025,9+index,0));while(d.getUTCDay()===0||d.getUTCDay()===6)d.setUTCDate(d.getUTCDate()-1);return d.toISOString().slice(0,10)});const monthly=monthEnds.map((date,index)=>({date,close:100*(1.02)**index,volume:100000,completed:true}));const barSource=(source,periodEnd)=>({...source,periodEnd,availableAt:`${periodEnd}T21:00:00Z`});return {asOf:opportunityAsOf,splitAdjusted:true,daily,weekly,monthly,benchmarkDaily,source:barSource(opportunityProvenance,daily.at(-1).date),weeklySource:barSource({...opportunityProvenance,source:'Primary weekly bars'},weekly.at(-1).date),monthlySource:barSource({...opportunityProvenance,source:'Primary monthly bars'},monthly.at(-1).date),benchmarkSource:barSource({...opportunityProvenance,source:'Primary benchmark daily bars',url:'https://www.nasdaq.com/market-activity/indexes'},benchmarkDaily.at(-1).date),...overrides}}
 test('technical-timing rubric uses completed split-adjusted multi-timeframe bars and benchmark-aligned relative strength',()=>{
- const result=scoreTechnicalTiming(technicalInput());assert.ok(result.score>7);assert.equal(result.calculation.rubricId,'technical-timing-v2-bar-cadence');assert.equal(result.indicators.ma200, result.indicators.ma200);assert.ok(result.indicators.relativeStrength63d>0);
+ const result=scoreTechnicalTiming(technicalInput());assert.ok(result.score>7);assert.equal(result.calculation.rubricId,'technical-timing-v3-flat-rsi-neutral');assert.equal(result.indicators.ma200, result.indicators.ma200);assert.ok(result.indicators.relativeStrength63d>0);
  const evidence=opportunityEvidence();evidence.technicalTiming=result;assert.equal(evaluateOpportunity(opportunitySnapshot,evidence).factors.find(factor=>factor.id==='technicalTiming').score,result.score);
 });
 test('technical-timing rubric refuses partial bars, weekend points, unadjusted splits, thin history and unaligned benchmarks',()=>{
@@ -697,6 +697,9 @@ test('technical-timing RSI uses Wilder smoothing over the available close histor
  const result=scoreTechnicalTiming({...input,daily});
  assert.ok(result.score!=null);
  assert.ok(result.indicators.rsi14>25&&result.indicators.rsi14<30,`expected smoothed RSI near 27.6, got ${result.indicators.rsi14}`);
+ const flat=scoreTechnicalTiming({...input,daily:input.daily.map(bar=>({...bar,close:100}))});
+ assert.equal(flat.indicators.rsi14,50,'a flat series has no gains or losses and must have neutral RSI');
+ assert.equal(flat.calculation.rubricId,'technical-timing-v3-flat-rsi-neutral');
 });
 test('technical research builds completed multi-timeframe bars and preserves the market-data rights gate',()=>{
  const asOf='2026-09-30T23:00:00.000Z',dates=[];let cursor=new Date('2025-01-01T00:00:00Z');

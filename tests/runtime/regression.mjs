@@ -9,6 +9,7 @@ import {reconcile} from '../../.test-build/reconcile.mjs';
 import {setHistoryResult,setOpportunityResearchResult,setUniverse,setBulkQuoteTransform,universeCalls,setIntradayResult,opportunityCalls,resetOpportunityCalls,historyRequests,setObservedCompanyDescription,HistoricalSessionsUnavailableError} from './providers.mjs';
 import {evaluateStrategy} from '../../.test-build/engine.mjs';
 import {proxyOpportunityEvidence} from '../../.test-build/opportunity-proxies.mjs';
+import {opportunitySpecHash} from '../../.test-build/opportunity-spec.mjs';
 import {fixtures} from '../../.test-build/fixtures.mjs';
 import {ensureSchema,db,currentHash,readState,insertSnapshot,invalidateStateCache,readResearchConflictCount,migrateCompatibleAcquisitionRuns,publishResearchFitRankProjectionBatch,publishRunAggregatesBatch} from '../../.test-build/storage.mjs';
 import {processScanBatch,startScan,historyCandidate,preliminaryCandidates} from '../../.test-build/scanner.mjs';
@@ -45,12 +46,14 @@ await ensureSchema();
 const base=fixtures[0];
 process.env.SEC_USER_AGENT??='SmallCapRadar/2.2 (contact: tests@example.com)';
 test('database-backed request limiter coordinates fixed-window quotas by client',async()=>{
- const request=new Request('https://radar.test/api/rate-limit',{headers:{'cf-connecting-ip':'192.0.2.77'}}),now=1_800_000_000_000;
- await enforceRequestLimit(request,'rate-test',2,60_000,now);await enforceRequestLimit(request,'rate-test',2,60_000,now+1);
+ const request=new Request('https://radar.test/api/rate-limit',{headers:{'cf-connecting-ip':'198.51.100.1','x-forwarded-for':'192.0.2.77, 198.51.100.9'}}),now=1_800_000_000_000;
+ await enforceRequestLimit(request,'rate-test',2,60_000,now);await enforceRequestLimit(new Request(request.url,{headers:{'cf-connecting-ip':'203.0.113.8','x-forwarded-for':'192.0.2.77, 198.51.100.9'}}),'rate-test',2,60_000,now+1);
  await assert.rejects(()=>enforceRequestLimit(request,'rate-test',2,60_000,now+2),error=>error.status===429);
- await enforceRequestLimit(new Request(request.url,{headers:{'cf-connecting-ip':'192.0.2.78'}}),'rate-test',2,60_000,now+2);
+ await enforceRequestLimit(new Request(request.url,{headers:{'x-forwarded-for':'192.0.2.78'}}),'rate-test',2,60_000,now+2);
  await enforceRequestLimit(request,'global-rate-test',1,60_000,now,'global');
  await assert.rejects(()=>enforceRequestLimit(new Request(request.url,{headers:{'cf-connecting-ip':'192.0.2.78'}}),'global-rate-test',1,60_000,now+1,'global'),error=>error.status===429);
+ const noForwarded=new Request(request.url,{headers:{'x-real-ip':'192.0.2.77'}});await enforceRequestLimit(noForwarded,'missing-forwarded-test',1,60_000,now);
+ await assert.rejects(()=>enforceRequestLimit(new Request(request.url,{headers:{'x-real-ip':'203.0.113.99'}}),'missing-forwarded-test',1,60_000,now+1),error=>error.status===429);
 });
 test('public snapshot import fails closed unless an operator publication secret is configured',async()=>{
  const previous=runtimeEnv.RANK_IMPORT_SECRET;delete runtimeEnv.RANK_IMPORT_SECRET;
@@ -63,6 +66,11 @@ test('qualitative opportunity proxies produce auditable bounded grades without c
  const evidence=proxyOpportunityEvidence(snapshot);
  for(const id of ['valuation','competitivePosition','downsideRisk','technicalTiming']){assert(evidence[id]);assert(Number(evidence[id].score)>=0&&Number(evidence[id].score)<=10);assert(evidence[id].calculation?.rubricId===`${id}-model-v5-opportunity`);}
  assert.equal(evidence.valuation.coveragePct,25);assert.equal(evidence.valuation.confidence,'low');
+ assert.equal(evidence.technicalTiming.score,0,'unknown or unadjusted market history cannot earn proxy timing points');
+ const adjusted={...snapshot,provenance:{...snapshot.provenance}};for(const key of ['low52w','high52w','ma30w','return12m'])adjusted.provenance[key]={...adjusted.provenance[key],source:'Yahoo Finance chart API · split-adjusted daily history and split events'};
+ assert.ok(proxyOpportunityEvidence(adjusted).technicalTiming.score>0,'verified split-adjusted Yahoo history may supply bounded proxy timing points');
+ const insider={...snapshot,insiderBuyValue:1,provenance:{...snapshot.provenance,insiderBuyValue:{source:'SEC ownership filing',url:'https://www.sec.gov/Archives/edgar/data/1/000000000126000001/ownership.xml',periodEnd:now.slice(0,10),availableAt:now,retrievedAt:now,rightsStatus:'public-domain'}}};
+ const insiderModel=proxyOpportunityEvidence(insider).management;assert.equal(insiderModel.score,0);assert.equal(insiderModel.calculation.inputs.find(item=>item.name==='insider-purchase-materiality:grade').value,'missing-zero');assert.match(insiderModel.rationale,/without ownership or compensation context/);
 });
 test('an empty database is not mislabeled as a stale snapshot',async()=>{const state=await readState({strategy:'opportunity'});assert.equal(state.dataRun,null);assert.equal(state.summary.stale,false);});
 test('schema initialization tolerates another isolate winning a conditional column migration',async()=>{
@@ -285,8 +293,12 @@ test('portfolio full close and reopen resets cost basis instead of leaking an ol
 });
 test('portfolio concentration indicators stay unavailable when any open holding lacks a quote',()=>{
  const tx=(id,symbol,quantity)=>({id,symbol,companyName:symbol,side:'buy',quantity,price:10,fees:0,tradeDate:'2026-01-01',createdAt:'2026-01-01',updatedAt:'2026-01-01'});
- const value=calculatePortfolio([tx('1','PRICED',10),tx('2','MISSING',100)],{PRICED:{symbol:'PRICED',name:'Priced',price:20,asOf:'2026-01-04'}});
+ const value=calculatePortfolio([tx('1','PRICED',100),tx('2','MISSING',1)],{PRICED:{symbol:'PRICED',name:'Priced',price:20,asOf:'2026-01-04',sector:'Technology'}});
  assert.equal(value.summary.missingQuoteCount,1);assert.equal(value.summary.diversificationScore,null);assert.equal(value.summary.effectiveHoldings,null);assert.equal(value.summary.topWeight,null);
+ assert.equal(value.summary.totalPnl,null);assert.equal(value.summary.unrealizedPnl,null);assert.equal(value.summary.totalReturnPct,null,'portfolio-wide P/L remains unavailable until every holding has a price');
+ assert.ok(value.positions.every(position=>position.weight===null));assert.equal(value.sectors[0].weight,1,'priced-subset sector weight remains available for the explicitly labeled priced-only view');
+ assert.equal(value.alerts.some(alert=>alert.includes('تركيز مرتفع')||alert.includes('مخاطر القطاع')),false,'priced-subset percentages must not trigger portfolio-wide concentration alerts');
+ assert.ok(value.alerts.some(alert=>alert.includes('بلا سعر حديث')));
 });
 test('portfolio history refuses to fabricate a continuous line from stale or missing prices',()=>{
  const transaction={id:'1',symbol:'TEST',companyName:'Synthetic',side:'buy',quantity:2,price:10,fees:0,tradeDate:'2026-01-01',createdAt:'2026-01-01',updatedAt:'2026-01-01'};
@@ -408,6 +420,11 @@ test('display cache shares pending work, expires and evicts old entries',async()
 test('portfolio API persists isolated trades, validates balances and supports update/delete',async()=>{
  const initial=await portfolioGET(new Request('https://radar.test/api/portfolio'));assert.equal(initial.status,200);const cookie=initial.headers.get('set-cookie').split(';')[0];assert.deepEqual((await initial.json()).transactions,[]);
  const call=(handler,method,body,origin='https://radar.test')=>handler(new Request('https://radar.test/api/portfolio',{method,headers:{origin,cookie,'content-type':'application/json'},body:JSON.stringify(body)}));
+ const owner=`visitor:${cookie.match(/radar-visitor=([^;]+)/)?.[1]}`;
+ assert.equal((await call(portfolioPOST,'POST',{symbol:'NOT-LISTED',side:'buy',quantity:1,price:10,fees:0,tradeDate:'2026-01-01',note:''})).status,404);
+ assert.equal((await call(portfolioPUT,'PUT',{symbol:'TEST',side:'buy',quantity:1,price:10,fees:0,tradeDate:'2026-01-01',note:'',id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'})).status,404);
+ assert.equal((await call(portfolioDELETE,'DELETE',{id:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'})).status,404);
+ assert.equal(sqlite.prepare('SELECT COUNT(*) AS count FROM portfolio_revisions WHERE owner=?').get(owner).count,0,'invalid writes do not create durable owner-revision rows');
  const buy={symbol:'TEST',side:'buy',quantity:10,price:10,fees:1,tradeDate:'2026-01-01',note:'synthetic test'};
  const saved=await call(portfolioPOST,'POST',buy);assert.equal(saved.status,200);const savedPayload=await saved.json();assert.equal(savedPayload.positions[0].quantity,10);assert.equal(savedPayload.positions[0].averageCost,10.1);
  assert.equal((await call(portfolioPOST,'POST',{...buy,tradeDate:'2026-02-31'})).status,400);
@@ -419,6 +436,7 @@ test('portfolio API persists isolated trades, validates balances and supports up
  const updated=await call(portfolioPUT,'PUT',{...buy,id,quantity:8,price:11});assert.equal(updated.status,200);assert.equal((await updated.json()).positions[0].quantity,8);
  assert.equal((await call(portfolioPOST,'POST',buy,'https://evil.test')).status,403);
  const removed=await call(portfolioDELETE,'DELETE',{id});assert.equal(removed.status,200);assert.deepEqual((await removed.json()).transactions,[]);
+ assert.equal(sqlite.prepare('SELECT COUNT(*) AS count FROM portfolio_revisions WHERE owner=?').get(owner).count,0,'empty anonymous portfolios do not leave revision rows');
 });
 test('portfolio search is bounded and uses the current official listing directory',async()=>{
  const response=await portfolioGET(new Request('https://radar.test/api/portfolio?q=TEST'));assert.equal(response.status,200);assert.equal((await response.json()).results[0].symbol,'TEST');
@@ -841,6 +859,7 @@ test('15000 directory rows use bounded durable pages and resume quote progress',
   const max=sqlite.prepare("SELECT MAX(length(payload)) AS bytes,COUNT(*) AS pages FROM raw_cache WHERE key LIKE 'universe:large-directory:quotes:%'").get();assert.equal(max.pages,150);assert(max.bytes<1_000_000);
   for(let chunk=0;chunk<188;chunk++)await publishDirectoryRatings(initialized.run,100);
   const pendingAggregates=await readState({runId:'large-directory:ratings-v5',limit:1});assert.equal(pendingAggregates.aggregatesReady,false);assert.equal(pendingAggregates.summary.opportunityRanked,null);assert.equal(pendingAggregates.coverage,null);
+  const pendingReport=await reportGET(new Request('https://radar.test/api/scan-report?runId=large-directory:ratings-v5&strategy=opportunity&offset=0'));assert.equal(pendingReport.status,200);const pendingReportPayload=await pendingReport.json();assert.equal(pendingReportPayload.aggregatesReady,false);assert.equal(pendingReportPayload.counts,null);assert.deepEqual(pendingReportPayload.blockers,[]);
   let aggregates=await publishRunAggregatesBatch('large-directory:ratings-v5',100),aggregateTicks=1;while(!aggregates.done&&aggregateTicks++<200)aggregates=await publishRunAggregatesBatch('large-directory:ratings-v5',100);assert.equal(aggregates.done,true);const persistedAggregate=sqlite.prepare("SELECT complete,json_extract(summary_json,'$.summary.total') AS total,json_extract(summary_json,'$.summary.opportunityRanked') AS ranked,cursor_symbol FROM opportunity_run_aggregates WHERE run_id='large-directory:ratings-v5'").get();assert.equal(persistedAggregate.total,15000);assert.equal(persistedAggregate.ranked,15000,JSON.stringify(persistedAggregate));
   const ratings=await readState({runId:'large-directory:ratings-v5',limit:1});assert.equal(ratings.summary.total,15000);assert.equal(ratings.summary.opportunityRanked,15000);assert.equal(ratings.summary.missingFactorScores,0);assert.equal(ratings.summary.missingFinalGrades,0);assert.equal(ratings.storedEvaluations[0].opportunity.factors.length,8);assert.equal(ratings.rankPositions[0],1);assert.notEqual(ratings.run.id,ratings.dataRunId,'complete directory publication does not hide ongoing acquisition');
   for(let page=0;page<150;page++){const result=await processScanBatch('large-directory');assert.equal(result.run.stage,page===149?4:1);if(page<149)assert.equal(result.run.offset,(page+1)*100);}
@@ -1242,6 +1261,15 @@ test('recoverable failed acquisitions retain source checkpoints during historica
  assert.equal((await db().prepare('SELECT payload FROM raw_cache WHERE key=?').bind(`universe:${id}:quotes:0`).first()).payload,'[]');assert.equal((await db().prepare('SELECT payload FROM bulk_fundamentals WHERE run_id=?').bind(id).first()).payload,'{"revenue":123}');assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM snapshot_archives WHERE id=?').get(id+':RECOVERABLE').n,0);
 });
 
+test('a stale rank revision does not abort the scheduled scan tick',async()=>{
+ const runId='stale-rank-projection-scheduler',now=new Date().toISOString();
+ await db().prepare("INSERT INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,strategy_hash) VALUES(?,?,?,'complete','Bulk Quotes/SEC Frames · full',0,13,?)").bind(runId,now,now,currentHash()).run();
+ await db().prepare('INSERT INTO opportunity_rank_versions(run_id,revision,rubric_hash) VALUES(?,1,?)').bind(runId,opportunitySpecHash()).run();
+ await db().prepare('INSERT INTO opportunity_rating_versions(run_id,revision) VALUES(?,2)').bind(runId).run();
+ try{const tick=await scheduledScanTick(Date.now(),{reusableBytes:1024**3,filesystemFreeBytes:1024**3});assert.equal(tick.error,undefined,'a stale projection must not throw before scheduler can handle other current work');}
+ finally{await db().prepare('DELETE FROM opportunity_rank_versions WHERE run_id=?').bind(runId).run();await db().prepare('DELETE FROM opportunity_rating_versions WHERE run_id=?').bind(runId).run();await db().prepare('DELETE FROM strategy_runs WHERE id=?').bind(runId).run();}
+});
+
 test('historical maintenance archives issuers in bounded multi-row transactions',async()=>{
  const {maintainHistoricalStorage}=await import('../../.test-build/snapshot-archive.mjs'),id='0000-archive-batch-fixture',now=new Date().toISOString();
  await db().prepare("INSERT OR REPLACE INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,strategy_hash) VALUES(?,?,?,'complete','archive batch fixture',12,13,?)").bind(id,now,now,currentHash()).run();
@@ -1274,6 +1302,14 @@ test('historical maintenance checkpoints archive keys and bounds terminal cache 
  await maintainHistoricalStorage(100);
  assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM snapshot_archives WHERE id LIKE ?').get(`${lateId}:%`).n,2,'a new terminal run invalidates the UUID keyset, including rows before its prior cursor');
  const invalidLimit=await maintainHistoricalStorage(-1);assert(invalidLimit.archived<=1&&invalidLimit.cleaned<=3,'negative limits cannot turn bounded cleanup into unbounded work');
+});
+
+test('historical maintenance prunes diagnostic logs in bounded batches after retention',async()=>{
+ const {maintainHistoricalStorage}=await import('../../.test-build/snapshot-archive.mjs'),runId='diagnostic-retention-fixture',createdAt='2020-01-01T00:00:00.000Z';
+ const plan=sqlite.prepare("EXPLAIN QUERY PLAN SELECT rowid FROM diag WHERE created_at<? ORDER BY created_at,rowid LIMIT ?").all('2026-01-01T00:00:00.000Z',10).map(row=>String(row.detail)).join(' ');assert.match(plan,/idx_diag_created_at/);
+ for(let index=0;index<15;index++)await db().prepare('INSERT INTO diag(id,run_id,stage,created_at,message) VALUES(?,?,?,?,?)').bind(`diagnostic-retention-${String(index).padStart(2,'0')}`,runId,'test',createdAt,`old test message ${index}`).run();
+ const first=await maintainHistoricalStorage(100);assert.equal(first.diagnosticsPruned,10);assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM diag WHERE run_id=?').get(runId).n,5);
+ const second=await maintainHistoricalStorage(100);assert.equal(second.diagnosticsPruned,5);assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM diag WHERE run_id=?').get(runId).n,0);
 });
 
 test('verified inventory recovery resumes failed initialization without a new scan or retry delay',async()=>{

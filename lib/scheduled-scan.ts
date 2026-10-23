@@ -19,7 +19,7 @@ export async function scheduledScanTick(now=Date.now(),capacity?:{reusableBytes:
  // Publish the exact research-fit flags in small resumable slices before
  // maintenance or scan writes can compete for SQLite. Reads return 409 until
  // this projection is complete, rather than starting a full backfill inline.
- const projectionRun=await db().prepare("SELECT r.id FROM strategy_runs r JOIN opportunity_rank_versions v ON v.run_id=r.id WHERE r.status IN ('complete','partial') AND r.stage>=13 AND r.source LIKE '%· full' AND v.rubric_hash=? ORDER BY r.updated_at DESC,r.created_at DESC LIMIT 1").bind(opportunitySpecHash()).first() as any;
+ const projectionRun=await db().prepare("SELECT r.id FROM strategy_runs r JOIN opportunity_rank_versions v ON v.run_id=r.id LEFT JOIN opportunity_rating_versions rv ON rv.run_id=v.run_id WHERE r.status IN ('complete','partial') AND r.stage>=13 AND r.source LIKE '%· full' AND v.rubric_hash=? AND v.revision=COALESCE(rv.revision,0) ORDER BY r.updated_at DESC,r.created_at DESC LIMIT 1").bind(opportunitySpecHash()).first() as any;
  const projectionPublication=projectionRun?await publishResearchFitRankProjectionBatch(String(projectionRun.id)):null;
  const aggregatePublication=projectionRun&&projectionPublication?.done?await publishRunAggregatesBatch(String(projectionRun.id),200):null;
  let id=active?.id;

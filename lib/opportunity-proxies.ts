@@ -28,6 +28,8 @@ export function proxyOpportunityEvidence(snapshot: Snapshot,horizonMonths:number
     ||Date.parse(derivedGrowth.source.periodEnd)>=Date.parse(oldGrowthSource!.periodEnd));
   const growthTrace = useDerivedGrowth?derivedGrowth!.inputs:[];
   const observation = (key: string): number | null => {
+    if (['ma30w','low52w','high52w','return12m'].includes(key)
+      && !snapshot.provenance?.[key]?.source?.startsWith('Yahoo Finance chart API · split-adjusted daily history')) return null;
     if (key === 'dilution' && !hasVerifiedShareRatio(snapshot)) return null;
     if (['ps','evSales','fcfYield'].includes(key) && !commonPerShareMetricsApplicable(snapshot)) return null;
     if (!operatingIssuerMetricsApplicable(snapshot) && !['price','ma30w','low52w','high52w','return12m','nextEarnings'].includes(key)) return null;
@@ -145,9 +147,9 @@ export function proxyOpportunityEvidence(snapshot: Snapshot,horizonMonths:number
     component('dilution', 30, ['dilution'], value => clamp(10 - Math.max(0, value) * 40)),
     { name: 'financing-review', weight: 30, grade: financingKnown ? snapshot.deathSpiral === 'clean' ? 10 : snapshot.deathSpiral === 'mild' ? 7 : snapshot.deathSpiral === 'severe' ? 0 : 3 : null, keys: ['deathSpiral'], values: [snapshot.deathSpiral ?? 'missing'] },
   ]);
-  set('management', 'Dilution discipline, sourced insider purchases and earnings outcomes approximate alignment; governance diligence remains separate.', [
+  set('management', 'Dilution discipline and earnings outcomes approximate alignment; observed insider buying receives no positive proxy grade without ownership or compensation context to judge materiality.', [
     component('dilution-discipline', 40, ['dilution'], value => clamp(10 - Math.max(0, value) * 40)),
-    component('insider-purchases', 30, ['insiderBuyValue'], value => value > 0 ? 7 : 0),
+    { name: 'insider-purchase-materiality', weight: 30, grade: null, keys: [], values: [snapshot.insiderBuyValue != null ? 'withheld-no-ownership-or-compensation-denominator' : 'missing'] },
     { name: 'earnings-outcome', weight: 30, grade: snapshot.provenance?.lastEarningsStatus && modelEvidenceAvailable(snapshot.provenance.lastEarningsStatus, snapshot.asOf)
       &&(Date.parse(snapshot.asOf)-Date.parse(snapshot.provenance.lastEarningsStatus.periodEnd))/864e5<=400 ? snapshot.lastEarningsStatus === 'إيجابي' ? 7 : snapshot.lastEarningsStatus === 'سلبي' ? 0 : null : null, keys: ['lastEarningsStatus'], values: [snapshot.lastEarningsStatus ?? 'missing'] },
   ]);

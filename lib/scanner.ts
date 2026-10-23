@@ -38,9 +38,17 @@ function parseStoredBulkFundamentals(cik:number,payload:string):BulkFundamentals
 async function cachedMarketHistory(payload:string):Promise<Awaited<ReturnType<typeof historicalMarketData>>|null>{
  try{
   const value:any=await decodeHistoryCache(payload);
+  const validBar=(bar:any)=>{
+   const date=typeof bar?.date==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(bar.date)?new Date(`${bar.date}T00:00:00Z`):null;
+   const positive=(n:any)=>n==null||(typeof n==='number'&&Number.isFinite(n)&&n>0);
+   if(!date||!Number.isFinite(date.getTime())||date.toISOString().slice(0,10)!==bar.date||!Number.isFinite(bar.close)||bar.close<=0
+    ||!positive(bar.open)||!positive(bar.high)||!positive(bar.low)||(bar.volume!=null&&(!Number.isFinite(bar.volume)||bar.volume<0)))return false;
+   return (bar.high==null||bar.high>=Math.max(bar.close,bar.open??bar.close,bar.low??bar.close))
+    &&(bar.low==null||bar.low<=Math.min(bar.close,bar.open??bar.close,bar.high??bar.close));
+  };
   if(!value||typeof value.source!=='string'||typeof value.url!=='string'||typeof value.retrievedAt!=='string'||typeof value.availableAt!=='string'
     ||!Array.isArray(value.history)||!value.history.length
-    ||!value.history.every((bar:any)=>{if(!/^\d{4}-\d{2}-\d{2}$/.test(bar?.date)||!Number.isFinite(bar.close)||bar.close<=0)return false;const date=new Date(`${bar.date}T00:00:00Z`);return Number.isFinite(date.getTime())&&date.toISOString().slice(0,10)===bar.date;}))return null;
+    ||!value.history.every(validBar))return null;
   return value;
  }catch{return null;}
 }
@@ -411,6 +419,11 @@ export async function processScanBatch(runId: string) {
         snapshot.asOf = now;
         const last = history.at(-1);
         const historyEvidence={source:historical.source,url:historical.url,retrievedAt:historical.retrievedAt,availableAt:historical.availableAt,periodEnd:last?.date??now.slice(0,10),...(historical.meta?.currency?{currency:String(historical.meta.currency)}:{}),confidence:'medium' as const,rightsStatus:'unknown' as const};
+        const splitAdjustedHistory=historyEvidence.source.startsWith('Yahoo Finance chart API · split-adjusted daily history');
+        for (const key of ['return12m','low52w','high52w','ma30w'] as const) {
+          snapshot[key] = null;
+          delete snapshot.provenance[key];
+        }
         const session=completedSessionQuote(history,now);
         if(session){
           snapshot.price=session.price;
@@ -420,23 +433,28 @@ export async function processScanBatch(runId: string) {
         }
         snapshot=reviewShareSplits(snapshot,historical.splits,historical.splitReviewCoverageStart??history[0]?.date??'',last?.date??'',historyEvidence);
         snapshot=applyFinancingRisk(snapshot);
-        if (metrics.return12m != null) {
-          snapshot.return12m = metrics.return12m;
-          snapshot.provenance.return12m = { ...historyEvidence,tag:'12-month return' };
-        }
-        if (metrics.low52w != null) {
-          snapshot.low52w = metrics.low52w;
-          snapshot.provenance.low52w = { ...historyEvidence,tag:'52-week low' };
-        }
-        const yearBars = history.filter(bar => Date.parse(bar.date) >= Date.parse(now) - 365 * 86_400_000);
-        if (yearBars.length >= 240) {
-          snapshot.high52w = Math.max(...yearBars.map(bar => bar.high ?? bar.close));
-          snapshot.provenance.high52w = { ...historyEvidence,tag:'52-week high' };
-        }
-        if (metrics.ma30w != null) {
-          snapshot.ma30w = metrics.ma30w;
-          snapshot.provenance.ma30w = { ...historyEvidence,tag:'30 completed weekly closes' };
+        if (splitAdjustedHistory) {
+          if (metrics.return12m != null) {
+            snapshot.return12m = metrics.return12m;
+            snapshot.provenance.return12m = { ...historyEvidence,tag:'12-month return' };
+          }
+          if (metrics.low52w != null) {
+            snapshot.low52w = metrics.low52w;
+            snapshot.provenance.low52w = { ...historyEvidence,tag:'52-week low' };
+          }
+          const yearBars = history.filter(bar => Date.parse(bar.date) >= Date.parse(now) - 365 * 86_400_000);
+          if (yearBars.length >= 240) {
+            snapshot.high52w = Math.max(...yearBars.map(bar => bar.high ?? bar.close));
+            snapshot.provenance.high52w = { ...historyEvidence,tag:'52-week high' };
+          }
+          if (metrics.ma30w != null) {
+            snapshot.ma30w = metrics.ma30w;
+            snapshot.provenance.ma30w = { ...historyEvidence,tag:'30 completed weekly closes' };
+          }
         } else {
+          snapshot.dataIssues = [...(snapshot.dataIssues ?? []), 'لم تُحتسب مؤشرات التاريخ السنوي لأن مصدر التاريخ لا يثبت ضبط الانقسامات.'];
+        }
+        if (splitAdjustedHistory && metrics.ma30w == null) {
           snapshot.dataIssues = [...(snapshot.dataIssues ?? []), 'لم تتوفر 30 أسبوعاً متواصلاً صالحاً لحساب MA30W.'];
         }
         const dollarVolumes = history.slice(-20).map(bar => Number.isFinite(bar.volume) && bar.volume! >= 0 ? bar.close * bar.volume! : Number.NaN).filter(Number.isFinite).sort((a, b) => a - b);

@@ -2,11 +2,10 @@ import { db, ensureSchema } from './storage';
 import { httpError } from './http';
 
 const clientAddress = (request: Request) => {
-  const cloudflare=request.headers.get('cf-connecting-ip')?.trim();
-  if(cloudflare)return cloudflare;
   // In Railway's proxy chain the edge appends the connecting address last.
+  // Ignore caller-supplied CF-Connecting-IP on the Railway origin.
   const forwarded=request.headers.get('x-forwarded-for')?.split(',').map(value=>value.trim()).filter(Boolean);
-  return forwarded?.at(-1)||request.headers.get('x-real-ip')?.trim()||'shared-unknown-client';
+  return forwarded?.at(-1)||'shared-unknown-client';
 };
 
 /** Fixed-window, database-coordinated limiter shared by Worker isolates. */

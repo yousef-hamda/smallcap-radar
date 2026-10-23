@@ -89,5 +89,8 @@ export async function maintainHistoricalStorage(limit=50){
   await d.prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(cursorKey,'historical archive keyset checkpoint',new Date().toISOString(),JSON.stringify(state)).run();
  }
  const summaries=await compactHistoricalSummaries(boundedLimit);
- return {archived:candidates.length,compacted:summaries.compacted,cleaned,more:!cleanupDone||!state.exhausted||summaries.more};
+ const diagnosticLimit=Math.min(10,boundedLimit),retentionCutoff=new Date(Date.now()-90*24*60*60_000).toISOString();
+ const oldDiagnostics=(await d.prepare('SELECT rowid AS rowId FROM diag WHERE created_at<? ORDER BY created_at,rowid LIMIT ?').bind(retentionCutoff,diagnosticLimit).all()).results as any[];
+ if(oldDiagnostics.length)await d.batch(oldDiagnostics.map(row=>d.prepare('DELETE FROM diag WHERE rowid=?').bind(row.rowId)));
+ return {archived:candidates.length,compacted:summaries.compacted,cleaned,diagnosticsPruned:oldDiagnostics.length,more:!cleanupDone||!state.exhausted||summaries.more||oldDiagnostics.length===diagnosticLimit};
 }

@@ -209,6 +209,7 @@ function wilderRsi(closes: number[], period = 14) {
     averageGain = (averageGain * (period - 1) + Math.max(0, change)) / period;
     averageLoss = (averageLoss * (period - 1) + Math.max(0, -change)) / period;
   }
+  if (averageGain === 0 && averageLoss === 0) return 50;
   if (averageLoss === 0) return 100;
   if (averageGain === 0) return 0;
   return 100 - 100 / (1 + averageGain / averageLoss);
@@ -285,7 +286,7 @@ export function scoreTechnicalTiming(input: TechnicalTimingAssessment): Technica
     rationale: `Completed split-adjusted bars only. Price ${last > ma200 ? 'above' : 'below'} MA200; ${dailyTrend / 2.5}/4 daily averages are below price; weekly MA30 ${last > ma30w ? 'reclaimed' : 'not reclaimed'}; RSI(14) ${rsi14.toFixed(1)}; 63-session relative strength ${(relativeStrength63d * 100).toFixed(1)} percentage points versus the supplied benchmark. These are descriptive indicators, not a reversal prediction.`,
     sources: [input.source, input.weeklySource, input.monthlySource, input.benchmarkSource], confidence: [input.source, input.weeklySource, input.monthlySource, input.benchmarkSource].every(source => source.confidence === 'high') ? 'high' : 'medium',
     indicators: { ma20: rounded(ma20), ma50: rounded(ma50), ma100: rounded(ma100), ma200: rounded(ma200), ma30w: rounded(ma30w), rsi14: rounded(rsi14, 2), relativeStrength63d: rounded(relativeStrength63d, 5) },
-    calculation: { rubricId: 'technical-timing-v2-bar-cadence', inputs: [
+    calculation: { rubricId: 'technical-timing-v3-flat-rsi-neutral', inputs: [
       { name: 'completed-daily-bars', value: daily.length }, { name: 'completed-weekly-bars', value: weekly.length }, { name: 'completed-monthly-bars', value: monthly.length },
       { name: 'price', value: last }, { name: 'ma20', value: rounded(ma20) }, { name: 'ma50', value: rounded(ma50) },
       { name: 'ma100', value: rounded(ma100) }, { name: 'ma200', value: rounded(ma200) }, { name: 'ma30w', value: rounded(ma30w) },

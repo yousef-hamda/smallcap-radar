@@ -6,6 +6,14 @@ This section is authoritative. Every checkpoint below it is historical and must 
 
 The initial bullets preserve the state before the October 22 deep-audit release. The `October 22 deep audit remediation continuation` and the October 23 continuation below supersede their deployment, scan, and security status.
 
+### October 23 extended scoring and data-pipeline audit — local candidate
+
+- Independent reviews found edge cases in RSI, split-sensitive technical inputs, insider-purchase materiality, malformed price bars, SEC Frames dates/timestamps, stale scheduler projections, report aggregate readiness, missing-quote portfolio totals, anonymous portfolio storage limits, and diagnostic-log retention. The changes are recorded in [the project audit](docs/PROJECT_AUDIT_2026_10_22.md#october-23-deep-audit-continuation--scoring-ingestion-api-and-portfolio).
+- Opportunity spec is now `1.5.6-market-signal-edge-cases`. RSI treats a flat series as neutral; unsupported split-sensitive fallback history and unscaled insider purchases earn no proxy points. Missing quotes make full portfolio P/L and concentration unavailable. Pending report aggregates are explicitly shown as preparing.
+- Fresh final gates pass: typecheck, lint, engine 279/279, runtime/API 116/116, research 21/21, production build and repository/UI 92/92, and `git diff --check`. Runtime checks cover invalid writes leaving no revision rows, removal of empty anonymous revisions, rate-limit fallback headers, and indexed diagnostic retention. Work is uncommitted and undeployed; next steps are commit/push the candidate, deploy through Railway, then verify production endpoints and scan progression.
+- Railway connector access is now active and confirms project `small-cap`, production app and Postgres services healthy, and no staged changes. Latest observed app deployment is `55e55b2c-3d9b-45ff-bc09-6cfcad149d60`. Production scan/endpoint state must be rechecked after the new deployment.
+- Predictive performance remains unvalidated without point-in-time/delisted data and forward outcomes. Source/ratings completeness remains limited. Postgres credential rotation and Railway account audit/activity review remain the only known external Dashboard follow-ups.
+
 ### October 23 archive maintenance checkpoint follow-up
 
 - Initial durable-cursor fix `23d2845` was pushed and deployed as Railway deployment `80101894-98da-47d1-9102-c6327ed2eff5` (`SUCCESS`). The first idle maintenance tick still took 140.8 seconds and logged `archived:0`; a concurrent radar request returned 503 with `SQLITE_BUSY_SNAPSHOT`. Read-only metadata showed 5,357 `bulk_fundamentals` rows. A subsequent radar response was HTTP 200 with all 7,538 ranked rows and `aggregatesReady:true`; the app handler took 2.0 seconds, but one external round trip took 26 seconds. This showed the unbounded one-time terminal-cache cleanup remained the stall source.
