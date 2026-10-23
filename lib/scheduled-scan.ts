@@ -26,14 +26,14 @@ export async function scheduledScanTick(now=Date.now(),capacity?:{reusableBytes:
  if(!active&&projectionPublication&&!projectionPublication.done)return {projectionPublication};
  // Keep archival writes out of active scan ticks; scan checkpoints and source
  // acquisition share the same single SQLite volume.
- const maintenance=active?null:await maintainHistoricalStorage();
+ const maintenance=active?null:await maintainHistoricalStorage(25);
  if(!id) {
   const availableBytes=(capacity?.reusableBytes??0)+(capacity?.filesystemFreeBytes??0);
   if(maintenance?.more&&availableBytes<512*1024*1024)return {maintenance};
   if(capacity&&(availableBytes<512*1024*1024||capacity.filesystemFreeBytes<512*1024*1024))return {maintenance,pausedForCapacity:true};
   const latest=await db().prepare("SELECT id,created_at,updated_at,status FROM strategy_runs WHERE strategy_hash=? AND status IN ('complete','partial','failed') AND source LIKE 'Bulk Quotes/%' AND source LIKE '%· full' ORDER BY updated_at DESC,created_at DESC LIMIT 1").bind(currentHash()).first() as any;
   const refreshDelay=latest?.status==='failed'?30*60_000:24*60*60_000;
-  if(latest&&now-Date.parse(latest.updated_at||latest.created_at)<refreshDelay)return {idle:true,nextDueAt:new Date(Date.parse(latest.updated_at||latest.created_at)+refreshDelay).toISOString()};
+  if(latest&&now-Date.parse(latest.updated_at||latest.created_at)<refreshDelay)return {...(maintenance?{maintenance}:{}),idle:true,nextDueAt:new Date(Date.parse(latest.updated_at||latest.created_at)+refreshDelay).toISOString()};
   id=(await startScan('full')).id;
  }
  const result=await processScanBatch(String(id));

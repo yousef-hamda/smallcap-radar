@@ -2,6 +2,7 @@ import {refreshListingDirectory} from './sync-listing-directory.mjs';
 import {readStorageCapacity} from './storage-capacity.mjs';
 import {spawn} from 'node:child_process';
 import {setTimeout as delay} from 'node:timers/promises';
+import {schedulerDelay} from './scheduler-policy.mjs';
 
 const child=spawn(process.execPath,['node_modules/vite/bin/vite.js','preview'],{stdio:'inherit',env:{...process.env,CLOUDFLARE_INCLUDE_PROCESS_ENV:'true',WRANGLER_LOG_PATH:'.wrangler/wrangler.log'}});
 let stopped=false;
@@ -23,7 +24,7 @@ if(process.env.RAILWAY_VOLUME_MOUNT_PATH||process.env.RADAR_SCHEDULER_ENABLED===
     const result=await response.json();
     consecutiveFailures=0;
     if(!response.ok)console.error(`[scheduler] tick HTTP ${response.status}`,String(result.error??'').replace(/https?:\/\/\S+/g,'[source URL]').slice(0,300));
-    else {if(result.pausedForCapacity||result.busy||result.projectionPublication?.busy)tickDelayMs=30_000;const phase=String(result.projectionPublication?.runId??result.run?.id??'')+':'+String(result.projectionPublication?.cursor??result.run?.stage??'')+':'+String(result.pausedForCapacity??result.idle??result.projectionPublication?.done??'maintenance');if(phase!==lastPhase||Date.now()-lastLoggedAt>30000){console.log('[scheduler] progress',JSON.stringify({runId:result.projectionPublication?.runId??result.run?.id,stage:result.run?.stage,processed:result.run?.processed??result.projectionPublication?.processed,total:result.run?.total,cursor:result.projectionPublication?.cursor,ratingPublication:result.ratingPublication?{total:result.ratingPublication.total,offset:result.ratingPublication.offset,done:result.ratingPublication.done}:undefined,archived:result.maintenance?.archived,pausedForCapacity:result.pausedForCapacity,idle:result.idle,busy:result.busy??result.projectionPublication?.busy}));lastLoggedAt=Date.now();lastPhase=phase;}}
+    else {tickDelayMs=schedulerDelay(result);const phase=String(result.projectionPublication?.runId??result.run?.id??'')+':'+String(result.projectionPublication?.cursor??result.run?.stage??'')+':'+String(result.pausedForCapacity??result.idle??result.projectionPublication?.done??'maintenance');if(phase!==lastPhase||Date.now()-lastLoggedAt>30000){console.log('[scheduler] progress',JSON.stringify({runId:result.projectionPublication?.runId??result.run?.id,stage:result.run?.stage,processed:result.run?.processed??result.projectionPublication?.processed,total:result.run?.total,cursor:result.projectionPublication?.cursor,ratingPublication:result.ratingPublication?{total:result.ratingPublication.total,offset:result.ratingPublication.offset,done:result.ratingPublication.done}:undefined,archived:result.maintenance?.archived,pausedForCapacity:result.pausedForCapacity,idle:result.idle,busy:result.busy??result.projectionPublication?.busy}));lastLoggedAt=Date.now();lastPhase=phase;}}
    }catch(error){consecutiveFailures++;console.error('[scheduler] tick failed',error instanceof Error?error.name:'UnknownError');if(error instanceof Error&&error.name==='TimeoutError')tickDelayMs=Math.min(900_000,180_000*2**Math.min(consecutiveFailures-1,3));}
    await delay(tickDelayMs);
   }
