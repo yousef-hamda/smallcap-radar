@@ -39,7 +39,7 @@ export async function GET(req:Request){
   // regression without logging request parameters or stored portfolio data.
   const detail=error instanceof Error?{name:error.name,message:error.message.slice(0,240)}:{name:'UnknownError',message:'Non-Error exception'};
   console.error('[radar:read] request failed',detail);
-  return json({error:statusOf(error,503)===409&&error instanceof Error?error.message:'تعذّر قراءة قاعدة البيانات'},statusOf(error,503));
+  return json({error:statusOf(error,503)===409&&error instanceof Error?error.message:'تعذّر قراءة قاعدة البيانات',...(typeof (error as any)?.code==='string'?{code:(error as any).code}:{})},statusOf(error,503));
  }
 }
 export async function POST(req:Request){

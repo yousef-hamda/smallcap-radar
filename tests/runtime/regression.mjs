@@ -10,7 +10,7 @@ import {setHistoryResult,setOpportunityResearchResult,setUniverse,setBulkQuoteTr
 import {evaluateStrategy} from '../../.test-build/engine.mjs';
 import {proxyOpportunityEvidence} from '../../.test-build/opportunity-proxies.mjs';
 import {fixtures} from '../../.test-build/fixtures.mjs';
-import {ensureSchema,db,currentHash,readState,insertSnapshot,invalidateStateCache,readResearchConflictCount,migrateCompatibleAcquisitionRuns,publishResearchFitRankProjectionBatch} from '../../.test-build/storage.mjs';
+import {ensureSchema,db,currentHash,readState,insertSnapshot,invalidateStateCache,readResearchConflictCount,migrateCompatibleAcquisitionRuns,publishResearchFitRankProjectionBatch,publishRunAggregatesBatch} from '../../.test-build/storage.mjs';
 import {processScanBatch,startScan,historyCandidate,preliminaryCandidates} from '../../.test-build/scanner.mjs';
 import {decodeHistoryCache} from '../../.test-build/history-cache.mjs';
 import {hasVerifiedShareRatio} from '../../.test-build/research.mjs';
@@ -840,6 +840,8 @@ test('15000 directory rows use bounded durable pages and resume quote progress',
   const initialized=await processScanBatch('large-directory');assert.equal(initialized.run.total,15000);assert.equal(initialized.run.stage,1);
   const max=sqlite.prepare("SELECT MAX(length(payload)) AS bytes,COUNT(*) AS pages FROM raw_cache WHERE key LIKE 'universe:large-directory:quotes:%'").get();assert.equal(max.pages,150);assert(max.bytes<1_000_000);
   for(let chunk=0;chunk<188;chunk++)await publishDirectoryRatings(initialized.run,100);
+  const pendingAggregates=await readState({runId:'large-directory:ratings-v5',limit:1});assert.equal(pendingAggregates.aggregatesReady,false);assert.equal(pendingAggregates.summary.opportunityRanked,null);assert.equal(pendingAggregates.coverage,null);
+  let aggregates=await publishRunAggregatesBatch('large-directory:ratings-v5',100),aggregateTicks=1;while(!aggregates.done&&aggregateTicks++<200)aggregates=await publishRunAggregatesBatch('large-directory:ratings-v5',100);assert.equal(aggregates.done,true);const persistedAggregate=sqlite.prepare("SELECT complete,json_extract(summary_json,'$.summary.total') AS total,json_extract(summary_json,'$.summary.opportunityRanked') AS ranked,cursor_symbol FROM opportunity_run_aggregates WHERE run_id='large-directory:ratings-v5'").get();assert.equal(persistedAggregate.total,15000);assert.equal(persistedAggregate.ranked,15000,JSON.stringify(persistedAggregate));
   const ratings=await readState({runId:'large-directory:ratings-v5',limit:1});assert.equal(ratings.summary.total,15000);assert.equal(ratings.summary.opportunityRanked,15000);assert.equal(ratings.summary.missingFactorScores,0);assert.equal(ratings.summary.missingFinalGrades,0);assert.equal(ratings.storedEvaluations[0].opportunity.factors.length,8);assert.equal(ratings.rankPositions[0],1);assert.notEqual(ratings.run.id,ratings.dataRunId,'complete directory publication does not hide ongoing acquisition');
   for(let page=0;page<150;page++){const result=await processScanBatch('large-directory');assert.equal(result.run.stage,page===149?4:1);if(page<149)assert.equal(result.run.offset,(page+1)*100);}
   assert.equal(sqlite.prepare("SELECT universe FROM strategy_runs WHERE id='large-directory'").get().universe,'paged-v2');
@@ -996,6 +998,7 @@ test('all listings retain canonical saved grades, full-universe ranks, reports a
   if(index===1)snapshot.opportunityResearch={earnings:{conflicts:['Partial malformed historical section']}};
   await db().prepare('INSERT INTO fundamental_snapshots(id,run_id,symbol,as_of,payload,evaluation) VALUES(?,?,?,?,?,?)').bind(`${id}:${symbol}`,id,symbol,snapshot.asOf,JSON.stringify(snapshot),'{}').run();
  }
+ await readState({runId:id,limit:1});let releaseAggregate=await publishRunAggregatesBatch(id,100),releaseAggregateTicks=1;while(!releaseAggregate.done&&releaseAggregateTicks++<10)releaseAggregate=await publishRunAggregatesBatch(id,100);assert.equal(releaseAggregate.done,true);
  invalidateStateCache();const symbols=[],evaluations=new Map();
  for(let offset=0;offset<260;offset+=37){
   const response=await GET(new Request(`https://radar.test/api/radar?limit=37&offset=${offset}`));assert.equal(response.status,200);const page=await response.json();

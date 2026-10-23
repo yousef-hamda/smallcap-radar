@@ -21,7 +21,7 @@ import PortfolioView from './portfolio-view';
 type View='opportunity'|'favorites'|'portfolio';
 type AccountSession={username:string};
 type RankRelease={runId:string;revision:number;rubricHash:string;token:string};
-type RadarData={release?:RankRelease|null;run:ScanRun|null;pausedForCapacity?:boolean;dataRun:ScanRun|null;dataRunId?:string;snapshots:Snapshot[];rankPositions?:number[];storedEvaluations?:Array<{opportunity?:OpportunityEvaluation}>;favorites:string[];portfolioCount?:number;coverage?:{runId:string;total:number;fields:Record<string,number>}|null;summary:{total:number;opportunityRanked?:number;opportunityNeedsResearch?:number;opportunityExcluded?:number;opportunityWithEvidence?:number;stale?:boolean};page:{hasMore:boolean;offset?:number}};
+type RadarData={release?:RankRelease|null;run:ScanRun|null;pausedForCapacity?:boolean;dataRun:ScanRun|null;dataRunId?:string;snapshots:Snapshot[];rankPositions?:number[];storedEvaluations?:Array<{opportunity?:OpportunityEvaluation}>;favorites:string[];portfolioCount?:number;coverage?:{runId:string;total:number;fields:Record<string,number>}|null;aggregatesReady?:boolean;summary:{total:number;opportunityRanked?:number|null;opportunityNeedsResearch?:number|null;opportunityExcluded?:number|null;opportunityWithEvidence?:number|null;stale?:boolean};page:{hasMore:boolean;offset?:number}};
 type RatedRow={s:Snapshot;e:OpportunityEvaluation;rank:number|null};
 type CardQuote={price?:number;dailyChange?:number;provenance?:Snapshot['provenance']};
 const names:Record<View,string>={opportunity:'الفرص الاستثمارية',favorites:'المفضلة',portfolio:'محفظتي'};
@@ -53,9 +53,9 @@ export default function RadarApp(){
  const [settings,setSettings]=useState(false),[notificationBusy,setNotificationBusy]=useState(false),[saving,setSaving]=useState<string|null>(null);
  const [publishSecret,setPublishSecret]=useState('');
  const [hasMore,setHasMore]=useState(false),[copied,setCopied]=useState('');
- const selection=useRef<AbortController|null>(null),lastView=useRef({view,search}),listRequest=useRef<AbortController|null>(null);
+ const selection=useRef<AbortController|null>(null),lastView=useRef({view,search}),listRequest=useRef<AbortController|null>(null),refreshRef=useRef<((append?:boolean)=>Promise<void>)|null>(null);
  const releaseRef=useRef<RankRelease|null>(null);
- const cursor=useRef(0),loadingRequest=useRef(false),favoriteVersion=useRef(0),favoritePending=useRef(false),lastResume=useRef(0);
+ const cursor=useRef(0),loadingRequest=useRef(false),favoriteVersion=useRef(0),favoritePending=useRef(false),lastResume=useRef(0),projectionRetries=useRef(0);
  const progress=scanProgress(data?.run);
  const scanPaused=!!data?.pausedForCapacity&&progress.active;
  const refresh=useCallback(async(append=false)=>{
@@ -71,7 +71,7 @@ export default function RadarApp(){
    // The portfolio has its own data view. Its radar request updates shared
    // header counts, but must not publish stock-list rows without their ratings.
    const pageRows:RatedRow[]=view==='portfolio'?[]:snapshots.map((s,index)=>({s,e:canonicalRating(s,payload.storedEvaluations?.[index]?.opportunity),rank:payload.rankPositions?.[index]??null}));
-   releaseRef.current=payload.release??null;setData(payload);if(version===favoriteVersion.current&&!favoritePending.current)setFavorites(payload.favorites);setPortfolioCount(payload.portfolioCount??0);setHasMore(payload.page.hasMore);cursor.current=offset+snapshots.length;setListError('');setError('');
+   projectionRetries.current=0;if(payload.aggregatesReady===false&&view==='opportunity'){window.setTimeout(()=>{if(!controller.signal.aborted&&!document.hidden)void refreshRef.current?.(false)},15000)}releaseRef.current=payload.release??null;setData(payload);if(version===favoriteVersion.current&&!favoritePending.current)setFavorites(payload.favorites);setPortfolioCount(payload.portfolioCount??0);setHasMore(payload.page.hasMore);cursor.current=offset+snapshots.length;setListError('');setError('');
    if(view!=='portfolio'){
     setRatedRows(old=>append?[...old,...pageRows.filter(row=>!old.some(previous=>previous.s.symbol===row.s.symbol))]:pageRows);
     void saveOffline({savedAt:new Date().toISOString(),view,query:search,offset,pageSize:40,hasMore:payload.page.hasMore,run:payload.dataRun,release:payload.release,snapshots:payload.snapshots,evaluations:payload.storedEvaluations,ranks:payload.rankPositions}).catch(()=>{});
@@ -85,9 +85,10 @@ export default function RadarApp(){
      }).catch(()=>{if(!controller.signal.aborted&&view==='favorites')setNotice('تعذّر تحديث أسعار المفضلة؛ عُرضت آخر لقطة محفوظة.')});
     }
    }
-  }catch(e){if(!controller.signal.aborted){const message=e instanceof Error?e.message:'تعذّر تحميل البيانات';setListError(message);setError(message)}}
+  }catch(e){if(!controller.signal.aborted){const message=e instanceof Error?e.message:'تعذّر تحميل البيانات';if((e as any)?.code==='projection_pending'&&projectionRetries.current<4){projectionRetries.current++;window.setTimeout(()=>{if(!controller.signal.aborted)void refreshRef.current?.(false)},1200*projectionRetries.current)}else{setListError(message);setError(message)}}}
   finally{if(!controller.signal.aborted){setLoading(false);loadingRequest.current=false;}}
  },[opportunityState,researchFit]);
+ useEffect(()=>{refreshRef.current=refresh},[refresh]);
  useEffect(()=>{lastView.current={view,search};cursor.current=0;queueMicrotask(()=>{setLoading(true);setRatedRows([]);void refresh()});return()=>listRequest.current?.abort()},[view,search,opportunityState,researchFit,refresh]);
  useEffect(()=>{
   if(!progress.active)return;
@@ -235,7 +236,8 @@ export default function RadarApp(){
      {!researchFit&&<div className="model-state"><b>الترتيب النهائي لجميع الأسهم</b><span>ثمانية عوامل بأوزان ثابتة. تُستخدم تقديرات حسابية قابلة للتفسير عند غياب المراجعة المكتملة؛ المكونات المفقودة تحصل على صفر. الدرجة المعروضة هي نفسها المستخدمة في الترتيب.</span></div>}
      <div className="research-fit-switch" role="group" aria-label="طريقة عرض الفرص"><button type="button" aria-pressed={!researchFit} onClick={()=>setResearchFit(false)}>جميع الأسهم</button><button type="button" aria-pressed={researchFit} onClick={()=>setResearchFit(true)}>قائمة بحث أولية</button></div>
      {researchFit&&<details className="research-fit-details"><summary>قائمة بحث أولية وليست فرص شراء مؤكدة · عرض الشروط</summary><p>شركات تشغيلية بأسهم عادية ومدرجة حاليًا، قيمتها السوقية حتى 5 مليارات دولار، مع إيرادات سنوية مرتبطة بالمُصدر من SEC، وسيولة مرصودة لا تقل عن 150 ألف دولار يوميًا، وإشارة تقييم موجبة، ودون خطر تمويل شديد أو مرتفع معروف. تُعرض مراجعة التمويل المؤهلة أولًا ثم حسب الرتبة الأصلية؛ الرقم على كل بطاقة هو رتبتها في القائمة الكاملة. بيانات السوق قد تكون حقوق استخدامها غير محسومة.</p></details>}
-     <div className="brief-stats"><div><b>{data?.summary.total??0}</b><span>أسهم في الترتيب</span></div><div><b>{data?.summary.opportunityRanked??0}</b><span>تقييم نهائي محسوب</span></div><div><b>{data?.summary.opportunityWithEvidence??0}</b><span>لها أدلة مصدرية</span></div></div>
+     {data?.aggregatesReady===false&&<div className="message" role="status">يجري تجهيز ملخص البيانات وتغطية المصادر في الخلفية؛ ستظهر الأعداد عند اكتمالهما.</div>}
+     <div className="brief-stats"><div><b>{data?.summary.total??0}</b><span>أسهم في الترتيب</span></div><div><b>{data?.summary.opportunityRanked??'—'}</b><span>تقييم نهائي محسوب</span></div><div><b>{data?.summary.opportunityWithEvidence??'—'}</b><span>لها أدلة مصدرية</span></div></div>
     <details><summary>كيف يعمل الترتيب والدرجة؟</summary><p>القيمة العادلة 25%، المحفزات 20%، القوة المالية 15%، جودة الأرباح 12%، الميزة التنافسية 10%، المخاطر 10%، الإدارة والحوكمة 5%، والتوقيت الفني 3%. الدرجة النهائية هي مجموع درجة كل عامل من 10 مضروبة في وزنه ومقسومة على 10. عند التعادل يُستخدم رمز السهم بترتيب ثابت.</p><p>تغطية مدخلات النموذج تقيس الأجزاء التي تملك بيانات قابلة للحساب، وتغطية المصادر تقيس المراجعة المؤهلة. كلاهما منفصل عن اكتمال الدرجة الرقمية. نقص الأدلة لا يُعد استنتاجًا إيجابيًا ولا يمنع ظهور السهم. التقييم أداة بحث وليس توقعًا للعائد أو توصية استثمارية.</p></details></>}
 
     </>}

@@ -65,6 +65,7 @@ export async function ensureSchema(){
   d.prepare("CREATE INDEX IF NOT EXISTS opportunity_rank_position_idx ON opportunity_rankings(run_id,rank_position)"),
   d.prepare("CREATE TABLE IF NOT EXISTS opportunity_rank_projection_versions (run_id TEXT PRIMARY KEY,revision INTEGER NOT NULL,rubric_hash TEXT NOT NULL,projection_version TEXT NOT NULL,cursor_rank_position INTEGER NOT NULL DEFAULT 0,complete INTEGER NOT NULL DEFAULT 0)"),
   d.prepare("CREATE TABLE IF NOT EXISTS opportunity_rank_projection_leases (run_id TEXT PRIMARY KEY,owner TEXT NOT NULL,lease_until INTEGER NOT NULL)"),
+  d.prepare("CREATE TABLE IF NOT EXISTS opportunity_run_aggregates (run_id TEXT PRIMARY KEY,revision INTEGER NOT NULL,rubric_hash TEXT NOT NULL,cursor_symbol TEXT NOT NULL DEFAULT '',complete INTEGER NOT NULL DEFAULT 0,summary_json TEXT NOT NULL DEFAULT '{}',coverage_json TEXT NOT NULL DEFAULT '{}',owner TEXT NOT NULL DEFAULT '',lease_until INTEGER NOT NULL DEFAULT 0)"),
   d.prepare("CREATE TABLE IF NOT EXISTS opportunity_rating_versions (run_id TEXT PRIMARY KEY,revision INTEGER NOT NULL DEFAULT 0)"),
   d.prepare("CREATE TABLE IF NOT EXISTS opportunity_rank_versions (run_id TEXT PRIMARY KEY,revision INTEGER NOT NULL,rubric_hash TEXT NOT NULL)"),
   d.prepare("CREATE TABLE IF NOT EXISTS opportunity_evaluation_leases (run_id TEXT PRIMARY KEY,owner TEXT NOT NULL,lease_until INTEGER NOT NULL)"),
@@ -223,6 +224,46 @@ export async function publishResearchFitRankProjectionBatch(runId:string,batchSi
  }finally{await d.prepare('DELETE FROM opportunity_rank_projection_leases WHERE run_id=? AND owner=?').bind(runId,owner).run();}
 }
 
+/** Build exact run summary and coverage in bounded JSON-parsing slices. A
+ * completed aggregate is published only for the exact saved rating revision. */
+export async function publishRunAggregatesBatch(runId:string,batchSize=100){
+ await ensureSchema();
+ const size=Math.max(1,Math.min(200,Math.floor(Number.isFinite(batchSize)?batchSize:100))),d=db(),now=Date.now(),owner=crypto.randomUUID(),rubric=opportunitySpecHash();
+ const version=await d.prepare('SELECT v.revision,v.rubric_hash,COALESCE(r.revision,0) AS current_revision FROM opportunity_rank_versions v LEFT JOIN opportunity_rating_versions r ON r.run_id=v.run_id WHERE v.run_id=?').bind(runId).first() as any;
+ if(!version||version.rubric_hash!==rubric||Number(version.revision)!==Number(version.current_revision))return {runId,done:false,busy:false,processed:0,cursor:'',revision:null as number|null};
+ const revision=Number(version.revision),lease=await d.prepare(`INSERT INTO opportunity_run_aggregates(run_id,revision,rubric_hash,cursor_symbol,complete,summary_json,coverage_json,owner,lease_until) VALUES(?,?,?,'',0,'{}','{}',?,?) ON CONFLICT(run_id) DO UPDATE SET revision=excluded.revision,rubric_hash=excluded.rubric_hash,cursor_symbol=CASE WHEN opportunity_run_aggregates.revision<>excluded.revision OR opportunity_run_aggregates.rubric_hash<>excluded.rubric_hash THEN '' ELSE opportunity_run_aggregates.cursor_symbol END,complete=CASE WHEN opportunity_run_aggregates.revision<>excluded.revision OR opportunity_run_aggregates.rubric_hash<>excluded.rubric_hash THEN 0 ELSE opportunity_run_aggregates.complete END,summary_json=CASE WHEN opportunity_run_aggregates.revision<>excluded.revision OR opportunity_run_aggregates.rubric_hash<>excluded.rubric_hash THEN '{}' ELSE opportunity_run_aggregates.summary_json END,coverage_json=CASE WHEN opportunity_run_aggregates.revision<>excluded.revision OR opportunity_run_aggregates.rubric_hash<>excluded.rubric_hash THEN '{}' ELSE opportunity_run_aggregates.coverage_json END,owner=excluded.owner,lease_until=excluded.lease_until WHERE opportunity_run_aggregates.revision<>excluded.revision OR opportunity_run_aggregates.rubric_hash<>excluded.rubric_hash OR (opportunity_run_aggregates.complete=0 AND opportunity_run_aggregates.lease_until<?) RETURNING owner`).bind(runId,revision,rubric,owner,now+180_000,now).first() as any;
+ if(lease?.owner!==owner){const ready=await d.prepare('SELECT cursor_symbol,revision FROM opportunity_run_aggregates WHERE run_id=? AND revision=? AND rubric_hash=? AND complete=1').bind(runId,revision,rubric).first() as any;return {runId,done:!!ready,busy:!ready,processed:0,cursor:ready?.cursor_symbol??null,revision};}
+ try{
+  const progress=await d.prepare('SELECT cursor_symbol,summary_json,coverage_json FROM opportunity_run_aggregates WHERE run_id=? AND owner=? AND revision=? AND rubric_hash=?').bind(runId,owner,revision,rubric).first() as any;
+  let state:any={summary:{total:0,opportunityRanked:0,opportunityNeedsResearch:0,opportunityExcluded:0,opportunityWithEvidence:0,missingFactorScores:0,missingFinalGrades:0,opportunityFactorIncomplete:Object.fromEntries(OPPORTUNITY_SPEC.factors.map(f=>[f.id,0])),opportunityEligibilityBlockers:{}},factorSeen:{},coverage:{total:0,fields:Object.fromEntries(['price','marketCap','revenue','netIncome','fcf','cash','debt','medianDollarVolume20d','return12m','low52w','ma30w','dilution'].map(key=>[key,0]))}};
+  if(progress?.summary_json&&progress.summary_json!=='{}')try{state=JSON.parse(progress.summary_json)}catch{/* reset malformed aggregate progress */}
+  let cursor=String(progress?.cursor_symbol??'');
+  const next=(await d.prepare('SELECT symbol,payload,evaluation FROM fundamental_snapshots WHERE run_id=? AND symbol>? ORDER BY symbol COLLATE BINARY ASC LIMIT ?').bind(runId,cursor,size+1).all()).results as any[],rows=next.slice(0,size),done=next.length<=size;
+  const coverageFields=Object.keys(state.coverage.fields);
+  for(const row of rows){
+   const payload=JSON.parse(String(row.payload)),opportunity=JSON.parse(String(row.evaluation))?.opportunity??{},factors=Array.isArray(opportunity.factors)?opportunity.factors:[],checks=Array.isArray(opportunity.checks)?opportunity.checks:[];
+   state.summary.total++;state.coverage.total++;
+   if(opportunity.state==='ranked')state.summary.opportunityRanked++;else if(opportunity.state==='needs-research')state.summary.opportunityNeedsResearch++;else if(opportunity.state==='excluded')state.summary.opportunityExcluded++;
+   if(factors.some((factor:any)=>factor.evidenced===true||factor.evidenced===1))state.summary.opportunityWithEvidence++;
+   if(factors.some((factor:any)=>typeof factor.score!=='number'))state.summary.missingFactorScores++;
+   if(typeof opportunity.score!=='number')state.summary.missingFinalGrades++;
+   for(const factor of factors){const id=String(factor.id??'');if(!id)continue;state.factorSeen[id]=(Number(state.factorSeen[id])||0)+1;if(factor.complete!==1&&factor.complete!==true)state.summary.opportunityFactorIncomplete[id]=(Number(state.summary.opportunityFactorIncomplete[id])||0)+1;}
+   for(const check of checks){if(!['FAIL','UNKNOWN'].includes(String(check.status)))continue;const id=`${check.id??'null'}:${check.status}`,entry=state.summary.opportunityEligibilityBlockers[id]??{status:check.status,role:check.role??null,count:0};entry.count++;state.summary.opportunityEligibilityBlockers[id]=entry;}
+   for(const key of coverageFields)if(typeof payload[key]==='number')state.coverage.fields[key]++;
+  }
+  for(const factor of OPPORTUNITY_SPEC.factors)if(!state.factorSeen[factor.id])state.summary.opportunityFactorIncomplete[factor.id]=state.summary.total;
+  cursor=String(rows.at(-1)?.symbol??cursor);
+  const update=await d.prepare('UPDATE opportunity_run_aggregates SET cursor_symbol=?,complete=?,summary_json=?,coverage_json=?,lease_until=? WHERE run_id=? AND owner=? AND revision=? AND rubric_hash=? AND EXISTS(SELECT 1 FROM opportunity_rank_versions v LEFT JOIN opportunity_rating_versions rv ON rv.run_id=v.run_id WHERE v.run_id=? AND v.revision=? AND v.rubric_hash=? AND COALESCE(rv.revision,0)=?) RETURNING run_id').bind(cursor,done?1:0,JSON.stringify(state),JSON.stringify({...state.coverage,runId}),Date.now()+180_000,runId,owner,revision,rubric,runId,revision,rubric,revision).first() as any;
+  if(!update)throw Object.assign(Error('تغيّرت نسخة التقييم أثناء تجهيز ملخص البيانات؛ أعد المحاولة.'),{status:409});
+  return {runId,done,busy:false,processed:rows.length,cursor,revision};
+ }finally{await d.prepare("UPDATE opportunity_run_aggregates SET owner='',lease_until=0 WHERE run_id=? AND owner=?").bind(runId,owner).run();}
+}
+async function readRunAggregates(runId:string,revision:number){
+ const row=await db().prepare('SELECT summary_json,coverage_json FROM opportunity_run_aggregates WHERE run_id=? AND revision=? AND rubric_hash=? AND complete=1').bind(runId,revision,opportunitySpecHash()).first() as any;
+ if(!row)return null;
+ try{const state=JSON.parse(row.summary_json);return {summary:state.summary,coverage:JSON.parse(row.coverage_json)}}catch{return null;}
+}
+
 export async function readState(options:{strategy?:'opportunity'|'favorites';opportunityState?:'ranked'|'needs-research'|'excluded'|'all';researchFit?:boolean;limit?:number;offset?:number;owner?:string;query?:string;runId?:string;releaseToken?:string;view?:'compact'}={}){await ensureSchema();const d=db();const cacheKey=JSON.stringify([currentHash(),opportunitySpecHash(),options.strategy||'opportunity',options.opportunityState||'ranked',options.researchFit===true,options.owner||'',options.query||'',options.limit??150,options.offset??0,options.runId,options.releaseToken,options.view]);
  if(options.runId&&options.releaseToken)await readRankReleaseIdentity(options.runId,options.releaseToken);
  const cached=stateCache.get(cacheKey);if(cached&&cached.expiresAt>Date.now())return cached.value;if(cached)stateCache.delete(cacheKey);const active=await d.prepare("SELECT * FROM strategy_runs WHERE strategy_hash=? ORDER BY CASE WHEN source LIKE 'Bulk Quotes/%' AND status IN ('running','partial') AND stage<13 THEN 0 ELSE 1 END,updated_at DESC,created_at DESC LIMIT 1").bind(currentHash()).first();
@@ -247,7 +288,7 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
  // run remains stale as data; only its evaluation can be current.
  if(latest)await ensureRunEvaluations(String(latest.id));
  const release=latest?await readRankReleaseIdentity(String(latest.id),options.releaseToken):null;
- if(latest&&options.researchFit===true&&strategy==='opportunity'&&!await researchFitProjectionReady(String(latest.id)))throw Object.assign(Error('قائمة البحث قيد التجهيز؛ حاول مجددًا بعد قليل.'),{status:409});
+ if(latest&&options.researchFit===true&&strategy==='opportunity'&&!await researchFitProjectionReady(String(latest.id)))throw Object.assign(Error('قائمة البحث قيد التجهيز؛ حاول مجددًا بعد قليل.'),{status:409,code:'projection_pending'});
  const currentEvaluation=!!latest;
  const limit=Math.max(1,Math.min(250,Math.floor(options.limit??150)));
  const offset=Math.max(0,Math.floor(options.offset??0));
@@ -268,14 +309,17 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
   }
  }
  const portfolioCount=options.owner?Number((await d.prepare("SELECT COUNT(*) AS count FROM (SELECT symbol FROM portfolio_transactions WHERE owner=? GROUP BY symbol HAVING SUM(CASE side WHEN 'buy' THEN quantity ELSE -quantity END)>0.00000001)").bind(options.owner).first() as any)?.count||0):0;
- let summaryRow=currentEvaluation?runSummaryCache.get(String(latest.id)):null;
- if(currentEvaluation&&!summaryRow){
+ const exactRowCount=latest?Number((await d.prepare('SELECT COUNT(*) AS total FROM fundamental_snapshots WHERE run_id=?').bind(latest.id).first() as any)?.total??0):0;
+ const aggregateCacheKey=`${latest?.id??''}:${release?.revision??0}:${opportunitySpecHash()}`;
+ const durableAggregates=currentEvaluation&&release?await readRunAggregates(String(latest.id),Number(release.revision)):null;
+ let summaryRow=durableAggregates?.summary??(currentEvaluation&&exactRowCount<=500?runSummaryCache.get(aggregateCacheKey):null);
+ if(currentEvaluation&&!summaryRow&&exactRowCount<=500){
  summaryRow=await d.prepare(`SELECT COUNT(*) AS total, SUM(CASE WHEN json_extract(evaluation, '$.opportunity.state')='ranked' THEN 1 ELSE 0 END) AS opportunityRanked, SUM(CASE WHEN json_extract(evaluation, '$.opportunity.state')='needs-research' THEN 1 ELSE 0 END) AS opportunityNeedsResearch, SUM(CASE WHEN json_extract(evaluation, '$.opportunity.state')='excluded' THEN 1 ELSE 0 END) AS opportunityExcluded, SUM(CASE WHEN EXISTS(SELECT 1 FROM json_each(evaluation,'$.opportunity.factors') f WHERE json_extract(f.value,'$.evidenced')=1) THEN 1 ELSE 0 END) AS opportunityWithEvidence, SUM(CASE WHEN EXISTS(SELECT 1 FROM json_each(evaluation,'$.opportunity.factors') f WHERE json_type(f.value,'$.score') IS NULL OR json_type(f.value,'$.score') NOT IN ('integer','real')) THEN 1 ELSE 0 END) AS missingFactorScores, SUM(CASE WHEN json_type(evaluation,'$.opportunity.score') IN ('integer','real') THEN 0 ELSE 1 END) AS missingFinalGrades FROM fundamental_snapshots WHERE run_id=?`).bind(latest.id).first() as any;
  const incomplete=(await d.prepare(`SELECT json_extract(f.value,'$.id') AS id,SUM(CASE WHEN json_extract(f.value,'$.complete')=1 THEN 0 ELSE 1 END) AS count FROM fundamental_snapshots s,json_each(s.evaluation,'$.opportunity.factors') f WHERE s.run_id=? GROUP BY json_extract(f.value,'$.id')`).bind(latest.id).all()).results as any[];
   summaryRow.opportunityFactorIncomplete=Object.fromEntries(OPPORTUNITY_SPEC.factors.map(factor=>[factor.id,Number(incomplete.find(row=>row.id===factor.id)?.count??summaryRow.total)]));
   const blockedChecks=(await d.prepare(`SELECT json_extract(c.value,'$.id') AS id,json_extract(c.value,'$.status') AS status,json_extract(c.value,'$.role') AS role,COUNT(*) AS count FROM fundamental_snapshots s,json_each(s.evaluation,'$.opportunity.checks') c WHERE s.run_id=? AND json_extract(c.value,'$.status') IN ('FAIL','UNKNOWN') GROUP BY json_extract(c.value,'$.id'),json_extract(c.value,'$.status'),json_extract(c.value,'$.role')`).bind(latest.id).all()).results as any[];
   summaryRow.opportunityEligibilityBlockers=Object.fromEntries(blockedChecks.map(row=>[`${row.id}:${row.status}`,{status:row.status,role:row.role,count:Number(row.count)}]));
-  runSummaryCache.set(String(latest.id),summaryRow);
+  runSummaryCache.set(aggregateCacheKey,summaryRow);
  }
  const search=options.query?.trim().toLowerCase().slice(0,100)||'';
  // Persist the current evaluator before ranking so reloads use the same grade. Durable rows
@@ -313,8 +357,8 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
   if(currentEvaluation&&typeof r.evaluation==='string')return {payload:r.payload,evaluation:r.evaluation,rank_position:r.rank_position};
   const s=applyFinancingRisk(JSON.parse(r.payload));return {payload:JSON.stringify(s),evaluation:JSON.stringify({opportunity:evaluateSnapshotOpportunity(s)})}
  }):[];
- let coverageRow=latest?runCoverageCache.get(String(latest.id)):null;
- if(latest&&!coverageRow){coverageRow=await d.prepare(`SELECT COUNT(*) AS total,
+ let coverageRow=durableAggregates?.coverage??(latest&&exactRowCount<=500?runCoverageCache.get(aggregateCacheKey):null);
+ if(latest&&!coverageRow&&exactRowCount<=500){coverageRow=await d.prepare(`SELECT COUNT(*) AS total,
   SUM(CASE WHEN json_type(payload,'$.price') IN ('integer','real') THEN 1 ELSE 0 END) AS price,
   SUM(CASE WHEN json_type(payload,'$.marketCap') IN ('integer','real') THEN 1 ELSE 0 END) AS marketCap,
   SUM(CASE WHEN json_type(payload,'$.revenue') IN ('integer','real') THEN 1 ELSE 0 END) AS revenue,
@@ -327,8 +371,9 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
   SUM(CASE WHEN json_type(payload,'$.low52w') IN ('integer','real') THEN 1 ELSE 0 END) AS low52w,
   SUM(CASE WHEN json_type(payload,'$.ma30w') IN ('integer','real') THEN 1 ELSE 0 END) AS ma30w,
   SUM(CASE WHEN json_type(payload,'$.dilution') IN ('integer','real') THEN 1 ELSE 0 END) AS dilution
-  FROM fundamental_snapshots WHERE run_id=?`).bind(latest.id).first() as any;runCoverageCache.set(String(latest.id),coverageRow);}
- const coverage=coverageRow?{runId:latest.id,total:Number(coverageRow.total||0),fields:Object.fromEntries(['price','marketCap','revenue','netIncome','fcf','cash','debt','medianDollarVolume20d','return12m','low52w','ma30w','dilution'].map(key=>[key,Number(coverageRow[key]||0)]))}:null;
+  FROM fundamental_snapshots WHERE run_id=?`).bind(latest.id).first() as any;runCoverageCache.set(aggregateCacheKey,coverageRow);}
+ const coverage=coverageRow?(coverageRow.fields?coverageRow:{runId:latest.id,total:Number(coverageRow.total||0),fields:Object.fromEntries(['price','marketCap','revenue','netIncome','fcf','cash','debt','medianDollarVolume20d','return12m','low52w','ma30w','dilution'].map(key=>[key,Number(coverageRow[key]||0)]))}):null;
+ const aggregatesReady=!latest||!!summaryRow&&!!coverage;
  if(strategy!=='favorites'&&!databasePaged){
   // Category pages contain only proven members. Failed/unknown rows remain in
   // the immutable scan report so users can inspect every exclusion reason.
@@ -379,8 +424,8 @@ export async function readState(options:{strategy?:'opportunity'|'favorites';opp
  const fullEvaluatedRows=pageRows.map((row:any)=>{const result=JSON.parse(row.evaluation);if(result.opportunity?.hash===opportunitySpecHash())return result;const snapshot=applyFinancingRisk(JSON.parse(row.payload));return {...result,opportunity:evaluateSnapshotOpportunity(snapshot)}});
  const evaluatedRows=options.view==='compact'?fullEvaluatedRows.map((row:any)=>({...row,opportunity:compactRadarEvaluation(row.opportunity)})):fullEvaluatedRows;
  const stale=!!latest&&!currentData;
- const value={release,run:active?{...active,universe:undefined,retry_queue:undefined,retryPending:JSON.parse(active.retry_queue||'[]').length,stale}:null,dataRunId:latest?.id,dataRun:latest?{...latest,universe:undefined,retry_queue:undefined,stale}:null,snapshots:pageRows.map((r:any)=>compact(r.payload)),storedEvaluations:evaluatedRows,rankPositions:pageRows.map((row:any)=>row.rank_position??null),favorites:fav.map((r:any)=>r.symbol),portfolioCount,coverage,summary:{total:Number(summaryRow?.total||0),sortedCount:Number(summaryRow?.total||0),missingFactorScores:Number(summaryRow?.missingFactorScores||0),missingFinalGrades:Number(summaryRow?.missingFinalGrades||0),opportunityRanked:Number(summaryRow?.opportunityRanked||0),opportunityNeedsResearch:Number(summaryRow?.opportunityNeedsResearch||0),opportunityExcluded:Number(summaryRow?.opportunityExcluded||0),opportunityWithEvidence:Number(summaryRow?.opportunityWithEvidence||0),opportunityFactorIncomplete:summaryRow?.opportunityFactorIncomplete??Object.fromEntries(OPPORTUNITY_SPEC.factors.map(factor=>[factor.id,Number(summaryRow?.total||0)])),opportunityEligibilityBlockers:summaryRow?.opportunityEligibilityBlockers??{},stale},page:{strategy,limit,offset,hasMore:rows.length>limit}};
- rememberState(cacheKey,value);return value;}
+ const value={release,run:active?{...active,universe:undefined,retry_queue:undefined,retryPending:JSON.parse(active.retry_queue||'[]').length,stale}:null,dataRunId:latest?.id,dataRun:latest?{...latest,universe:undefined,retry_queue:undefined,stale}:null,snapshots:pageRows.map((r:any)=>compact(r.payload)),storedEvaluations:evaluatedRows,rankPositions:pageRows.map((row:any)=>row.rank_position??null),favorites:fav.map((r:any)=>r.symbol),portfolioCount,coverage,aggregatesReady,summary:{total:exactRowCount,sortedCount:exactRowCount,missingFactorScores:summaryRow?Number(summaryRow.missingFactorScores||0):latest?null:0,missingFinalGrades:summaryRow?Number(summaryRow.missingFinalGrades||0):latest?null:0,opportunityRanked:summaryRow?Number(summaryRow.opportunityRanked||0):latest?null:0,opportunityNeedsResearch:summaryRow?Number(summaryRow.opportunityNeedsResearch||0):latest?null:0,opportunityExcluded:summaryRow?Number(summaryRow.opportunityExcluded||0):latest?null:0,opportunityWithEvidence:summaryRow?Number(summaryRow.opportunityWithEvidence||0):latest?null:0,opportunityFactorIncomplete:summaryRow?.opportunityFactorIncomplete??null,opportunityEligibilityBlockers:summaryRow?.opportunityEligibilityBlockers??null,stale},page:{strategy,limit,offset,hasMore:rows.length>limit}};
+ if(aggregatesReady)rememberState(cacheKey,value);return value;}
 export async function readAudit(){await ensureSchema();const d=db();const latest=await d.prepare("SELECT * FROM strategy_runs WHERE status IN ('complete','partial') ORDER BY created_at DESC LIMIT 1").first() as any;const logs=latest?(await d.prepare('SELECT stage,created_at,message FROM diag WHERE run_id=? ORDER BY created_at DESC LIMIT 500').bind(latest.id).all()).results:[];const state=await readState({strategy:'opportunity',opportunityState:'all',limit:1});return {strategyHash:currentHash(),opportunitySpecHash:opportunitySpecHash(),run:state.run,dataRun:state.dataRun,summary:state.summary,favorites:state.favorites,logs};}
 export function insertSnapshot(runId:string,s:Snapshot){invalidateStateCache();const reviewed=applyFinancingRisk(alignSnapshotFinancials(s));return db().prepare('INSERT OR REPLACE INTO fundamental_snapshots(id,run_id,symbol,as_of,payload,evaluation) VALUES (?,?,?,?,?,?)').bind(`${runId}:${s.symbol}`,runId,s.symbol,reviewed.asOf,JSON.stringify(reviewed),JSON.stringify({opportunity:evaluateSnapshotOpportunity(reviewed)}));}
 export async function createRun(source:string,total=0,universe:any[]=[],status='running'){await ensureSchema();invalidateStateCache();const id=crypto.randomUUID(),now=new Date().toISOString();await db().prepare('INSERT INTO strategy_runs (id,created_at,updated_at,status,source,total,universe,strategy_hash) VALUES(?,?,?,?,?,?,?,?)').bind(id,now,now,status,source,total,JSON.stringify(universe),currentHash()).run();return id;}
