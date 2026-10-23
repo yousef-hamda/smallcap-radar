@@ -16,3 +16,8 @@ test('busy and capacity-paused scheduler work backs off, while active scans reta
  assert.equal(schedulerDelay({projectionPublication:{busy:true}}),30_000);
  assert.equal(schedulerDelay({run:{status:'running'}}),2_000);
 });
+
+test('idle archive maintenance continues at the bounded active cadence until its durable cursor is exhausted',()=>{
+ assert.equal(schedulerDelay({idle:true,nextDueAt:'2026-10-24T00:00:00.000Z',maintenance:{more:true}},Date.parse('2026-10-23T00:00:00.000Z')),2_000);
+ assert.equal(schedulerDelay({idle:true,nextDueAt:'2026-10-24T00:00:00.000Z',maintenance:{more:false}},Date.parse('2026-10-23T00:00:00.000Z')),5*60_000);
+});

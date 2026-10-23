@@ -1252,20 +1252,28 @@ test('historical maintenance archives issuers in bounded multi-row transactions'
  assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM snapshot_archives WHERE id LIKE ?').get(`${id}:%`).n,12);
 });
 
-test('historical maintenance checkpoints archive keys and skips repeated terminal cache cleanup',async()=>{
+test('historical maintenance checkpoints archive keys and bounds terminal cache cleanup',async()=>{
  const {maintainHistoricalStorage}=await import('../../.test-build/snapshot-archive.mjs'),id='zzzz-archive-cursor-fixture',now=new Date(Date.now()+1000).toISOString();
  await db().prepare("INSERT OR REPLACE INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,strategy_hash) VALUES(?,?,?,'complete','archive cursor fixture',12,13,?)").bind(id,now,now,currentHash()).run();
  for(let index=0;index<12;index++)await insertSnapshot(id,{...base,symbol:`CURSOR-${String(index).padStart(2,'0')}`}).run();
- await maintainHistoricalStorage(5);const first=JSON.parse((await db().prepare("SELECT payload FROM raw_cache WHERE key='maintenance:archive-candidate-v1'").first()).payload);
- await db().prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(`universe:${id}`,'test',now,'synthetic').run();
- await maintainHistoricalStorage(5);const second=JSON.parse((await db().prepare("SELECT payload FROM raw_cache WHERE key='maintenance:archive-candidate-v1'").first()).payload);
+ const cleanupRun='00000000-0000-4000-8000-000000000123';
+ await db().prepare("INSERT OR REPLACE INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,strategy_hash) VALUES(?,?,?,'complete','bounded cleanup fixture',12,13,?)").bind(cleanupRun,now,now,currentHash()).run();
+ for(let index=0;index<12;index++){
+  await db().prepare('INSERT OR REPLACE INTO bulk_fundamentals(run_id,cik,payload) VALUES(?,?,?)').bind(cleanupRun,1000+index,'{}').run();
+  await db().prepare('INSERT OR REPLACE INTO company_facts_outcomes(run_id,cik,state,attempt,last_error,updated_at) VALUES(?,?,?,0,NULL,?)').bind(cleanupRun,1000+index,'complete',now).run();
+  await db().prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(`universe:${cleanupRun}:${String(index).padStart(2,'0')}`,'test',now,'synthetic').run();
+ }
+ const firstResult=await maintainHistoricalStorage(5),first=JSON.parse((await db().prepare("SELECT payload FROM raw_cache WHERE key='maintenance:archive-candidate-v1'").first()).payload),firstCleanup=JSON.parse((await db().prepare("SELECT payload FROM raw_cache WHERE key='maintenance:terminal-cache-cleanup-v2'").first()).payload);
+ const secondResult=await maintainHistoricalStorage(5),second=JSON.parse((await db().prepare("SELECT payload FROM raw_cache WHERE key='maintenance:archive-candidate-v1'").first()).payload),secondCleanup=JSON.parse((await db().prepare("SELECT payload FROM raw_cache WHERE key='maintenance:terminal-cache-cleanup-v2'").first()).payload);
  assert.equal(first.fingerprint,second.fingerprint);assert.notEqual(second.cursor,first.cursor,'archive cursor resumes after the prior id');
- assert.equal((await db().prepare('SELECT key FROM raw_cache WHERE key=?').bind(`universe:${id}`).first())?.key,`universe:${id}`,'terminal cache cleanup is not repeated within a stable terminal-run fingerprint');
+ assert(firstResult.cleaned<=15&&secondResult.cleaned<=15,'one maintenance call deletes at most the configured number from each cache');
+ assert.notEqual(secondCleanup.tables.bulk.cik,firstCleanup.tables.bulk.cik,'fundamental cleanup cursor advances across calls');assert.notEqual(secondCleanup.tables.outcomes.cik,firstCleanup.tables.outcomes.cik,'outcome cleanup cursor advances across calls');assert.notEqual(secondCleanup.tables.universe.key,firstCleanup.tables.universe.key,'universe-cache cleanup cursor advances across calls');
  const lateId='0000-late-terminal-fixture',lateAt=new Date(Date.now()+2000).toISOString();
  await db().prepare("INSERT OR REPLACE INTO strategy_runs(id,created_at,updated_at,status,source,total,stage,strategy_hash) VALUES(?,?,?,'complete','late terminal cursor fixture',2,13,?)").bind(lateId,lateAt,lateAt,currentHash()).run();
  for(let index=0;index<2;index++)await insertSnapshot(lateId,{...base,symbol:`LATE-${String(index).padStart(2,'0')}`}).run();
  await maintainHistoricalStorage(100);
  assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM snapshot_archives WHERE id LIKE ?').get(`${lateId}:%`).n,2,'a new terminal run invalidates the UUID keyset, including rows before its prior cursor');
+ const invalidLimit=await maintainHistoricalStorage(-1);assert(invalidLimit.archived<=1&&invalidLimit.cleaned<=3,'negative limits cannot turn bounded cleanup into unbounded work');
 });
 
 test('verified inventory recovery resumes failed initialization without a new scan or retry delay',async()=>{
