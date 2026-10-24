@@ -178,20 +178,20 @@ export function calculatePortfolio(transactions: PortfolioTransaction[], quotes:
       exchange: quote?.exchange || position.metadata?.exchange,
     });
   }
-  for (const position of positions) position.weight = position.marketValue == null || marketValue <= 0 ? null : position.marketValue / marketValue;
+  for (const position of positions) position.weight = missingQuoteCount || position.marketValue == null || marketValue <= 0 ? null : position.marketValue / marketValue;
   positions.sort((a, b) => (b.marketValue ?? -1) - (a.marketValue ?? -1) || a.symbol.localeCompare(b.symbol));
 
   const weights = positions.map(position => position.weight).filter((weight): weight is number => weight != null);
   const hhi = weights.reduce((total, weight) => total + weight ** 2, 0);
   const effectiveHoldings = hhi > 0 ? 1 / hhi : 0;
-  const diversificationScore = positions.length <= 1 ? 0 : Math.min(100, Math.max(0, (effectiveHoldings - 1) / (Math.min(10, positions.length) - 1) * 100));
+  const diversificationScore = missingQuoteCount ? null : positions.length <= 1 ? 0 : Math.min(100, Math.max(0, (effectiveHoldings - 1) / (Math.min(10, positions.length) - 1) * 100));
   const sectorValues = new Map<string, number>();
   for (const position of positions) if (position.marketValue != null) sectorValues.set(position.sector || 'غير مصنف', (sectorValues.get(position.sector || 'غير مصنف') ?? 0) + position.marketValue);
   const sectors = [...sectorValues.entries()].map(([name, value]) => ({ name, value, weight: marketValue > 0 ? value / marketValue : 0 })).sort((a, b) => b.value - a.value);
   const totalPnl = realizedPnl + unrealizedPnl;
   const alerts: string[] = [];
-  if ((positions[0]?.weight ?? 0) >= 0.35) alerts.push(`${positions[0].symbol} يمثل ${((positions[0].weight ?? 0) * 100).toFixed(1)}% من المحفظة؛ تركّز مرتفع في سهم واحد.`);
-  if ((sectors[0]?.weight ?? 0) >= 0.55) alerts.push(`${sectors[0].name} يمثل ${(sectors[0].weight * 100).toFixed(1)}% من المحفظة؛ راقب مخاطر القطاع.`);
+  if (!missingQuoteCount && (positions[0]?.weight ?? 0) >= 0.35) alerts.push(`${positions[0].symbol} يمثل ${((positions[0].weight ?? 0) * 100).toFixed(1)}% من المحفظة؛ تركّز مرتفع في سهم واحد.`);
+  if (!missingQuoteCount && (sectors[0]?.weight ?? 0) >= 0.55) alerts.push(`${sectors[0].name} يمثل ${(sectors[0].weight * 100).toFixed(1)}% من المحفظة؛ راقب مخاطر القطاع.`);
   if (missingQuoteCount) alerts.push(`${missingQuoteCount} مركز بلا سعر حديث؛ الإجماليات تستبعد قيمته ولا تحوله إلى صفر.`);
   if (!alerts.length && positions.length > 1) alerts.push('لا يظهر تنبيه تركّز حاد وفق الحدود الحالية، مع بقاء مخاطر السوق قائمة.');
 
@@ -206,17 +206,17 @@ export function calculatePortfolio(transactions: PortfolioTransaction[], quotes:
       saleProceeds,
       fees,
       realizedPnl,
-      unrealizedPnl,
-      totalPnl,
-      totalReturnPct: grossPurchases > 0 ? totalPnl / grossPurchases : null,
+      unrealizedPnl: missingQuoteCount ? null : unrealizedPnl,
+      totalPnl: missingQuoteCount ? null : totalPnl,
+      totalReturnPct: missingQuoteCount || grossPurchases <= 0 ? null : totalPnl / grossPurchases,
       dailyPnl,
       winners: positions.filter(position => (position.unrealizedPnl ?? 0) > 0).length,
       losers: positions.filter(position => (position.unrealizedPnl ?? 0) < 0).length,
       openPositions: positions.length,
       missingQuoteCount,
       diversificationScore,
-      effectiveHoldings,
-      topWeight: positions[0]?.weight ?? null,
+      effectiveHoldings: missingQuoteCount ? null : effectiveHoldings,
+      topWeight: missingQuoteCount ? null : positions[0]?.weight ?? null,
     },
   };
 }

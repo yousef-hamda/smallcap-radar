@@ -63,7 +63,7 @@ test('same-cutoff source changes invalidate saved evaluation reuse and explicit 
 
 test('current saved ratings enforce canonical factor order, precision and rubric identity',()=>{
  const saved=evaluateOpportunity(snapshot());assert.equal(isCurrentOpportunityEvaluation(saved),true);
- for(const mutate of [r=>r.factors.reverse(),r=>r.version='obsolete',r=>r.snapshotHash='wrong',r=>r.evaluationHash='wrong',r=>{r.factors[0].score=.001;r.factors[0].points=0;}]){
+ for(const mutate of [r=>r.factors.reverse(),r=>r.version='obsolete',r=>r.version='1.5.2-reviewed-economic-capitalization',r=>r.snapshotHash='wrong',r=>r.evaluationHash='wrong',r=>{r.factors[0].score=.001;r.factors[0].points=0;},r=>r.modelInputCoveragePct=101,r=>r.factors[0].modelInputCoveragePct=101,r=>r.modelInputCoveragePct=42]){
   const changed=structuredClone(saved);mutate(changed);assert.equal(isCurrentOpportunityEvaluation(changed),false);
  }
 });

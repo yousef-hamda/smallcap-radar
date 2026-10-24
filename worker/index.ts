@@ -9,6 +9,7 @@ import { db, ensureSchema, log } from "../lib/storage";
 import { body, sameOrigin, sameSecret, secureResponse, statusOf } from "../lib/http";
 import { visitor } from "../lib/visitor";
 import { validPushSubscription } from "../lib/push-validation";
+import { enforceRequestLimit } from "../lib/request-rate-limit";
 
 interface Env {
   ASSETS: Fetcher;
@@ -16,6 +17,7 @@ interface Env {
   VAPID_PUBLIC_KEY?: string;
   VAPID_PRIVATE_KEY?: string;
   BACKGROUND_SCAN_SECRET?: string;
+  RAILWAY_VOLUME_MOUNT_PATH?: string;
   IMAGES: {
     input(stream: ReadableStream): {
       transform(options: Record<string, unknown>): {
@@ -35,6 +37,8 @@ const delay = (milliseconds: number) => new Promise((resolve) => setTimeout(reso
 const BATON_START_DELAY = 750;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const pushConfigured=(env:Env)=>Boolean(env.VAPID_PUBLIC_KEY&&env.VAPID_PRIVATE_KEY);
+const MAX_PUSH_SUBSCRIPTIONS_PER_OWNER=10;
+const MAX_PUSH_SUBSCRIPTIONS_TOTAL=5000;
 async function sendCompletionPush(env: Env, run: any) {
   await ensureSchema();
   if (run.notification_sent_at) return true;
@@ -56,23 +60,31 @@ async function sendCompletionPush(env: Env, run: any) {
     url: "/",
   });
   let retryNeeded = false;
-  await Promise.all(subscriptions.filter((row) => !row.last_success_at || row.last_success_at < run.updated_at).map(async (row) => {
-    try {
-      const subscription = JSON.parse(row.subscription);
-      if(!validPushSubscription(subscription))throw Object.assign(Error('Invalid stored push subscription'),{statusCode:410});
-      const details = webpush.generateRequestDetails(subscription, payload, { TTL: 86_400, urgency: "normal" });
-      const pushBody = typeof details.body === "string" ? details.body : new Uint8Array(details.body);
-      const response = await fetch(details.endpoint, { method: details.method, headers: details.headers, body: pushBody,redirect:'error',signal:AbortSignal.timeout(8000) });
-      if (!response.ok) throw Object.assign(new Error(`Push HTTP ${response.status}`), { statusCode: response.status });
-      await db().prepare("UPDATE push_subscriptions SET last_success_at=?,failure_count=0 WHERE endpoint=?").bind(sentAt, row.endpoint).run();
-    } catch (error: any) {
-      if ([404, 410].includes(error.statusCode)) await db().prepare("DELETE FROM push_subscriptions WHERE endpoint=?").bind(row.endpoint).run();
-      else {
-        await db().prepare("UPDATE push_subscriptions SET failure_count=failure_count+1 WHERE endpoint=?").bind(row.endpoint).run();
-        if (Number(row.failure_count || 0) < 2) retryNeeded = true;
+  const pending=subscriptions.filter((row) => !row.last_success_at || row.last_success_at < run.updated_at);
+  let cursor=0;
+  const deliver=async()=>{
+    while(cursor<pending.length){
+      const row=pending[cursor++];
+      try {
+        const subscription = JSON.parse(row.subscription);
+        if(!validPushSubscription(subscription))throw Object.assign(Error('Invalid stored push subscription'),{statusCode:410});
+        const details = webpush.generateRequestDetails(subscription, payload, { TTL: 86_400, urgency: "normal" });
+        const pushBody = typeof details.body === "string" ? details.body : new Uint8Array(details.body);
+        const response = await fetch(details.endpoint, { method: details.method, headers: details.headers, body: pushBody,redirect:'error',signal:AbortSignal.timeout(8000) });
+        if (!response.ok) throw Object.assign(new Error(`Push HTTP ${response.status}`), { statusCode: response.status });
+        await db().prepare("UPDATE push_subscriptions SET last_success_at=?,failure_count=0 WHERE endpoint=?").bind(sentAt, row.endpoint).run();
+      } catch (error: any) {
+        if ([404, 410].includes(error.statusCode)) await db().prepare("DELETE FROM push_subscriptions WHERE endpoint=?").bind(row.endpoint).run();
+        else {
+          await db().prepare("UPDATE push_subscriptions SET failure_count=failure_count+1 WHERE endpoint=?").bind(row.endpoint).run();
+          if (Number(row.failure_count || 0) < 2) retryNeeded = true;
+        }
       }
     }
-  }));
+  };
+  // Bound both request fanout and open provider connections when many devices
+  // are registered. The storage cap is a second independent guardrail.
+  await Promise.all(Array.from({length:Math.min(32,pending.length)},deliver));
   if (retryNeeded) return false;
   await db().prepare("UPDATE strategy_runs SET notification_sent_at=? WHERE id=? AND notification_sent_at IS NULL").bind(sentAt, run.id).run();
   return true;
@@ -118,6 +130,11 @@ async function continueAfterBatonFailure(request: Request, runId: string, env: E
 async function runBackgroundBatch(request: Request, runId: string, env: Env, directHops = 0) {
   try {
     const result = await processScanBatch(runId);
+    // Railway's native supervisor resumes full scans. A browser baton must
+    // stop when capacity pauses the scan, or failed self-requests can keep
+    // writing diagnostics until the volume fills completely.
+    if ('pausedForCapacity' in result && result.pausedForCapacity) return;
+    if (env.RAILWAY_VOLUME_MOUNT_PATH && !result.done && String(result.run.source).includes('· full')) return;
     if ('busy' in result && result.busy) {
       // A duplicate or restarted worker must not abandon the only live baton.
       await delay(Math.min(10_000,Math.max(500,Number(result.run.lease_until)-Date.now())));
@@ -142,6 +159,7 @@ async function runBackgroundBatch(request: Request, runId: string, env: Env, dir
 // dangerouslyAllowSVG: true in next.config.js and uncomment below:
 // const imageConfig: ImageConfig = { dangerouslyAllowSVG: true };
 
+let scheduledTickPromise:Promise<unknown>|null=null;
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -151,8 +169,13 @@ const worker = {
       const reusable=Number(request.headers.get('X-Radar-Reusable-Bytes')),free=Number(request.headers.get('X-Radar-Filesystem-Free-Bytes'));
       const capacity=request.headers.has('X-Radar-Reusable-Bytes')&&request.headers.has('X-Radar-Filesystem-Free-Bytes')&&Number.isSafeInteger(reusable)&&reusable>=0&&Number.isSafeInteger(free)&&free>=0?{reusableBytes:reusable,filesystemFreeBytes:free}:undefined;
       if((env as any).RAILWAY_VOLUME_MOUNT_PATH&&!capacity)return json({error:'Storage capacity inspection is unavailable; scheduler retry required.'},503);
-      try { return json(await scheduledScanTick(Date.now(),capacity)); }
+      if(scheduledTickPromise)return json({busy:true},202);
+      try {
+        const tick=scheduledScanTick(Date.now(),capacity);scheduledTickPromise=tick;
+        return json(await tick);
+      }
       catch(error) { return json({error:error instanceof Error?error.message:"تعذّر تحديث البيانات"},statusOf(error,503)); }
+      finally { scheduledTickPromise=null; }
     }
 
     if (url.pathname === "/api/push/key" && request.method === "GET") return env.VAPID_PUBLIC_KEY?json({ publicKey: env.VAPID_PUBLIC_KEY }):json({error:"لم تتم تهيئة مفتاح الإشعارات"},503);
@@ -167,7 +190,15 @@ const worker = {
         const identity=visitor(request);
         const existing=await db().prepare('SELECT owner FROM push_subscriptions WHERE endpoint=?').bind(subscription.endpoint).first() as any;
         if(existing?.owner&&existing.owner!==identity.owner)return json({error:'هذا الاشتراك مرتبط بهوية أخرى'},403);
-        await db().prepare("INSERT INTO push_subscriptions(endpoint,subscription,owner,created_at) VALUES(?,?,?,?) ON CONFLICT(endpoint) DO UPDATE SET subscription=excluded.subscription,owner=excluded.owner,failure_count=0 WHERE push_subscriptions.owner='' OR push_subscriptions.owner=excluded.owner").bind(subscription.endpoint, JSON.stringify(subscription),identity.owner, new Date().toISOString()).run();
+        const saved=await db().prepare("INSERT INTO push_subscriptions(endpoint,subscription,owner,created_at) SELECT ?,?,?,? WHERE EXISTS(SELECT 1 FROM push_subscriptions WHERE endpoint=? AND (owner=? OR owner='')) OR ((SELECT COUNT(*) FROM push_subscriptions WHERE owner=?)<? AND (SELECT COUNT(*) FROM push_subscriptions)<?) ON CONFLICT(endpoint) DO UPDATE SET subscription=excluded.subscription,owner=excluded.owner,failure_count=0 WHERE push_subscriptions.owner='' OR push_subscriptions.owner=excluded.owner").bind(subscription.endpoint, JSON.stringify(subscription),identity.owner, new Date().toISOString(),subscription.endpoint,identity.owner,identity.owner,MAX_PUSH_SUBSCRIPTIONS_PER_OWNER,MAX_PUSH_SUBSCRIPTIONS_TOTAL).run();
+        // The ownership preflight can race another device's first registration.
+        // The conditional UPSERT is authoritative; report the race as a
+        // conflict instead of claiming the endpoint was registered here.
+        if(Number(saved?.meta?.changes||0)!==1){
+          const current=await db().prepare('SELECT owner FROM push_subscriptions WHERE endpoint=?').bind(subscription.endpoint).first() as any;
+          if(current?.owner&&current.owner!==identity.owner)return json({error:'هذا الاشتراك مرتبط بهوية أخرى'},403);
+          return json({error:'تم بلوغ حد اشتراكات الإشعارات؛ أزل جهازًا قديمًا وحاول مجددًا'},429);
+        }
         const response=json({ subscribed: true });if(identity.cookie)response.headers.set('Set-Cookie',identity.cookie);return response;
       } catch (error: any) { return json({ error: error.message || "تعذّر تفعيل الإشعارات" }, statusOf(error,500)) }
     }
@@ -202,7 +233,9 @@ const worker = {
     if (url.pathname === "/api/background-scan/start" && request.method === "POST") {
       try {
         sameOrigin(request);
+        await enforceRequestLimit(request, 'background-scan-start', 2, 60_000);
         const input = await body(request,8_000) as any;
+        if(!input||typeof input!=='object'||Array.isArray(input))return json({error:'الطلب غير صالح'},400);
         const run = await startScan(input.mode);
         ctx.waitUntil(runBackgroundBatch(request, run.id, env));
         return json({ run, background: true }, 202);
@@ -212,6 +245,7 @@ const worker = {
     if (url.pathname === "/api/background-scan/resume" && request.method === "POST") {
       try {
         sameOrigin(request);
+        await enforceRequestLimit(request, 'background-scan-resume', 6, 60_000);
         const input=await body(request,8_000) as any;
         if(typeof input?.runId!=="string"||!UUID.test(input.runId))return json({error:"معرّف الفحص غير صالح"},400);
         await ensureSchema();
@@ -227,6 +261,7 @@ const worker = {
       const batonSecret = env.BACKGROUND_SCAN_SECRET;
       if (!batonSecret || !sameSecret(request.headers.get("X-Radar-Background"),batonSecret)) return json({ error: "غير مصرح" }, 401);
       let input:any;try{input=await body(request,8_000);}catch(error){return json({error:error instanceof Error?error.message:"طلب غير صالح"},statusOf(error,400));}
+      if(!input||typeof input!=='object'||Array.isArray(input))return json({error:'الطلب غير صالح'},400);
       if (typeof input.runId !== "string"||!UUID.test(input.runId)) return json({ error: "معرّف غير صالح" }, 400);
       // Let the accepted response leave the parent self-request before the
       // next D1 operation starts. Without this small hand-off delay, Sites'

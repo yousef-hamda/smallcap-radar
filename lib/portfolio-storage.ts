@@ -8,6 +8,16 @@ type PortfolioResult={transactions:PortfolioTransaction[];quotes:Record<string,P
 const portfolioCache=new Map<string,{expiresAt:number;value:PortfolioResult}>();
 const PORTFOLIO_CACHE_TTL=15_000;
 const PORTFOLIO_CACHE_LIMIT=64;
+// Quotes are display data. Keep new observations in a bounded process cache
+// instead of writing a SQLite row every time a portfolio is opened.
+const portfolioQuoteCache=new Map<string,{expiresAt:number;quote:Company}>();
+const PORTFOLIO_QUOTE_TTL=5*60_000;
+const PORTFOLIO_QUOTE_CACHE_LIMIT=256;
+function rememberQuote(quote:Company,now:number){
+ portfolioQuoteCache.delete(quote.ticker);
+ portfolioQuoteCache.set(quote.ticker,{expiresAt:now+PORTFOLIO_QUOTE_TTL,quote});
+ while(portfolioQuoteCache.size>PORTFOLIO_QUOTE_CACHE_LIMIT)portfolioQuoteCache.delete(portfolioQuoteCache.keys().next().value!);
+}
 export function invalidatePortfolioCache(owner?:string){
   if(owner){portfolioCache.delete(owner);return;}
   portfolioCache.clear();
@@ -53,7 +63,14 @@ async function snapshotMap(symbols: string[]) {
     try { snapshots.set(String(row.symbol), JSON.parse(String(row.payload))); } catch { /* corrupted cache is ignored */ }
   }
   const keys = symbols.flatMap(symbol => [`deep:${secUserAgentCacheVersion()}:${symbol}`, `deep:v21:${symbol}`, `deep:v20:${symbol}`, `deep:v19:${symbol}`, `deep:v18:${symbol}`, `deep:v17:${symbol}`, `deep:v16:${symbol}`, `deep:v15:${symbol}`, `deep:v14:${symbol}`, `deep:v13:${symbol}`, `deep:v12:${symbol}`, `deep:v11:${symbol}`, `deep:v10:${symbol}`, `deep:v9:${symbol}`, `deep:v8:${symbol}`, `deep:v7:${symbol}`, `deep:v6:${symbol}`, `deep:v5:${symbol}`, `deep:v4:${symbol}`]);
-  const deepRows = (await db().prepare(`SELECT key,payload,retrieved_at FROM raw_cache WHERE key IN (${placeholders(keys.length)}) ORDER BY retrieved_at ASC`).bind(...keys).all()).results as any[];
+  // A portfolio can contain 80 symbols, each with many historical deep-cache
+  // versions. Keep every SQL statement below SQLite's older 999-bind limit.
+  const deepRows:any[]=[];
+  for(let offset=0;offset<keys.length;offset+=400){
+    const chunk=keys.slice(offset,offset+400);
+    deepRows.push(...(await db().prepare(`SELECT key,payload,retrieved_at FROM raw_cache WHERE key IN (${placeholders(chunk.length)})`).bind(...chunk).all()).results as any[]);
+  }
+  deepRows.sort((left,right)=>String(left.retrieved_at).localeCompare(String(right.retrieved_at)));
   for (const row of deepRows) {
     try {
       const snapshot = JSON.parse(String(row.payload)) as Snapshot;
@@ -68,38 +85,47 @@ export async function readPortfolioQuotes(symbols: string[], options: { forceRef
   const unique = [...new Set(symbols.map(symbol => symbol.toUpperCase()))].slice(0, 80);
   const snapshots = await snapshotMap(unique), now = Date.now();
   const liveQuotes = new Map<string, Company>();
+  const staleQuotes = new Map<string, Company>();
   if (unique.length) {
+    if(!options.forceRefresh)for(const symbol of unique){
+      const cached=portfolioQuoteCache.get(symbol);
+      if(cached&&cached.expiresAt>now)liveQuotes.set(symbol,cached.quote);
+    }
+    // Read legacy persisted quotes for a warm-start fallback. Future quote
+    // refreshes stay in memory and do not increase volume usage.
     const keys = unique.map(symbol => `portfolio-quote:v1:${symbol}`);
     const cachedRows = (await db().prepare(`SELECT key,retrieved_at,payload FROM raw_cache WHERE key IN (${placeholders(keys.length)})`).bind(...keys).all()).results as any[];
     for (const row of cachedRows) {
-      if (options.forceRefresh || now - Date.parse(String(row.retrieved_at)) > 5 * 60_000) continue;
       try {
         const quote = JSON.parse(String(row.payload)) as Company;
-        if (quote?.ticker && quote.quoteSource === 'Yahoo bulk quote live' && Number.isFinite(quote.price) && quote.price! > 0) liveQuotes.set(quote.ticker, quote);
+        if (!unique.includes(quote?.ticker)||quote.quoteSource !== 'Yahoo bulk quote live'||!Number.isFinite(quote.price)||quote.price! <= 0) continue;
+        staleQuotes.set(quote.ticker,quote);
+        if(!options.forceRefresh&&!liveQuotes.has(quote.ticker)&&now-Date.parse(String(row.retrieved_at))<=PORTFOLIO_QUOTE_TTL)liveQuotes.set(quote.ticker,quote);
       } catch { /* corrupted cache is ignored */ }
     }
     const missing = unique.filter(symbol => !liveQuotes.has(symbol)).map(companyBySymbol).filter((company): company is Company => !!company);
     if (missing.length) {
       let timeout: ReturnType<typeof setTimeout> | undefined;
       const refreshed = await Promise.race([
-        yahooBulkQuotes(missing),
-        new Promise<Company[]>(resolve => { timeout = setTimeout(() => resolve(missing), 4_000); }),
+        // A provider error should not hide saved holdings or their last quote.
+        yahooBulkQuotes(missing).catch(() => []),
+        new Promise<Company[]>(resolve => { timeout = setTimeout(() => resolve([]), 4_000); }),
       ]).finally(() => { if (timeout) clearTimeout(timeout); });
-      const retrievedAt = new Date().toISOString();
-      const writes = [];
       for (const quote of refreshed) {
         if (quote.quoteSource !== 'Yahoo bulk quote live' || !Number.isFinite(quote.price) || quote.price! <= 0) continue;
         liveQuotes.set(quote.ticker, quote);
-        writes.push(db().prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(`portfolio-quote:v1:${quote.ticker}`, quote.quoteSource, retrievedAt, JSON.stringify(quote)));
+        rememberQuote(quote,Date.now());
       }
-      if (writes.length) await db().batch(writes);
     }
   }
   const quotes: Record<string, PortfolioQuote> = {};
   for (const symbol of unique) {
     const company = companyBySymbol(symbol);
-    const live = liveQuotes.get(symbol);
     const snapshot = snapshots.get(symbol);
+    const fallback=staleQuotes.get(symbol);
+    const snapshotDate=Date.parse(snapshot?.provenance?.price?.availableAt||snapshot?.asOf||'');
+    const fallbackDate=Date.parse(fallback?.quoteAvailableAt||'');
+    const live = liveQuotes.get(symbol)||(Number.isFinite(fallbackDate)&&(!Number.isFinite(snapshotDate)||fallbackDate>=snapshotDate)?fallback:undefined);
     const price = live?.price != null && Number.isFinite(live.price) && live.price > 0
       ? live.price
       : snapshot?.price != null && Number.isFinite(snapshot.price) && snapshot.price > 0

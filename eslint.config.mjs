@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Local security-patched upstream dependency; linting its CommonJS source
+    // with application-specific rules creates noise unrelated to our code.
+    "vendor/braces/**",
     ".verification/**",
     "output/playwright/**",
   ]),

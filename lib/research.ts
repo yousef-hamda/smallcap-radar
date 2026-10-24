@@ -1,18 +1,63 @@
 import type {Snapshot,Provenance} from './engine';
-import {derivedEvidence,usableEvidence} from './evidence';
+import {derivedEvidence,usableEvidence,validEvidenceDate} from './evidence';
+
+function yahooSplitEvidence(evidence:Provenance):boolean {
+ if(!evidence.source.includes('Yahoo Finance chart API')||!evidence.source.includes('split events'))return false;
+ try {
+  const url=new URL(evidence.url??'');
+  return url.protocol==='https:'&&['query1.finance.yahoo.com','query2.finance.yahoo.com'].includes(url.hostname)
+   &&url.searchParams.get('events')?.includes('splits')===true;
+ }catch{return false;}
+}
+
+/** A split-adjusted chart is not proof that a reported share-count change was
+ * reconciled. The latter needs both the SEC observation and the split-event
+ * response for the same reporting interval. */
+export function hasVerifiedShareRatio(snapshot:Snapshot):boolean {
+ const shares=snapshot.provenance.shareCountRatio,dilution=snapshot.provenance.dilution;
+ if(snapshot.splitAdjusted!==true||!Number.isFinite(snapshot.shareCountRatio)||!(snapshot.shareCountRatio!>0)
+  ||!Number.isFinite(snapshot.dilution)||Math.abs(snapshot.shareCountRatio!-1-snapshot.dilution!)>1e-8
+  ||!shares||!dilution||shares.source!=='SEC share counts + Yahoo split events'
+  ||dilution.source!==shares.source||shares.periodStart!==dilution.periodStart||shares.periodEnd!==dilution.periodEnd
+  ||!validEvidenceDate(shares.periodStart)||!validEvidenceDate(shares.periodEnd)
+  ||Date.parse(shares.periodStart!)>=Date.parse(shares.periodEnd!)
+  ||!usableEvidence(shares,snapshot.asOf)||!usableEvidence(dilution,snapshot.asOf))return false;
+ const dependencies=shares.dependencies;
+ if(!Array.isArray(dependencies)||dependencies.length!==2)return false;
+ const [sec,market]=dependencies;
+ if(sec.source!=='SEC reported share ratio; corporate actions unverified'
+  ||sec.periodStart!==shares.periodStart||sec.periodEnd!==shares.periodEnd
+  ||!usableEvidence(sec,snapshot.asOf)||!usableEvidence(market,snapshot.asOf)||!yahooSplitEvidence(market))return false;
+ try {
+  const secUrl=new URL(sec.url??'');
+  return secUrl.protocol==='https:'&&secUrl.hostname==='data.sec.gov';
+ }catch{return false;}
+}
+
+/** Extend only the market-history requests that can cover a reported SEC
+ * share interval. Older intervals remain unverified instead of expanding
+ * every cached chart or fetching unbounded years of bars. */
+export function shareReviewHistoryDays(snapshot:Snapshot,asOf:string):number {
+ const shares=snapshot.provenance.shareCountRatio;
+ if(hasVerifiedShareRatio(snapshot)||shares?.source!=='SEC reported share ratio; corporate actions unverified'
+  ||!validEvidenceDate(shares.periodStart)||!validEvidenceDate(shares.periodEnd))return 550;
+ const age=Math.ceil((Date.parse(asOf)-Date.parse(shares.periodStart!))/86_400_000);
+ if(!Number.isFinite(age)||age<0||age+14>1100)return 550;
+ return Math.max(550,age+14);
+}
 
 /** Only a complete, valid split-event response can verify reported shares. */
 export function reviewShareSplits(snapshot:Snapshot,events:{date:string;factor:number}[]|null|undefined,coverageStart:string,coverageEnd:string,evidence:Provenance):Snapshot {
- if(snapshot.splitAdjusted===true)return snapshot;
+ if(hasVerifiedShareRatio(snapshot))return snapshot;
  const shares=snapshot.provenance.shareCountRatio;
- if(!Array.isArray(events)||!shares?.periodStart||!shares.periodEnd||!usableEvidence(shares,snapshot.asOf)||!usableEvidence(evidence,snapshot.asOf))return snapshot;
+ if(!Array.isArray(events)||shares?.source!=='SEC reported share ratio; corporate actions unverified'||!shares.periodStart||!shares.periodEnd||!usableEvidence(shares,snapshot.asOf)||!usableEvidence(evidence,snapshot.asOf)||!yahooSplitEvidence(evidence))return snapshot;
+ if(!strictDate(coverageStart)||!strictDate(coverageEnd)||!strictDate(shares.periodStart)||!strictDate(shares.periodEnd)||coverageStart>coverageEnd)return snapshot;
  const start=Date.parse(shares.periodStart),end=Date.parse(shares.periodEnd);
  if(!Number.isFinite(start)||!Number.isFinite(end)||start>=end||!(Date.parse(coverageStart)<=start)||!(Date.parse(coverageEnd)>=end))return snapshot;
  if(!Number.isFinite(snapshot.shareCountRatio)||snapshot.shareCountRatio!<=0)return snapshot;
  const unique=new Map<string,number>();
  for(const event of events){
-  const date=Date.parse(event.date);
-  if(!Number.isFinite(date)||!Number.isFinite(event.factor)||event.factor<=0||date>Date.parse(snapshot.asOf))return snapshot;
+  if(!strictDate(event.date)||!Number.isFinite(event.factor)||event.factor<=0||!Number.isFinite(Date.parse(snapshot.asOf))||Date.parse(`${event.date}T00:00:00Z`)>Date.parse(snapshot.asOf))return snapshot;
   if(unique.has(event.date)&&unique.get(event.date)!==event.factor)return snapshot;
   unique.set(event.date,event.factor);
  }
@@ -27,6 +72,11 @@ export function reviewShareSplits(snapshot:Snapshot,events:{date:string;factor:n
 }
 export type OutcomeBar={date:string;close:number};
 export type CompletedSessionQuote={price:number;dailyChange:number;periodEnd:string};
+function strictDate(value:unknown):value is string {
+ if(typeof value!=='string'||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(value))return false;
+ const stamp=Date.parse(`${value}T00:00:00Z`);
+ return Number.isFinite(stamp)&&new Date(stamp).toISOString().slice(0,10)===value;
+}
 function dailyDate(value:string):number {
  if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(value))return NaN;
  const stamp=Date.parse(`${value}T00:00:00Z`);

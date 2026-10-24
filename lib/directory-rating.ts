@@ -1,4 +1,4 @@
-import {db,insertSnapshot,ensureRunEvaluations,invalidateStateCache} from './storage';
+import {db,insertSnapshot,advanceRunEvaluationsBatch,invalidateStateCache} from './storage';
 import {restoreArchivedRow} from './snapshot-archive';
 import {preliminarySnapshot} from './bulk';
 import type {Snapshot} from './engine';
@@ -57,9 +57,14 @@ export async function publishDirectoryRatings(run:any,pageSize=1000,limit=80){
  writes.push(d.prepare('UPDATE raw_cache SET payload=? WHERE key=?').bind(JSON.stringify(state),key));
  await d.batch(writes);
  if(state.offset===state.total){
-  const count=await d.prepare('SELECT COUNT(*) AS n FROM fundamental_snapshots WHERE run_id=?').bind(id).first() as any;
-  if(Number(count.n)!==state.total)throw Error('Complete directory rating listing count does not match');
-  await ensureRunEvaluations(id);
+  if(!state.evaluationCountValidated){
+   const count=await d.prepare('SELECT COUNT(*) AS n FROM fundamental_snapshots WHERE run_id=?').bind(id).first() as any;
+   if(Number(count.n)!==state.total)throw Error('Complete directory rating listing count does not match');
+   state.evaluationCountValidated=true;
+   await d.prepare('UPDATE raw_cache SET payload=? WHERE key=?').bind(JSON.stringify(state),key).run();
+  }
+  const evaluation=await advanceRunEvaluationsBatch(id,80);
+  if(!evaluation.done)return {...state,evaluationPhase:evaluation.phase,evaluationCursor:evaluation.cursor,done:false};
   state.done=true;
   await d.batch([
    d.prepare("UPDATE strategy_runs SET status='partial',stage=13,offset=total,processed=total,updated_at=? WHERE id=?").bind(new Date().toISOString(),id),

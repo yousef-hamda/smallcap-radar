@@ -1,0 +1,13 @@
+.git
+node_modules
+.test-build
+dist
+.next
+.wrangler
+.sites-runtime
+.verification
+.playwright-cli
+coverage
+outputs
+work
+*.tsbuildinfo

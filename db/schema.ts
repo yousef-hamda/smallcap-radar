@@ -4,12 +4,12 @@ export const snapshots=sqliteTable('fundamental_snapshots',{id:text('id').primar
 export const favorites=sqliteTable('watchlist',{symbol:text('symbol').primaryKey(),createdAt:text('created_at').notNull()});
 export const personalFavorites=sqliteTable('personal_watchlist',{owner:text('owner').notNull(),symbol:text('symbol').notNull(),createdAt:text('created_at').notNull(),payload:text('payload').notNull()},t=>[primaryKey({columns:[t.owner,t.symbol]})]);
 export const cache=sqliteTable('raw_cache',{key:text('key').primaryKey(),source:text('source').notNull(),retrievedAt:text('retrieved_at').notNull(),payload:text('payload').notNull()});
-export const diagnostics=sqliteTable('diag',{id:text('id').primaryKey(),runId:text('run_id'),stage:text('stage').notNull(),createdAt:text('created_at').notNull(),message:text('message').notNull()});
+export const diagnostics=sqliteTable('diag',{id:text('id').primaryKey(),runId:text('run_id'),stage:text('stage').notNull(),createdAt:text('created_at').notNull(),message:text('message').notNull()},t=>[index('idx_diag_created_at').on(t.createdAt)]);
 export const experiments=sqliteTable('experiment_registry',{id:text('id').primaryKey(),hypothesis:text('hypothesis').notNull(),parameters:text('parameters').notNull(),createdAt:text('created_at').notNull(),datasetVersion:text('dataset_version').notNull(),result:text('result'),pValue:real('p_value'),adjustedP:real('adjusted_p'),status:text('status').notNull()});
 export const holdouts=sqliteTable('holdout_sets',{firmId:text('firm_id').primaryKey(),membership:text('membership').notNull(),saltHash:text('salt_hash').notNull(),consumedAt:text('consumed_at')});
 export const backtests=sqliteTable('backtest_runs',{id:text('id').primaryKey(),createdAt:text('created_at').notNull(),strategyHash:text('strategy_hash').notNull(),datasetVersion:text('dataset_version').notNull(),parameters:text('parameters').notNull(),metrics:text('metrics').notNull()});
 export const pushSubscriptions=sqliteTable('push_subscriptions',{endpoint:text('endpoint').primaryKey(),owner:text('owner').notNull().default(''),subscription:text('subscription').notNull(),createdAt:text('created_at').notNull(),lastSuccessAt:text('last_success_at'),failureCount:integer('failure_count').notNull().default(0)});
-export const bulkFundamentals=sqliteTable('bulk_fundamentals',{runId:text('run_id').notNull(),cik:integer('cik').notNull(),payload:text('payload').notNull()});
+export const bulkFundamentals=sqliteTable('bulk_fundamentals',{runId:text('run_id').notNull(),cik:integer('cik').notNull(),payload:text('payload').notNull()},t=>[primaryKey({columns:[t.runId,t.cik]})]);
 export const portfolioTransactions=sqliteTable('portfolio_transactions',{
  id:text('id').primaryKey(),
  owner:text('owner').notNull(),

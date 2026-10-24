@@ -23,7 +23,7 @@ export function scanProgress(run: ScanRun | null | undefined) {
  else if (run.stage === 11) { percent = 82 + fraction * 17.99; phase = 'جلب البيانات المالية من SEC حسب هوية المُصدر'; }
  else if (run.stage === 10) { percent = 60 + fraction * 22; phase = 'التحقق من التاريخ والسيولة للمرشحين'; }
  else if (run.stage >= 9) { percent = 35 + fraction * 25; phase = 'تقييم الشركات وحفظ النتائج الأولية'; }
- else if (run.stage === 5) { percent = 30 + fraction * 5; phase = 'استعادة SEC Company Facts للبيانات الناقصة'; }
+ else if (run.stage === 5) { percent = 30 + fraction * 5; phase = 'فحص قائمة المُصدرين وجلب Company Facts الناقصة من SEC'; }
  else if (run.stage >= 4) {
   // Stage 4 advances through 16 frame datasets in four-request batches. The
   // database `total` still represents candidate companies, so use the frame

@@ -1,6 +1,7 @@
 import {completeDirectoryFiles,readCompleteDirectory,saveCompleteDirectory,previouslyTrackedCompanies} from './directory-cache';
 import {readSecArtifact,recordSecArtifact,secArtifactCik} from './sec-artifact-cache';
 import {persistFilingDocument} from './filing-observations';
+import {persistSecFinancialSource,secFinancialSourceCapacityAvailable,SEC_FINANCIAL_SOURCE_MAX_BYTES} from './sec-filing-sources';
 import { reserveProviderRequest } from './provider-quota';
 import type { Snapshot, Provenance, InsiderPurchase, SecFilingResearch } from './engine';
 import { completedSessionQuote, ma30Weeks, reviewShareSplits } from './research';
@@ -20,12 +21,28 @@ import { buildTechnicalTimingResearch } from './opportunity-market';
 import { secUserAgent } from './sec-user-agent';
 import {alignSnapshotFinancials} from './financial-integrity';
 import { convertEarningsPeriodsToUsd, convertFinancialMetricsToUsd, fetchEcbDailySeries, type EcbDailySeries } from './ecb-fx';
+import { nasdaqCompanyDescription } from './company-description';
 
 export type Company = { cik: number; name: string; ticker: string; exchange: string; securityType?:import('./directory').ListedSecurityType; securityName?:string; listingStatus?:'current'|'not-confirmed-current'; directoryUrl?:string; directoryAvailableAt?:string; price?: number; dailyChange?: number; intradayChange?: number; marketCap?: number; volume?: number; averageVolume10d?: number; return52w?: number; low52w?: number; high52w?: number; ma50d?: number; ma200d?: number; sector?: string; industry?: string; quoteSource?: string; quoteAvailableAt?: string; priceSource?:string; priceAvailableAt?:string; priceUrl?:string; marketCapSource?:string; marketCapAvailableAt?:string; marketCapUrl?:string };
 type NasdaqRow = { symbol: string; name?: string; lastsale?: string; marketCap?: string; volume?: string; sector?: string; industry?: string };
 type CachedQuick = { history: NonNullable<Snapshot['history']>; financials: Record<string, number>; provenance: Record<string, Provenance>; issues: string[] };
 type MarketBar = NonNullable<Snapshot['history']>[number];
-export type HistoricalResult = { url:string; history:MarketBar[]; splits:{date:string;factor:number}[]|null; source:string; retrievedAt:string; availableAt:string; meta?:any };
+/** Invalid OHLC fields are discarded while an independently valid close remains usable. */
+export function sanitizeHistoricalBar(bar: MarketBar): MarketBar {
+  const optionalPositive = (value: unknown) => value == null || (typeof value === 'number' && Number.isFinite(value) && value > 0);
+  const volumeValid = bar.volume == null || (Number.isFinite(bar.volume) && bar.volume >= 0);
+  const pricesValid = optionalPositive(bar.open) && optionalPositive(bar.high) && optionalPositive(bar.low);
+  const consistent = pricesValid
+    && (bar.high == null || bar.high >= Math.max(bar.close, bar.open ?? bar.close, bar.low ?? bar.close))
+    && (bar.low == null || bar.low <= Math.min(bar.close, bar.open ?? bar.close, bar.high ?? bar.close));
+  if (!consistent) return { ...bar, open: undefined, high: undefined, low: undefined, volume: volumeValid ? bar.volume : undefined };
+  return { ...bar, volume: volumeValid ? bar.volume : undefined };
+}
+export type HistoricalResult = { url:string; history:MarketBar[]; splits:{date:string;factor:number}[]|null; source:string; retrievedAt:string; availableAt:string; meta?:any; splitReviewCoverageStart?:string; requestedLookbackDays?:number };
+export class HistoricalSessionsUnavailableError extends Error {
+  readonly retryable=false;
+  constructor(symbol:string){super(`${symbol}: no historical sessions returned by Yahoo, Cboe or Nasdaq`);this.name='HistoricalSessionsUnavailableError';}
+}
 
 export const NASDAQ_SCREENER = 'https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=10000&download=true';
 const NASDAQ_LISTED='https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt';
@@ -277,12 +294,15 @@ async function loadYahooAuth() {
 export const yahooSymbol = (symbol: string) => symbol.trim().toUpperCase().replaceAll('.', '-');
 
 async function yahooChartPayload(symbol:string,query:string,timeoutMs=3_000){
- let last:unknown;
+ let last:unknown,notFound=0;
  for(const host of YAHOO_HOSTS){
   const url=`https://${host}/v8/finance/chart/${encodeURIComponent(yahooSymbol(symbol))}?${query}`;
   try{return {payload:await fetchJson(url,timeoutMs,86_400_000,1),url};}
-  catch(error){last=error;recordProviderIssue(`${symbol}: Yahoo chart ${host} failed: ${error instanceof Error?error.message:'provider request failed'}`);}
+  catch(error){last=error;if(error instanceof Error&&/\bHTTP 404\b/.test(error.message))notFound++;recordProviderIssue(`${symbol}: Yahoo chart ${host} failed: ${error instanceof Error?error.message:'provider request failed'}`);}
  }
+ if(notFound===YAHOO_HOSTS.length)throw new HistoricalSessionsUnavailableError(symbol);
+ // A 404 from the second host must not hide a timeout or 5xx from the first.
+ if(notFound&&last instanceof Error&&/\bHTTP 404\b/.test(last.message))throw Error(`${symbol}: Yahoo chart hosts returned mixed no-data and transient failures`);
  throw last instanceof Error?last:Error(`${symbol}: Yahoo chart unavailable`);
 }
 
@@ -300,30 +320,47 @@ async function yahooCompanyProfile(symbol: string) {
   }
 }
 
+/** Profile-only narrative enrichment. It never changes the dated rating
+ * snapshot or creates numeric scoring evidence. */
+export async function observedNasdaqCompanyDescription(symbol:string,now=new Date().toISOString()):Promise<{description:string;source:Provenance}|null> {
+  const url=`https://api.nasdaq.com/api/company/${encodeURIComponent(symbol)}/company-profile`;
+  try {
+    const description=nasdaqCompanyDescription(await fetchJson(url,5_000,6*60*60_000,1));
+    if(!description)return null;
+    return {description,source:{source:'Nasdaq company profile',url,periodEnd:now.slice(0,10),availableAt:now,retrievedAt:now,confidence:'medium',rightsStatus:'unknown',tag:'CompanyDescription.value'}};
+  }catch(error){recordProviderIssue(`Nasdaq company profile ${symbol}: ${error instanceof Error?error.message:'provider request failed'}`);return null;}
+}
+
 async function enrichWithYahooProfile(snapshot: Snapshot, symbol: string, now: string, profilePromise?:ReturnType<typeof yahooCompanyProfile>) {
   const profile = await (profilePromise??yahooCompanyProfile(symbol));
   const asset = profile?.assetProfile;
-  if (asset?.longBusinessSummary) snapshot.description = asset.longBusinessSummary;
-  if (typeof asset?.website === 'string' && /^https:\/\//i.test(asset.website)) snapshot.website = asset.website;
-  if (asset?.sector) snapshot.sector = asset.sector;
-  if (asset?.industry) snapshot.industry = asset.industry;
-  if (Number.isFinite(asset?.fullTimeEmployees)) snapshot.employees = asset.fullTimeEmployees;
+  const profileFields = new Set<string>();
+  if (asset?.longBusinessSummary) { snapshot.description = asset.longBusinessSummary; profileFields.add('description'); }
+  if (typeof asset?.website === 'string' && /^https:\/\//i.test(asset.website)) { snapshot.website = asset.website; profileFields.add('website'); }
+  if (asset?.sector) { snapshot.sector = asset.sector; profileFields.add('sector'); }
+  if (asset?.industry) { snapshot.industry = asset.industry; profileFields.add('industry'); }
+  if (Number.isFinite(asset?.fullTimeEmployees)) { snapshot.employees = asset.fullTimeEmployees; profileFields.add('employees'); }
   const financialData = profile?.financialData;
   const profileTarget = financialData?.targetMeanPrice?.raw;
-  if (Number.isFinite(profileTarget)) { snapshot.targetMean = profileTarget; snapshot.analystTarget = profileTarget; snapshot.provenance.analystTarget = { source: 'Yahoo Finance quoteSummary financialData', url: `https://finance.yahoo.com/quote/${encodeURIComponent(symbol)}/analysis`, periodEnd: now.slice(0, 10), availableAt: now, retrievedAt: now, currency: 'USD', confidence: 'medium' }; }
+  if (Number.isFinite(profileTarget)) { snapshot.targetMean = profileTarget; profileFields.add('targetMean'); snapshot.analystTarget = profileTarget; snapshot.provenance.analystTarget = { source: 'Yahoo Finance quoteSummary financialData', url: `https://finance.yahoo.com/quote/${encodeURIComponent(symbol)}/analysis`, periodEnd: now.slice(0, 10), availableAt: now, retrievedAt: now, currency: 'USD', confidence: 'medium' }; }
   for (const [field, key] of [['targetLow','targetLowPrice'],['targetHigh','targetHighPrice'],['analystCount','numberOfAnalystOpinions']] as const) {
     const value = profile?.financialData?.[key]?.raw;
-    if (Number.isFinite(value)) (snapshot as any)[field] = value;
+    if (Number.isFinite(value)) { (snapshot as any)[field] = value; profileFields.add(field); }
   }
   const earningsHistory = (profile?.earningsHistory?.history ?? []).filter((row:any) => row?.quarter?.fmt || row?.quarter?.raw).slice(-6);
   snapshot.surprises = earningsHistory.map((row:any) => ({ quarter: row.quarter?.fmt || String(row.quarter?.raw || '').slice(0,10), surprisePct: row.surprisePercent?.raw == null ? null : row.surprisePercent.raw * 100, actual: row.epsActual?.raw, estimate: row.epsEstimate?.raw }));
+  if(earningsHistory.length)profileFields.add('surprises');
   const next = profile?.calendarEvents?.earnings?.earningsDate?.[0]?.fmt;
-  if (next) snapshot.nextEarnings = next;
+  if (next) { snapshot.nextEarnings = next; profileFields.add('nextEarnings'); }
   const latestEarnings = earningsHistory.at(-1)?.quarter?.fmt;
-  if (latestEarnings) snapshot.lastEarnings = latestEarnings;
+  if (latestEarnings) { snapshot.lastEarnings = latestEarnings; profileFields.add('lastEarnings'); }
   if (snapshot.surprises?.length) { const latest = snapshot.surprises.at(-1)?.surprisePct; snapshot.lastEarningsStatus = latest == null ? 'غير معروف' : latest >= 0 ? 'إيجابي' : 'سلبي'; }
   const profileEvidence:Provenance={source:'Yahoo Finance quoteSummary',url:`https://finance.yahoo.com/quote/${encodeURIComponent(symbol)}/`,periodEnd:now.slice(0,10),availableAt:now,retrievedAt:now,confidence:'medium'};
-  for(const key of ['description','website','sector','industry','employees','targetMean','targetLow','targetHigh','analystCount','nextEarnings','lastEarnings','surprises'] as const)if(snapshot[key]!=null&&profile)snapshot.provenance[key]={...profileEvidence,tag:key};
+  for(const key of ['description','website','sector','industry','employees','targetMean','targetLow','targetHigh','analystCount','nextEarnings','lastEarnings','surprises'] as const)if(profileFields.has(key))snapshot.provenance[key]={...profileEvidence,tag:key};
+  if(!profileFields.has('description')){
+    const observed=await observedNasdaqCompanyDescription(symbol,now);
+    if(observed){snapshot.description=observed.description;snapshot.provenance.description=observed.source;}
+  }
   return snapshot;
 }
 
@@ -390,7 +427,13 @@ export async function yahooBulkQuotes(companies: Company[]): Promise<Company[]> 
   }
 }
 
-function isoDate(date: string) { const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(date); return match ? `${match[3]}-${match[1]}-${match[2]}` : '' }
+function isoDate(date: string) {
+ const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(date);
+ if(!match)return '';
+ const value=`${match[3]}-${match[1]}-${match[2]}`;
+ const parsed=new Date(`${value}T00:00:00Z`);
+ return Number.isFinite(parsed.getTime())&&parsed.toISOString().slice(0,10)===value?value:'';
+}
 function dateOffset(iso: string, days: number) { const date = new Date(iso); date.setUTCDate(date.getUTCDate() + days); return date.toISOString().slice(0, 10) }
 function applyBundledFundamentals(snapshot:Snapshot,cik:number,now:string){
  const facts=(bundledFrames as any).fundamentals?.[String(cik)];
@@ -535,6 +578,45 @@ export async function fetchSec8KItemIndex(payload:any,cik:number,asOf:string,ret
  return {providerStatus,selectedDocuments:selected.length,fetchedDocuments,failedDocuments,truncatedDocuments,items,limitations};
 }
 
+/** On-demand copies of the newest annual and interim primary documents for
+ * later human capitalization review. Acquisition alone never changes a score. */
+type FinancialSourceIndex=NonNullable<SecFilingResearch['financialSourceIndex']>;
+export async function fetchSecFinancialFilingSources(payload:any,cik:number,asOf:string):Promise<FinancialSourceIndex>{
+ const empty=(providerStatus:FinancialSourceIndex['providerStatus'],limitations:string[]):FinancialSourceIndex=>({providerStatus,selectedDocuments:0,fetchedDocuments:0,failedDocuments:0,truncatedDocuments:0,items:[],limitations});
+ const now=new Date().toISOString();
+ if(!Number.isSafeInteger(cik)||cik<=0||!validSecDate(asOf.slice(0,10))||Date.parse(asOf)>Date.parse(now)+60_000)return empty('unavailable',['Invalid issuer or as-of time; SEC report source acquisition was skipped.']);
+ if(!secUserAgent())return empty('unavailable',['SEC report source acquisition requires a configured reachable contact identity.']);
+ if(!payload||Number(payload.cik)!==cik||!Array.isArray(payload?.filings?.recent?.form))return empty('unavailable',['SEC submissions identity or recent filing index is unavailable.']);
+ if(!await secFinancialSourceCapacityAvailable())return empty('paused',['SEC report source archive is paused until measured physical storage has at least 512 MiB free.']);
+ const index=parseSecFilingIndex(payload,cik,asOf,100,now);
+ const annual=new Set(['10-K','10-K/A','20-F','20-F/A','40-F','40-F/A']);
+ const quarterly=new Set(['10-Q','10-Q/A']);
+ const selected=[index.items.find(item=>annual.has(item.form)),index.items.find(item=>quarterly.has(item.form))].filter((item):item is NonNullable<typeof item>=>!!item);
+ if(!selected.length)return empty('empty',['No annual or quarterly primary document was present in the bounded recent SEC submission index.']);
+ const items:FinancialSourceIndex['items']=[];let failedDocuments=0,truncatedDocuments=0,totalBytes=0;
+ const deadline=Date.now()+8_000;
+ for(const filing of selected){
+  const remaining=deadline-Date.now();
+  if(remaining<=0){failedDocuments+=selected.length-items.length-failedDocuments-truncatedDocuments;break;}
+  try{
+   const response=await providerFetch(filing.url,{headers:{...requestHeaders(filing.url),Accept:'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8'},signal:AbortSignal.timeout(Math.min(5_000,remaining))});
+   if(!response.ok){failedDocuments++;recordProviderIssue(`SEC report ${filing.accession}: HTTP ${response.status}`);continue;}
+   const body=await readLimitedText(response,SEC_FINANCIAL_SOURCE_MAX_BYTES,2*SEC_FINANCIAL_SOURCE_MAX_BYTES-totalBytes);
+   if(body.truncated){truncatedDocuments++;continue;}
+   const archived=await persistSecFinancialSource({cik,accession:filing.accession,form:filing.form as FinancialSourceIndex['items'][number]['form'],url:filing.url,filed:filing.filed,retrievedAt:new Date().toISOString(),body:body.text});
+   totalBytes+=body.bytes;items.push(archived);
+  }catch(error){failedDocuments++;recordProviderIssue(`SEC report ${filing.accession}: ${error instanceof Error?error.message:'source capture failed'}`);}
+ }
+ const unattempted=Math.max(0,selected.length-items.length-failedDocuments-truncatedDocuments);
+ failedDocuments+=unattempted;
+ const limitations=['Captured primary documents are source copies only. Economic common share classes, diluted shares, amendments, exhibits, and market capitalization still require an explicit filing-level review. No score or valuation credit is granted.',...(index.limitations)];
+ if(!annual.has(selected[0]?.form??''))limitations.push('No annual report was selected from the recent submissions index.');
+ if(!selected.some(item=>quarterly.has(item.form)))limitations.push('No quarterly report was selected from the recent submissions index; foreign interim reports are not assumed equivalent to 10-Q.');
+ if(failedDocuments)limitations.push(`${failedDocuments} selected report(s) failed or were not attempted within the 8-second request budget; acquisition can be retried.`);
+ if(truncatedDocuments)limitations.push(`${truncatedDocuments} selected report(s) exceeded the ${SEC_FINANCIAL_SOURCE_MAX_BYTES}-byte complete-document cap and were not archived.`);
+ return {providerStatus:items.length===2&&failedDocuments===0&&truncatedDocuments===0?'retrieved':'partial',selectedDocuments:selected.length,fetchedDocuments:items.length,failedDocuments,truncatedDocuments,items,limitations};
+}
+
 /** Convert the official SEC submissions index into dated filing items when a
  * third-party news feed is empty. Filing metadata is not presented as news
  * sentiment; it is a sourced company event that keeps the profile useful. */
@@ -551,8 +633,9 @@ export function parseYahooDaily(payload:any,asOf=new Date().toISOString()){
  const bars=new Map<string,NonNullable<Snapshot['history']>[number]>();
  for(let index=0;index<timestamps.length;index++){
   const timestamp=timestamps[index];
-  if(!Number.isFinite(timestamp)||timestamp*1000>cutoff)continue;
-  const date=new Date(timestamp*1000).toISOString().slice(0,10);
+  const milliseconds=timestamp*1000;
+  if(!Number.isFinite(timestamp)||!Number.isFinite(milliseconds)||Math.abs(milliseconds)>8.64e15||milliseconds>cutoff)continue;
+  const date=new Date(milliseconds).toISOString().slice(0,10);
   // Daily quote OHLC is split-adjusted. adjclose additionally adjusts cash
   // dividends and must not be mixed with the current price/52-week range.
   const close=numeric(quote.close?.[index]);
@@ -572,8 +655,9 @@ export function parseYahooDaily(payload:any,asOf=new Date().toISOString()){
   const numerator=numeric(event.numerator),denominator=numeric(event.denominator);
   const ratioParts=String(event.splitRatio??'').split(':').map(Number);
   const factor=numerator!=null&&denominator!=null?numerator/denominator:ratioParts.length===2?ratioParts[0]/ratioParts[1]:NaN;
-  if(!Number.isFinite(event.date)||!Number.isFinite(factor)||factor<=0){validEvents=false;continue;}
-  const date=new Date(event.date*1000).toISOString().slice(0,10);
+  const milliseconds=event.date*1000;
+  if(!Number.isFinite(event.date)||!Number.isFinite(milliseconds)||Math.abs(milliseconds)>8.64e15||!Number.isFinite(factor)||factor<=0){validEvents=false;continue;}
+  const date=new Date(milliseconds).toISOString().slice(0,10);
   if(Date.parse(`${date}T23:59:59Z`)>cutoff)continue;
   splits.push({date,factor});
  }
@@ -582,7 +666,13 @@ export function parseYahooDaily(payload:any,asOf=new Date().toISOString()){
 
 export function parseCboeDaily(payload:any,from:string,to:string):MarketBar[]{
  const rows:Array<{date:string;close:number|null;open?:number;high?:number;low?:number;volume?:number}>=(Array.isArray(payload?.data)?payload.data:[]).map((row:any)=>({date:String(row.date??''),close:numeric(row.close),open:numeric(row.open)??undefined,high:numeric(row.high)??undefined,low:numeric(row.low)??undefined,volume:numeric(row.volume)??undefined}));
- return rows.filter((row):row is {date:string;close:number;open?:number;high?:number;low?:number;volume?:number}=>/^\d{4}-\d{2}-\d{2}$/.test(row.date)&&row.date>=from&&row.date<=to&&row.close!=null&&row.close>0).sort((a,b)=>a.date.localeCompare(b.date));
+ const validDate=(value:string)=>/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(`${value}T00:00:00Z`))&&new Date(`${value}T00:00:00Z`).toISOString().slice(0,10)===value;
+ return rows.filter((row):row is {date:string;close:number;open?:number;high?:number;low?:number;volume?:number}=>validDate(row.date)&&row.date>=from&&row.date<=to&&row.close!=null&&row.close>0).map(sanitizeHistoricalBar).sort((a,b)=>a.date.localeCompare(b.date));
+}
+
+export function parseNasdaqDaily(payload:any,from:string,to:string):MarketBar[]{
+ const rows=(payload?.data?.tradesTable?.rows??[]).map((row:any)=>({date:isoDate(String(row.date??'')),close:numeric(row.close),open:numeric(row.open)??undefined,high:numeric(row.high)??undefined,low:numeric(row.low)??undefined,volume:numeric(row.volume)??undefined}));
+ return rows.filter((row:any)=>row.date&&row.date>=from&&row.date<=to&&row.close!=null&&row.close>0).map(sanitizeHistoricalBar).sort((a:any,b:any)=>a.date.localeCompare(b.date)) as MarketBar[];
 }
 
 export async function historicalMarketData(symbol: string, asOf = new Date().toISOString(), days = 1900):Promise<HistoricalResult> {
@@ -590,31 +680,40 @@ export async function historicalMarketData(symbol: string, asOf = new Date().toI
   const to = asOf.slice(0, 10), from = dateOffset(asOf, -days);
   const period1=Math.floor(Date.parse(`${from}T00:00:00Z`)/1000),period2=Math.floor(Date.parse(`${to}T00:00:00Z`)/1000)+86400;
   const yahooQuery=`period1=${period1}&period2=${period2}&interval=1d&events=div%2Csplits&includeAdjustedClose=true`;
+  let yahooNotFound=false,cboeNotFound=false;
   try{
    const result=await yahooChartPayload(symbol,yahooQuery),parsed=parseYahooDaily(result.payload,asOf);
    if(parsed.history.length){
     const retrievedAt=new Date().toISOString(),lastDate=parsed.history.at(-1)!.date;
     return {url:result.url,...parsed,meta:result.payload?.chart?.result?.[0]?.meta,source:'Yahoo Finance chart API · split-adjusted daily history and split events',retrievedAt,availableAt:`${lastDate}T21:00:00.000Z`};
    }
-  }catch(error){recordProviderIssue(`${symbol}: Yahoo daily history unavailable: ${error instanceof Error?error.message:String(error)}; trying Nasdaq`);}
+  }catch(error){yahooNotFound=error instanceof HistoricalSessionsUnavailableError;recordProviderIssue(`${symbol}: Yahoo daily history unavailable: ${error instanceof Error?error.message:String(error)}; trying Cboe`);}
   const cboeUrl=`${CBOE_BASE}/charts/historical/${encodeURIComponent(symbol.toUpperCase())}.json`;
   try {
    const payload=await fetchJson(cboeUrl,5_000,86_400_000,2) as {data?:Array<Record<string,unknown>>};
    const history=parseCboeDaily(payload,from,to);
    if(history.length){const retrievedAt=new Date().toISOString();return {url:cboeUrl,history,splits:null,source:'Cboe delayed historical API · independent no-key fallback',retrievedAt,availableAt:`${history.at(-1)!.date}T21:00:00.000Z`};}
    throw Error('Cboe returned no usable sessions');
-  } catch(error) { recordProviderIssue(`${symbol}: Cboe historical unavailable: ${error instanceof Error?error.message:'provider request failed'}; trying Nasdaq`); }
+  } catch(error) { cboeNotFound=error instanceof Error&&/\bHTTP 404\b/.test(error.message);recordProviderIssue(`${symbol}: Cboe historical unavailable: ${error instanceof Error?error.message:'provider request failed'}; trying Nasdaq`); }
   const url = `https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/historical?assetclass=stocks&fromdate=${from}&todate=${to}&limit=5000`;
   let payload: { data?: { tradesTable?: { rows?: Array<Record<string, string>> } } };
   try { payload = await fetchJson(url,3000,300_000,1) as typeof payload; }
   catch(error) {
-   if(!cached?.history?.length)throw error;
+   const nasdaqNoData=error instanceof Error&&/\bHTTP 404\b/.test(error.message);
+   if(!cached?.history?.length){if(yahooNotFound&&cboeNotFound&&nasdaqNoData)throw new HistoricalSessionsUnavailableError(symbol);throw error;}
    recordProviderIssue(`${symbol}: historical API unavailable; dated bundled history fallback`);
-   return {url,history:cached.history.filter(row=>row.date>=from&&row.date<=to),splits:null,source:'Nasdaq historical · bundled dated fallback',retrievedAt:quickCache.generatedAt,availableAt:quickCache.generatedAt};
+   const history=cached.history.filter(row=>row.date>=from&&row.date<=to);
+   if(!history.length){if(yahooNotFound&&cboeNotFound&&nasdaqNoData)throw new HistoricalSessionsUnavailableError(symbol);throw Error(`${symbol}: provider history unavailable and dated bundled fallback has no sessions in the requested range`);}
+   return {url,history,splits:null,source:'Nasdaq historical · bundled dated fallback',retrievedAt:quickCache.generatedAt,availableAt:quickCache.generatedAt};
   }
-  const history = (payload.data?.tradesTable?.rows ?? []).map((row) => ({ date: isoDate(row.date), close: numeric(row.close), open: numeric(row.open), high: numeric(row.high), low: numeric(row.low), volume: numeric(row.volume) }))
-    .filter((row) => row.date && row.date<=to && row.date>=from && row.close != null && row.close > 0 && row.low != null && row.low > 0).sort((a, b) => a.date.localeCompare(b.date));
-  if(!history.length)throw Error(`${symbol}: no historical sessions returned`);
+  const history=parseNasdaqDaily(payload,from,to);
+  if(!history.length){
+   if(cached?.history?.length){
+    const fallback=cached.history.filter(row=>row.date>=from&&row.date<=to&&Number.isFinite(Date.parse(`${row.date}T00:00:00Z`))&&new Date(`${row.date}T00:00:00Z`).toISOString().slice(0,10)===row.date&&Number.isFinite(row.close)&&row.close>0);
+    if(fallback.length){recordProviderIssue(`${symbol}: Nasdaq returned no usable sessions; using dated bundled history fallback`);return {url,history:fallback,splits:null,source:'Nasdaq historical · bundled dated fallback after empty response',retrievedAt:quickCache.generatedAt,availableAt:quickCache.generatedAt};}
+   }
+   throw Error(`${symbol}: no historical sessions returned; successful empty responses may reflect temporary upstream or schema failures`);
+  }
   return { url, history:history as MarketBar[], splits:null,source:'Nasdaq historical API · corporate actions unavailable',retrievedAt:new Date().toISOString(),availableAt:`${history.at(-1)!.date}T21:00:00.000Z` };
 }
 
@@ -703,7 +802,7 @@ export async function fetchInsiderPurchases(cik: number,asOf:string,submissionsI
   }
 }
 
-async function attachOpportunityEarnings(snapshot: Snapshot, facts: unknown, providerError?: unknown, benchmark?: HistoricalResult | null, splitAdjusted = false, submissions?: unknown, includeFilingIndex = false, form8KItemIndex?:Awaited<ReturnType<typeof fetchSec8KItemIndex>>) {
+async function attachOpportunityEarnings(snapshot: Snapshot, facts: unknown, providerError?: unknown, benchmark?: HistoricalResult | null, splitAdjusted = false, submissions?: unknown, includeFilingIndex = false, form8KItemIndex?:Awaited<ReturnType<typeof fetchSec8KItemIndex>>, financialSourceIndex?:Awaited<ReturnType<typeof fetchSecFinancialFilingSources>>) {
   // The network response arrives after the snapshot's initial quote cut. Stamp
   // the research cut only after acquisition so SEC retrievedAt is never forged
   // into the past or rejected as future evidence.
@@ -811,7 +910,7 @@ async function attachOpportunityEarnings(snapshot: Snapshot, facts: unknown, pro
       readyForScoring: !!financialStrength.assessment,
     },
     technicalTiming,
-    ...(includeFilingIndex ? { secFilings: {...parseSecFilingIndex(submissions, Number(snapshot.cik), snapshot.asOf, 60, retrievedAt),...(form8KItemIndex?{form8KItemIndex}:{})} } : {}),
+    ...(includeFilingIndex ? { secFilings: {...parseSecFilingIndex(submissions, Number(snapshot.cik), snapshot.asOf, 60, retrievedAt),...(form8KItemIndex?{form8KItemIndex}:{}),...(financialSourceIndex?{financialSourceIndex}:{})} } : {}),
   };
   Object.assign(snapshot,alignSnapshotFinancials(snapshot));
 }
@@ -874,7 +973,7 @@ export function attachScanMarketResearch(snapshot: Snapshot, stock: HistoricalRe
   };
   // Split-adjusted price history does not reconcile the SEC share-count change.
   // Require the event response to cover both reported share observation dates.
-  if(stock.source.includes('Yahoo Finance chart API'))Object.assign(snapshot,reviewShareSplits(snapshot,stock.splits,stock.history[0]?.date??'',last,snapshot.provenance.history));
+  if(stock.source.includes('Yahoo Finance chart API'))Object.assign(snapshot,reviewShareSplits(snapshot,stock.splits,stock.splitReviewCoverageStart??stock.history[0]?.date??'',last,snapshot.provenance.history));
 }
 
 function compactTechnicalResearch(snapshot: Snapshot) {
@@ -902,6 +1001,7 @@ export async function companySnapshot(company: Company, options: { includeOpport
   const googleNewsPromise = fetch(`https://news.google.com/rss/search?q=${encodeURIComponent(`\"${symbol}\" stock`)}&hl=en-US&gl=US&ceid=US:en`, { headers: { 'User-Agent': browserAgent, Accept: 'application/rss+xml,text/xml' }, signal: AbortSignal.timeout(8_000) }).then(r => {if(!r.ok)throw Error(`HTTP ${r.status}`);return r.text();}).catch(error => {issues.push(`Google News RSS: ${error.message}`);return '';});
   const filingsPromise = fetchJson(submissionsUrlFor(company.cik),8_000).catch(error => {issues.push(`SEC submissions: ${error instanceof Error?error.message:'provider request failed'}`);return null;});
   const form8KItemIndexPromise=options.includeOpportunityResearch?filingsPromise.then(payload=>{const indexAsOf=new Date().toISOString();return fetchSec8KItemIndex(payload,company.cik,indexAsOf,indexAsOf).catch(error=>({providerStatus:'unavailable' as const,selectedDocuments:0,fetchedDocuments:0,failedDocuments:0,truncatedDocuments:0,items:[],limitations:[`Bounded SEC 8-K item scan failed: ${error instanceof Error?error.message:'provider request failed'}`]}));}):Promise.resolve(undefined);
+  const financialSourceIndexPromise=options.includeOpportunityResearch?filingsPromise.then(payload=>fetchSecFinancialFilingSources(payload,company.cik,new Date().toISOString()).catch(error=>({providerStatus:'unavailable' as const,selectedDocuments:0,fetchedDocuments:0,failedDocuments:0,truncatedDocuments:0,items:[],limitations:[`SEC financial report source capture failed: ${error instanceof Error?error.message:'provider request failed'}`]}))):Promise.resolve(undefined);
   const insiderPromise = fetchInsiderPurchases(company.cik,now);
   let history: NonNullable<Snapshot['history']> = [], historyUrl = NASDAQ_SCREENER,historySource='Nasdaq screener · bundled dated fallback',historyRetrievedAt=bundledUniverse.generatedAt,chartMeta:any=null,historySplitAdjusted=false;
   try {
@@ -935,7 +1035,7 @@ export async function companySnapshot(company: Company, options: { includeOpport
   if(session){snapshot.price=session.price;snapshot.dailyChange=session.dailyChange;snapshot.provenance.price={...quoteEvidence,periodEnd:session.periodEnd,tag:'last completed session close'};snapshot.provenance.dailyChange={...quoteEvidence,periodEnd:session.periodEnd,tag:'last completed close / previous completed close - 1'};}
   if(history.length)snapshot.provenance.history=quoteEvidence;
   if (snapshot.marketCap != null) {const availableAt=company.marketCapAvailableAt||company.quoteAvailableAt||bundledUniverse.generatedAt,source=company.marketCapSource||company.quoteSource||'Nasdaq stock screener';snapshot.provenance.marketCap = { source, url: NASDAQ_SCREENER, periodEnd: availableAt.slice(0, 10), availableAt, retrievedAt: now, currency: 'USD', confidence: source.includes('bundled') ? 'low' : 'medium' };}
-  const [summaryResult, newsResult, googleNewsResult, insiderResult, filingsResult,form8KItemIndex] = await Promise.all([summaryPromise, newsPromise, googleNewsPromise, insiderPromise, filingsPromise,form8KItemIndexPromise]);
+  const [summaryResult, newsResult, googleNewsResult, insiderResult, filingsResult,form8KItemIndex,financialSourceIndex] = await Promise.all([summaryPromise, newsPromise, googleNewsPromise, insiderPromise, filingsPromise,form8KItemIndexPromise,financialSourceIndexPromise]);
   const summary = summaryResult?.data?.summaryData ?? {};
   const summaryValue = (key: string) => String(summary[key]?.value ?? '').trim();
   const summaryEvidence:Provenance={source:'Nasdaq quote summary · observed',url:`https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/summary?assetclass=stocks`,periodEnd:now.slice(0,10),availableAt:now,retrievedAt:now,confidence:'medium'};
@@ -980,7 +1080,7 @@ export async function companySnapshot(company: Company, options: { includeOpport
     }
     await enrichWithYahooProfile(snapshot, symbol, now, profilePromise);
     snapshot.research = { financials: !!snapshot.revenue, valuation: snapshot.evSales != null || snapshot.ps != null, analysts: snapshot.analystTarget != null, sector: !!snapshot.sector };
-    if (options.includeOpportunityResearch) await attachOpportunityEarnings(snapshot, null, factsResult.error, await benchmarkPromise, historySplitAdjusted, filingsResult, true,form8KItemIndex);
+    if (options.includeOpportunityResearch) await attachOpportunityEarnings(snapshot, null, factsResult.error, await benchmarkPromise, historySplitAdjusted, filingsResult, true,form8KItemIndex,financialSourceIndex);
     return translateSnapshotContent(applyFinancingRisk(snapshot));
   }
 
@@ -994,7 +1094,7 @@ export async function companySnapshot(company: Company, options: { includeOpport
     const bundledRecovered=applyBundledFundamentals(snapshot,company.cik,now);
     await enrichWithYahooProfile(snapshot, symbol, now, profilePromise);
     snapshot.research = { financials: bundledRecovered||!!snapshot.revenue, valuation: snapshot.evSales != null || snapshot.ps != null, analysts: snapshot.analystTarget != null, sector: !!snapshot.sector };
-    if (options.includeOpportunityResearch) await attachOpportunityEarnings(snapshot, null, factsResult.error, await benchmarkPromise, historySplitAdjusted, filingsResult, true,form8KItemIndex);
+    if (options.includeOpportunityResearch) await attachOpportunityEarnings(snapshot, null, factsResult.error, await benchmarkPromise, historySplitAdjusted, filingsResult, true,form8KItemIndex,financialSourceIndex);
     return translateSnapshotContent(applyFinancingRisk(snapshot));
   }
 
@@ -1030,7 +1130,7 @@ export async function companySnapshot(company: Company, options: { includeOpport
   snapshot.research = { financials: !!snapshot.revenue, valuation: snapshot.evSales != null || snapshot.ps != null, analysts: snapshot.analystTarget != null, sector: !!snapshot.sector };
   // Preserve the root CIK and facts envelope for issuer-identity validation;
   // the legacy fundamental parsers above intentionally consume `facts` only.
-  if (options.includeOpportunityResearch) await attachOpportunityEarnings(snapshot, factsResult.value, undefined, await benchmarkPromise, historySplitAdjusted, filingsResult, true,form8KItemIndex);
+  if (options.includeOpportunityResearch) await attachOpportunityEarnings(snapshot, factsResult.value, undefined, await benchmarkPromise, historySplitAdjusted, filingsResult, true,form8KItemIndex,financialSourceIndex);
   return translateSnapshotContent(applyFinancingRisk(enrichFinancials(snapshot,facts,factsUrl)));
 }
 

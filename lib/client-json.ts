@@ -9,7 +9,7 @@ export async function apiJson<T>(url:string,options?:RequestInit):Promise<T>{
    ? `مسار الخادم أعاد صفحة HTML بدل JSON (${response.status}). أعد نشر النسخة أو أعد المحاولة بعد تحديث الصفحة.`
    : `الخادم أعاد استجابة غير صالحة (${response.status}). أعد المحاولة؛ وإذا تكرر الخطأ فالمسار غير منشور بصورة صحيحة.`);
  }
- if(!response.ok)throw Error(payload?.error||`تعذّر الاتصال بالخادم (${response.status})`);
+ if(!response.ok){const error=Error(payload?.error||`تعذّر الاتصال بالخادم (${response.status})`);if(typeof payload?.code==='string')Object.assign(error,{code:payload.code});throw error;}
  if(payload==null||typeof payload!=='object')throw Error('استجابة الخادم فارغة أو غير صالحة.');
  return payload as T;
 }

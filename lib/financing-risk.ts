@@ -1,6 +1,7 @@
 import type { Snapshot, Provenance } from './engine';
 import { derivedEvidence } from './evidence';
 import {compatibleFinancialSources,compatibleSnapshotMetrics,operatingIssuerMetricsApplicable,modelEvidenceAvailable} from './financial-integrity';
+import {hasVerifiedShareRatio} from './research';
 
 export type FinancingRiskLevel = 'clean' | 'mild' | 'elevated' | 'severe' | 'unknown';
 
@@ -39,7 +40,7 @@ export function assessFinancingRisk(snapshot: Snapshot): { level: FinancingRiskL
   const revenueKnown = annual('revenue') && snapshot.revenue! > 0;
   const fcfKnown = annual('fcf');
   const incomeKnown = annual('netIncome');
-  const dilutionKnown = snapshot.splitAdjusted === true && known('dilution');
+  const dilutionKnown = hasVerifiedShareRatio(snapshot) && known('dilution');
   const balancesAligned = cashKnown && debtKnown && compatibleSnapshotMetrics(snapshot, ['cash', 'debt'], 'balance');
   const flowAligned = (key: 'fcf'|'netIncome') => compatibleFinancialSources([snapshot.provenance[key], snapshot.provenance.revenue], 'flow');
   const runwayAligned = cashKnown && fcfKnown && snapshot.provenance.cash.currency === snapshot.provenance.fcf.currency
@@ -50,6 +51,7 @@ export function assessFinancingRisk(snapshot: Snapshot): { level: FinancingRiskL
   if (!balancesAligned) missing.push('compatible-cash-debt');
   if (!fcfKnown || !flowAligned('fcf') || !runwayAligned) missing.push('annual-compatible-cash-flow');
   if (!(fcfKnown && flowAligned('fcf')) && !(incomeKnown && flowAligned('netIncome'))) missing.push('annual-compatible-earnings');
+  if (!dilutionKnown) missing.push('split-reviewed-share-change');
   // Adverse findings are independently observable. A loss never suppresses
   // evidenced burn, leverage or issuance signals; missing data cannot mean clean.
   const cash = cashKnown ? snapshot.cash! : 0;

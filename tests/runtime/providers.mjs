@@ -1,13 +1,18 @@
 export let historyCalls=0;
+export const historyRequests=[];
+export class HistoricalSessionsUnavailableError extends Error {constructor(symbol){super(`${symbol}: no historical sessions returned by Yahoo, Cboe or Nasdaq`);this.name='HistoricalSessionsUnavailableError';this.retryable=false;}}
 let historyResult=null;
 export function setHistoryResult(value){historyResult=value;}
-export async function historicalMarketData(){historyCalls++;if(historyResult)return historyResult;throw Error('Injected provider outage');}
+export async function historicalMarketData(...args){historyCalls++;historyRequests.push(args);if(historyResult instanceof Error)throw historyResult;if(historyResult)return historyResult;throw Error('Injected provider outage');}
 export async function companySnapshot(){throw Error('No provider configured in isolated test');}
+let observedDescription=null;
+export const setObservedCompanyDescription=value=>{observedDescription=value;};
+export async function observedNasdaqCompanyDescription(){return observedDescription;}
 let opportunityResult={providerStatus:'retrieved',retryable:false};
 export let opportunityCalls=0;
 export const resetOpportunityCalls=()=>{opportunityCalls=0;};
 export const setOpportunityResearchResult=value=>{opportunityResult=value;};
-export async function enrichSnapshotsWithSecOpportunity(snapshots){opportunityCalls++;if(opportunityResult instanceof Error)return {providerStatus:'unavailable',retryable:true,requests:2,error:opportunityResult.message};for(const snapshot of snapshots)snapshot.opportunityResearch={earnings:{providerStatus:opportunityResult.providerStatus,coverage:{annualPeriodsFound:0,quarterlyPeriodsFound:0,selectedUnit:'USD'},annual:[],quarterly:[],missing:['Synthetic runtime provider fixture'],conflicts:[],limitations:[],readyForScoring:false},financialStrength:{providerStatus:opportunityResult.providerStatus,metrics:{},missing:['Synthetic runtime provider fixture'],conflicts:[],limitations:[],readyForScoring:false}};return {...opportunityResult,requests:2};}
+export async function enrichSnapshotsWithSecOpportunity(snapshots){opportunityCalls++;const outcome=Array.isArray(opportunityResult)?opportunityResult.shift()??{providerStatus:'retrieved',retryable:false}:opportunityResult;if(outcome instanceof Error)return {providerStatus:'unavailable',retryable:true,requests:2,error:outcome.message};for(const snapshot of snapshots)snapshot.opportunityResearch={earnings:{providerStatus:outcome.providerStatus,coverage:{annualPeriodsFound:0,quarterlyPeriodsFound:0,selectedUnit:'USD'},annual:[],quarterly:[],missing:['Synthetic runtime provider fixture'],conflicts:[],limitations:[],readyForScoring:false},financialStrength:{providerStatus:outcome.providerStatus,metrics:{},missing:['Synthetic runtime provider fixture'],conflicts:[],limitations:[],readyForScoring:false}};return {...outcome,requests:2};}
 export async function enrichSnapshotWithSecOpportunity(snapshot){return enrichSnapshotsWithSecOpportunity([snapshot]);}
 export const consumeProviderIssues=()=>[];
 export const quickSymbols=[];

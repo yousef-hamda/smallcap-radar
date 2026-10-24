@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mergeCompanyFacts,fetchCompanyFactsFallback,preliminarySnapshot} from '../../.test-build/bulk.mjs';
+import {mergeCompanyFacts,fetchCompanyFactsFallback,fetchBulkFundamentals,preliminarySnapshot} from '../../.test-build/bulk.mjs';
+import {validCalendarDate} from '../../.test-build/sec.mjs';
 const asOf=new Date('2026-10-03T12:00:00Z');
 const fact=(value,extra={})=>({cik:1,start:'2025-01-01',end:'2025-12-31',val:value,unit:'USD',scope:'consolidated',tag:'RevenueFromContractWithCustomerExcludingAssessedTax',priority:1,url:'https://data.sec.gov/api/xbrl/frames/us-gaap/revenue/USD/CY2025.json',observedAt:asOf.toISOString(),kind:'frames',...extra});
 const merged=(a,b)=>mergeCompanyFacts({revenue:a},{revenue:b});
@@ -27,6 +28,21 @@ test('same fiscal end cannot turn different durations, currencies or scopes into
 test('legacy unresolved conflicts remain conserved and new comparison warnings surface on compact snapshots',()=>{
  const old='revenue: historical unresolved conflict without complete source pair';const result=mergeCompanyFacts({revenue:fact(100),conflicts:[old]},{revenue:candidate(100.5)});assert.deepEqual(result.conflicts,[old]);
  const s=preliminarySnapshot({cik:1,ticker:'SYNTH',name:'Fixture',exchange:'NYSE',securityType:'common',price:10,marketCap:100},result,asOf.toISOString());assert(s.dataIssues.some(item=>item.startsWith('[source-comparison] ')));assert(s.sourceConflicts.includes(old));
+});
+
+test('Frames rejects impossible dates and records response-time provenance when filing date is absent',async()=>{
+ assert.equal(validCalendarDate('2026-02-28'),true);assert.equal(validCalendarDate('2026-02-30'),false);
+ const originalFetch=globalThis.fetch,oldAgent=process.env.SEC_USER_AGENT;process.env.SEC_USER_AGENT='SmallCapRadar test (contact: test@example.com)';
+ const initial=new Map([[99104,{revenue:fact(100,{cik:99104,end:'2024-12-31',filed:'2025-02-01'})}]]);
+ globalThis.fetch=async()=>{await new Promise(resolve=>setTimeout(resolve,20));return Response.json({data:[
+  {cik:99104,start:'2025-01-01',end:'2026-02-30',val:999},
+  {cik:99105,start:'2025-01-01',end:'2025-12-31',val:200},
+ ]});};
+ try{
+  const started=Date.now();const result=await fetchBulkFundamentals([99104,99105],asOf,{offset:0,limit:1,initial});
+  assert.equal(result.fundamentals.get(99104).revenue.val,100,'an impossible later period must not replace a usable existing fact');
+  const fetched=result.fundamentals.get(99105).revenue;assert.equal(fetched.val,200);assert(Date.parse(fetched.observedAt)>started,'observedAt must reflect provider response completion rather than request start/as-of');
+ }finally{globalThis.fetch=originalFetch;if(oldAgent===undefined)delete process.env.SEC_USER_AGENT;else process.env.SEC_USER_AGENT=oldAgent;}
 });
 
 test('mocked official Frames and Company Facts acquisition applies period and materiality checks before source conflicts',async()=>{

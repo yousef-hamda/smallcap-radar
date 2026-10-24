@@ -61,31 +61,32 @@ test('market capitalization freshness is checked at its own dependency, not the 
  s.provenance.marketCap=source(undefined,'2026-10-02',{availableAt:'2026-10-02T21:00:00Z'});const fresh=alignSnapshotFinancials(s);assert.equal(fresh.ps,.2);assert.equal(fresh.fcfYield,1);assert(factor(fresh,'valuation').score>0);
 });
 
-test('new comparable SEC revenue periods recover growth credit masked by a stale finite compact field',()=>{
- const s={...snapshot(),opportunityResearch:history()};assert.equal(factor(s,'catalysts').score,5);
- s.revenueGrowth=.1;s.provenance.revenueGrowth=source('2020-01-01','2020-12-31');assert.equal(factor(s,'catalysts').score,5);
+test('new comparable SEC revenue periods recover growth discovery coverage without catalyst credit',()=>{
+ const s={...snapshot(),opportunityResearch:history()};assert.equal(factor(s,'catalysts').score,0);assert.equal(factor(s,'catalysts').modelInputCoveragePct,50);
+ s.revenueGrowth=.1;s.provenance.revenueGrowth=source('2020-01-01','2020-12-31');assert.equal(factor(s,'catalysts').modelInputCoveragePct,50);
 });
 
 test('overlapping YTD, wrong source dates and segment revenue cannot impersonate standalone growth periods',()=>{
  for(const mutate of [r=>r.annual[1].start='2025-04-01',r=>r.annual[1].metrics.revenue.source.periodStart='2025-04-01',r=>r.annual[1].metrics.revenue.source.scope='segment',r=>r.annual[1].metrics.revenue.source.currency='EUR']){
-  const s={...snapshot(),opportunityResearch:history()};mutate(s.opportunityResearch.earnings);assert.equal(factor(s,'catalysts').score,0);
+  const s={...snapshot(),opportunityResearch:history()};mutate(s.opportunityResearch.earnings);assert.equal(factor(s,'catalysts').modelInputCoveragePct,0);
  }
  const quarters=Array.from({length:8},(_,index)=>{const year=2024+Math.floor(index/4),month=(index%4)*3;const start=new Date(Date.UTC(year,month,1)).toISOString().slice(0,10),end=new Date(Date.UTC(year,month+3,0)).toISOString().slice(0,10);return {start,end,metrics:{revenue:metric(index<4?25:35,start,end)}};});
- const s={...snapshot(),opportunityResearch:{earnings:{annual:[],quarterly:quarters,conflicts:[]}}};assert.equal(factor(s,'catalysts').score,5);
- for(const row of quarters){row.start=row.start.slice(0,4)+'-01-01';row.metrics.revenue.source.periodStart=row.start;}assert.equal(factor(s,'catalysts').score,0);
+ const s={...snapshot(),opportunityResearch:{earnings:{annual:[],quarterly:quarters,conflicts:[]}}};assert.equal(factor(s,'catalysts').modelInputCoveragePct,50);
+ for(const row of quarters){row.start=row.start.slice(0,4)+'-01-01';row.metrics.revenue.source.periodStart=row.start;}assert.equal(factor(s,'catalysts').modelInputCoveragePct,0);
 });
 
-test('backlog ratio credit requires aligned currency, consolidated scope and current source availability',()=>{
+test('backlog discovery coverage requires aligned currency, consolidated scope and current source availability',()=>{
  const s={...snapshot(),revenue:100,backlog:{kind:'backlog',amount:100,expectedRecognitionBy:'2026-12-31',currency:'USD'},provenance:{revenue:source('2025-07-01','2026-06-30'),backlog:source(undefined,'2026-06-30')}};
- assert.equal(factor(s,'catalysts').score,1.5);
- for(const mutate of [x=>x.backlog.currency='EUR',x=>x.provenance.backlog.currency='EUR',x=>x.provenance.backlog.scope='segment',x=>x.provenance.backlog.periodEnd='2020-06-30',x=>x.provenance.backlog.retrievedAt='2026-10-04T12:00:00Z']){const held=structuredClone(s);mutate(held);assert.equal(factor(held,'catalysts').score,0);}
+ assert.equal(factor(s,'catalysts').score,0);assert.equal(factor(s,'catalysts').modelInputCoveragePct,30);
+ for(const mutate of [x=>x.backlog.currency='EUR',x=>x.provenance.backlog.currency='EUR',x=>x.provenance.backlog.scope='segment',x=>x.provenance.backlog.periodEnd='2020-06-30',x=>x.provenance.backlog.retrievedAt='2026-10-04T12:00:00Z']){const held=structuredClone(s);mutate(held);assert.equal(factor(held,'catalysts').modelInputCoveragePct,0);}
 });
 
 test('split-adjusted chart history does not certify or penalize an unreconciled SEC share change',()=>{
- const stock={history:[{date:'2025-01-01',close:10},{date:'2026-10-02',close:10}],splits:[{date:'2026-01-15',factor:2}],url:'https://query1.finance.yahoo.com/v8/finance/chart/SYNTH',source:'Yahoo Finance chart API',retrievedAt:asOf,availableAt:'2026-10-02T21:00:00Z'};
- const s={...snapshot(),shareCountRatio:2.2,dilution:1.2,splitAdjusted:false,provenance:{shareCountRatio:source('2025-06-30','2026-06-30'),dilution:source('2025-06-30','2026-06-30')}};
+ const stock={history:[{date:'2025-01-01',close:10},{date:'2026-10-02',close:10}],splits:[{date:'2026-01-15',factor:2}],url:'https://query1.finance.yahoo.com/v8/finance/chart/SYNTH?events=div%2Csplits',source:'Yahoo Finance chart API · split-adjusted daily history and split events',retrievedAt:asOf,availableAt:'2026-10-02T21:00:00Z'};
+ const raw=(start,end)=>source(start,end,{source:'SEC reported share ratio; corporate actions unverified'});
+ const s={...snapshot(),shareCountRatio:2.2,dilution:1.2,splitAdjusted:false,provenance:{shareCountRatio:raw('2025-06-30','2026-06-30'),dilution:raw('2025-06-30','2026-06-30')}};
  attachScanMarketResearch(s,stock);assert.equal(s.splitAdjusted,true);assert(Math.abs(s.dilution-.1)<1e-12);
- const uncovered={...snapshot(),shareCountRatio:2.2,dilution:1.2,splitAdjusted:false,provenance:{shareCountRatio:source('2024-06-30','2026-06-30')}};attachScanMarketResearch(uncovered,stock);assert.equal(uncovered.splitAdjusted,false);
+ const uncovered={...snapshot(),shareCountRatio:2.2,dilution:1.2,splitAdjusted:false,provenance:{shareCountRatio:raw('2024-06-30','2026-06-30')}};attachScanMarketResearch(uncovered,stock);assert.equal(uncovered.splitAdjusted,false);
  const noShares=snapshot();attachScanMarketResearch(noShares,stock);assert.notEqual(noShares.splitAdjusted,true);
 });
 
@@ -120,7 +121,7 @@ test('canonical borrowing aliases preserve valid IFRS long-term parts while reje
 
 test('requested research horizon governs earnings and backlog timing without changing factor weights',()=>{
  const s={...snapshot(),revenue:100,backlog:{kind:'backlog',amount:100,expectedRecognitionBy:'2026-12-31',currency:'USD'},nextEarnings:'2026-12-01',provenance:{revenue:source('2025-07-01','2026-06-30'),backlog:source(undefined,'2026-06-30'),nextEarnings:source(undefined,'2026-10-01',{availableAt:'2026-10-01T00:00:00Z'})}};
- const short=evaluateOpportunity(s,{}, {horizonMonths:1});const normal=evaluateOpportunity(s,{}, {horizonMonths:6});assert.equal(short.factors.find(f=>f.id==='catalysts').score,0);assert.equal(normal.factors.find(f=>f.id==='catalysts').score,1.9);assert.deepEqual(short.factors.map(f=>f.weight),normal.factors.map(f=>f.weight));
+ const short=evaluateOpportunity(s,{}, {horizonMonths:1});const normal=evaluateOpportunity(s,{}, {horizonMonths:6});assert.equal(short.factors.find(f=>f.id==='catalysts').score,0);assert.equal(normal.factors.find(f=>f.id==='catalysts').score,0);assert.equal(short.factors.find(f=>f.id==='catalysts').modelInputCoveragePct,0);assert.equal(normal.factors.find(f=>f.id==='catalysts').modelInputCoveragePct,50);assert.deepEqual(short.factors.map(f=>f.weight),normal.factors.map(f=>f.weight));
 });
 
 test('definite debt contradiction removes only inherited debt while preserving independent cash',()=>{
@@ -165,7 +166,7 @@ test('a complete segment flow history cannot be promoted to consolidated issuer 
 
 test('growth selection recovers from invalid newer dependencies and retains the actual chosen input trace',()=>{
  const s={...snapshot(),opportunityResearch:history(),revenueGrowth:.2,provenance:{revenueGrowth:source('2025-07-01','2026-06-30')}};
- s.provenance.revenueGrowth.dependencies=[source('2025-07-01','2026-06-30',{retrievedAt:'2026-10-04T12:00:00Z'})];let result=factor(s,'catalysts');assert.equal(result.score,5);assert(result.calculation.inputs.some(item=>item.name==='derived-observed-revenue-growth'));
- delete s.provenance.revenueGrowth.dependencies;result=factor(s,'catalysts');assert.equal(result.score,2.5);assert(!result.calculation.inputs.some(item=>item.name==='derived-observed-revenue-growth'));assert.equal(result.sources[0].periodEnd,'2026-06-30');
+ s.provenance.revenueGrowth.dependencies=[source('2025-07-01','2026-06-30',{retrievedAt:'2026-10-04T12:00:00Z'})];let result=factor(s,'catalysts');assert.equal(result.score,0);assert.equal(result.modelInputCoveragePct,50);assert(result.calculation.inputs.some(item=>item.name==='derived-observed-revenue-growth'));
+ delete s.provenance.revenueGrowth.dependencies;result=factor(s,'catalysts');assert.equal(result.modelInputCoveragePct,50);assert(!result.calculation.inputs.some(item=>item.name==='derived-observed-revenue-growth'));assert.equal(result.sources[0].periodEnd,'2026-06-30');
  s.revenueGrowth=140/100-1;result=factor(s,'catalysts');assert(!result.calculation.inputs.some(item=>item.name==='derived-observed-revenue-growth'));assert.equal(result.sources[0].periodEnd,'2026-06-30','equal numeric observations do not substitute another source');
 });

@@ -2,6 +2,7 @@ import type { Provenance } from './engine';
 import type { OpportunityEvidence } from './opportunity-engine';
 import { isOpportunityProvenanceValid } from './opportunity-engine';
 import { compatibleFinancialSources } from './financial-integrity';
+import { evidenceTimestamp } from './evidence';
 
 export type FairValueMethodId = 'normalized-dcf' | 'peer-multiples' | 'sum-of-parts' | 'residual-income' | 'risk-adjusted-npv' | 'asset-value';
 
@@ -178,18 +179,22 @@ function unavailableTechnical(rationale: string, conflicts: string[] = []): Tech
 
 function mean(values: number[]) { return values.reduce((sum, value) => sum + value, 0) / values.length; }
 function validBars(bars: TechnicalBar[], minCount: number, asOf: string) {
-  if (bars.length < minCount || bars.some((bar, index) => !bar.completed || !/^\d{4}-\d{2}-\d{2}$/.test(bar.date) || !Number.isFinite(Date.parse(bar.date)) || Date.parse(bar.date) > Date.parse(asOf)
+  if (bars.length < minCount || bars.some((bar, index) => !bar.completed || !/^\d{4}-\d{2}-\d{2}$/.test(bar.date) || !Number.isFinite(evidenceTimestamp(bar.date)) || Date.parse(bar.date) > Date.parse(asOf)
     || [0, 6].includes(new Date(`${bar.date}T00:00:00Z`).getUTCDay())
     || !Number.isFinite(bar.close) || bar.close <= 0 || (bar.volume != null && (!Number.isFinite(bar.volume) || bar.volume < 0))
     || (index > 0 && Date.parse(bar.date) <= Date.parse(bars[index - 1].date)))) return false;
   return true;
 }
-function intervalCadenceValid(bars: TechnicalBar[], count: number, maximumSpanDays: number, maximumGapDays: number) {
+function intervalCadenceValid(bars: TechnicalBar[], count: number, maximumSpanDays: number, maximumGapDays: number, minimumGapDays = 1) {
   const sample = bars.slice(-count);
   if (sample.length < count) return false;
   const millis = (date: string) => Date.parse(`${date}T00:00:00Z`);
   if ((millis(sample.at(-1)!.date) - millis(sample[0].date)) / 86_400_000 > maximumSpanDays) return false;
-  return sample.every((bar, index) => index === 0 || (millis(bar.date) - millis(sample[index - 1].date)) / 86_400_000 <= maximumGapDays);
+  return sample.every((bar, index) => {
+    if (index === 0) return true;
+    const gapDays = (millis(bar.date) - millis(sample[index - 1].date)) / 86_400_000;
+    return gapDays >= minimumGapDays && gapDays <= maximumGapDays;
+  });
 }
 function wilderRsi(closes: number[], period = 14) {
   if (closes.length <= period || closes.some(value => !finitePositive(value))) return null;
@@ -204,6 +209,7 @@ function wilderRsi(closes: number[], period = 14) {
     averageGain = (averageGain * (period - 1) + Math.max(0, change)) / period;
     averageLoss = (averageLoss * (period - 1) + Math.max(0, -change)) / period;
   }
+  if (averageGain === 0 && averageLoss === 0) return 50;
   if (averageLoss === 0) return 100;
   if (averageGain === 0) return 0;
   return 100 - 100 / (1 + averageGain / averageLoss);
@@ -232,8 +238,8 @@ export function scoreTechnicalTiming(input: TechnicalTimingAssessment): Technica
     || !validBars(input.monthly, 12, input.asOf)
     || !validBars(input.benchmarkDaily, 64, input.asOf)
     || !intervalCadenceValid(input.daily, 200, 370, 7)
-    || !intervalCadenceValid(input.weekly, 30, 350, 14)
-    || !intervalCadenceValid(input.monthly, 12, 500, 62)
+    || !intervalCadenceValid(input.weekly, 30, 350, 14, 4)
+    || !intervalCadenceValid(input.monthly, 12, 500, 62, 20)
     || !intervalCadenceValid(input.benchmarkDaily, 64, 125, 7)) {
     return unavailableTechnical('At least 200 completed daily, 30 weekly, 12 monthly, and 64 benchmark daily bars with valid provenance are required.');
   }
@@ -280,7 +286,7 @@ export function scoreTechnicalTiming(input: TechnicalTimingAssessment): Technica
     rationale: `Completed split-adjusted bars only. Price ${last > ma200 ? 'above' : 'below'} MA200; ${dailyTrend / 2.5}/4 daily averages are below price; weekly MA30 ${last > ma30w ? 'reclaimed' : 'not reclaimed'}; RSI(14) ${rsi14.toFixed(1)}; 63-session relative strength ${(relativeStrength63d * 100).toFixed(1)} percentage points versus the supplied benchmark. These are descriptive indicators, not a reversal prediction.`,
     sources: [input.source, input.weeklySource, input.monthlySource, input.benchmarkSource], confidence: [input.source, input.weeklySource, input.monthlySource, input.benchmarkSource].every(source => source.confidence === 'high') ? 'high' : 'medium',
     indicators: { ma20: rounded(ma20), ma50: rounded(ma50), ma100: rounded(ma100), ma200: rounded(ma200), ma30w: rounded(ma30w), rsi14: rounded(rsi14, 2), relativeStrength63d: rounded(relativeStrength63d, 5) },
-    calculation: { rubricId: 'technical-timing-v1', inputs: [
+    calculation: { rubricId: 'technical-timing-v3-flat-rsi-neutral', inputs: [
       { name: 'completed-daily-bars', value: daily.length }, { name: 'completed-weekly-bars', value: weekly.length }, { name: 'completed-monthly-bars', value: monthly.length },
       { name: 'price', value: last }, { name: 'ma20', value: rounded(ma20) }, { name: 'ma50', value: rounded(ma50) },
       { name: 'ma100', value: rounded(ma100) }, { name: 'ma200', value: rounded(ma200) }, { name: 'ma30w', value: rounded(ma30w) },
@@ -464,6 +470,10 @@ function scoreEarningsQualityCore(input: EarningsQualityAssessment, allowPartial
 
   const quarterly = [...input.quarterly].sort((a, b) => Date.parse(a.revenue.source.periodEnd) - Date.parse(b.revenue.source.periodEnd));
   const recent = quarterly.slice(-4);
+  const recentQuarterWindowDays = (Date.parse(recent.at(-1)!.revenue.source.periodEnd) - Date.parse(recent[0].revenue.source.periodStart!)) / 86_400_000;
+  if (recentQuarterWindowDays < 330 || recentQuarterWindowDays > 400) {
+    return unavailableEarnings('The latest four standalone quarters do not span a compatible TTM period.', ['TTM quarter coverage mismatch']);
+  }
   const positiveOperatingQuarters = recent.filter(period => period.operatingIncome.value > 0).length;
   const operatingPersistence = rounded(positiveOperatingQuarters / 4 * 10, 2);
   const ttmNetIncome = recent.reduce((sum, period) => sum + period.netIncome.value, 0);
@@ -1014,7 +1024,8 @@ export function scoreFairValue(input: FairValueAssessment): FairValueScore {
             : marginOfSafety < 0.3 ? 7
               : marginOfSafety < 0.5 ? 8 : 9;
 
-  if (input.conservativeValue.value < price) score = Math.min(score, 4);
+  const bearMarginOfSafety=input.conservativeValue.value/price-1;
+  score=Math.min(score,bearCaseScoreCap(input.conservativeValue.value,price));
 
   const sources = [...requiredValues.map(item => item.source),
     ...input.scenarioCalculations.conservative.assumptions.map(assumption => assumption.source),
@@ -1024,7 +1035,7 @@ export function scoreFairValue(input: FairValueAssessment): FairValueScore {
   const confidence: FairValueScore['confidence'] = methodSpread <= 0.2 ? 'high' : 'medium';
   return {
     score,
-    rationale: `Base-case margin of safety ${(marginOfSafety * 100).toFixed(1)}%; ${distinctMethods.length} suitable methods; spread ${(methodSpread * 100).toFixed(1)}%. Capitalization reconciliation and normalization are source-backed.${input.conservativeValue.value < price ? ' Score capped at 4 because conservative value is below the current price.' : ''}`,
+    rationale: `Base-case margin of safety ${(marginOfSafety * 100).toFixed(1)}%; conservative-case downside ${(bearMarginOfSafety * 100).toFixed(1)}%; ${distinctMethods.length} suitable methods; spread ${(methodSpread * 100).toFixed(1)}%. Capitalization reconciliation and normalization are source-backed.`,
     sources,
     confidence,
     marginOfSafety: rounded(marginOfSafety),
@@ -1067,4 +1078,13 @@ export function scoreFairValue(input: FairValueAssessment): FairValueScore {
       ],
     },
   };
+}
+
+export function bearCaseScoreCap(conservativeValue:number,currentPrice:number):number{
+ const bearRatio=conservativeValue/currentPrice;
+ if(bearRatio<.5)return 0;
+ if(bearRatio<=.75)return 1;
+ if(bearRatio<=.9)return 2;
+ if(bearRatio<1)return 3;
+ return 10;
 }

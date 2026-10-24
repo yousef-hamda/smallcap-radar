@@ -6,6 +6,7 @@ import { compatibleSnapshotMetrics, commercialObservationKind, operatingIssuerMe
 import {peerObservation,peerContext,uniqueIssuerPeers} from './opportunity-peers';
 import {buildOpportunityThesis,intrinsicValuationGrade} from './opportunity-thesis';
 import {MODEL_DEPENDENCIES,conflictAffectsKeys,modelFactorConflicts} from './opportunity-conflicts';
+import {hasVerifiedShareRatio} from './research';
 export {conflictAffectsKeys,modelFactorConflicts} from './opportunity-conflicts';
 
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
@@ -27,7 +28,9 @@ export function proxyOpportunityEvidence(snapshot: Snapshot,horizonMonths:number
     ||Date.parse(derivedGrowth.source.periodEnd)>=Date.parse(oldGrowthSource!.periodEnd));
   const growthTrace = useDerivedGrowth?derivedGrowth!.inputs:[];
   const observation = (key: string): number | null => {
-    if (key === 'dilution' && snapshot.splitAdjusted !== true) return null;
+    if (['ma30w','low52w','high52w','return12m'].includes(key)
+      && !snapshot.provenance?.[key]?.source?.startsWith('Yahoo Finance chart API · split-adjusted daily history')) return null;
+    if (key === 'dilution' && !hasVerifiedShareRatio(snapshot)) return null;
     if (['ps','evSales','fcfYield'].includes(key) && !commonPerShareMetricsApplicable(snapshot)) return null;
     if (!operatingIssuerMetricsApplicable(snapshot) && !['price','ma30w','low52w','high52w','return12m','nextEarnings'].includes(key)) return null;
     const value = key==='revenueGrowth'&&useDerivedGrowth ? derivedGrowth?.value : snapshot[key as keyof Snapshot];
@@ -121,10 +124,10 @@ export function proxyOpportunityEvidence(snapshot: Snapshot,horizonMonths:number
     &&(snapshot.provenance.backlog.scope??'consolidated')==='consolidated'
     &&(snapshot.provenance.revenue?.scope??'consolidated')==='consolidated'
     &&auditableUrl(snapshot.provenance.backlog.url);
-  set('catalysts', 'Observed growth and disclosed backlog approximate business momentum; a scheduled earnings event earns only limited timing credit, not positive impact.', [
-    component('growth-momentum', 50, ['revenueGrowth'], value => clamp(value * 25)),
-    { name: 'backlog', weight: 30, grade: backlogEligible ? clamp(backlog!.amount! / revenue! * 5) : null, keys: ['backlog','revenue'], values: [backlog?.amount ?? 'missing', revenue ?? 'missing'] },
-    { name: 'earnings-window', weight: 20, grade: inHorizon ? 2 : null, keys: ['nextEarnings'], values: [snapshot.nextEarnings ?? 'missing'] },
+  set('catalysts', 'Historical growth, disclosed backlog and an earnings date are discovery signals only. Their 50/30/20 input coverage is traced, but none establishes a source-reviewed material future event or earns catalyst points.', [
+    component('growth-momentum', 50, ['revenueGrowth'], () => 0),
+    { name: 'backlog', weight: 30, grade: backlogEligible ? 0 : null, keys: ['backlog','revenue'], values: [backlog?.amount ?? 'missing', revenue ?? 'missing'] },
+    { name: 'earnings-window', weight: 20, grade: inHorizon ? 0 : null, keys: ['nextEarnings'], values: [snapshot.nextEarnings ?? 'missing'] },
   ]);
   set('competitivePosition', 'Margins and growth approximate business quality; they do not establish a durable competitive moat.', [
     component('gross-margin', 30, ['grossMargin'], value => value * 15),
@@ -144,9 +147,9 @@ export function proxyOpportunityEvidence(snapshot: Snapshot,horizonMonths:number
     component('dilution', 30, ['dilution'], value => clamp(10 - Math.max(0, value) * 40)),
     { name: 'financing-review', weight: 30, grade: financingKnown ? snapshot.deathSpiral === 'clean' ? 10 : snapshot.deathSpiral === 'mild' ? 7 : snapshot.deathSpiral === 'severe' ? 0 : 3 : null, keys: ['deathSpiral'], values: [snapshot.deathSpiral ?? 'missing'] },
   ]);
-  set('management', 'Dilution discipline, sourced insider purchases and earnings outcomes approximate alignment; governance diligence remains separate.', [
+  set('management', 'Dilution discipline and earnings outcomes approximate alignment; observed insider buying receives no positive proxy grade without ownership or compensation context to judge materiality.', [
     component('dilution-discipline', 40, ['dilution'], value => clamp(10 - Math.max(0, value) * 40)),
-    component('insider-purchases', 30, ['insiderBuyValue'], value => value > 0 ? 7 : 0),
+    { name: 'insider-purchase-materiality', weight: 30, grade: null, keys: [], values: [snapshot.insiderBuyValue != null ? 'withheld-no-ownership-or-compensation-denominator' : 'missing'] },
     { name: 'earnings-outcome', weight: 30, grade: snapshot.provenance?.lastEarningsStatus && modelEvidenceAvailable(snapshot.provenance.lastEarningsStatus, snapshot.asOf)
       &&(Date.parse(snapshot.asOf)-Date.parse(snapshot.provenance.lastEarningsStatus.periodEnd))/864e5<=400 ? snapshot.lastEarningsStatus === 'إيجابي' ? 7 : snapshot.lastEarningsStatus === 'سلبي' ? 0 : null : null, keys: ['lastEarningsStatus'], values: [snapshot.lastEarningsStatus ?? 'missing'] },
   ]);
@@ -191,7 +194,9 @@ function deriveRevenueGrowth(snapshot: Snapshot) {
   if(quarters.length>=8){
     const last=quarters.slice(-8);
     const adjacent=last.every((item,index)=>index===0||Date.parse(item.source.periodStart!)-Date.parse(last[index-1].source.periodEnd)===86_400_000);
-    if(adjacent&&new Set(last.map(item=>item.unit)).size===1){
+    const windowDays=(items:Metric[])=>items.length===4?(Date.parse(items[3].source.periodEnd)-Date.parse(items[0].source.periodStart!))/86_400_000:NaN;
+    if(adjacent&&windowDays(last.slice(0,4))>=330&&windowDays(last.slice(0,4))<=400
+      &&windowDays(last.slice(4))>=330&&windowDays(last.slice(4))<=400&&new Set(last.map(item=>item.unit)).size===1){
       selected=last;value=last.slice(4).reduce((sum,item)=>sum+item.value,0)/last.slice(0,4).reduce((sum,item)=>sum+item.value,0)-1;method='latest-four-quarter-revenue / prior-four-quarter-revenue - 1';
     }
   }

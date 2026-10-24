@@ -9,31 +9,89 @@ import {evaluateOpportunity} from '../../.test-build/opportunity-engine.mjs';
 import {evaluateOpportunityDossier} from '../../.test-build/opportunity-dossier.mjs';
 import {conflictAffectsKeys,modelFactorConflicts,proxyOpportunityEvidence} from '../../.test-build/opportunity-proxies.mjs';
 import {OPPORTUNITY_SPEC} from '../../.test-build/opportunity-spec.mjs';
-import {buildOpportunityThesis,intrinsicValuationGrade} from '../../.test-build/opportunity-thesis.mjs';
+import {buildOpportunityThesis,hasReviewedEquityCapitalization,intrinsicValuationGrade} from '../../.test-build/opportunity-thesis.mjs';
 import {parseFilingObservations,persistFilingDocument} from '../../.test-build/filing-observations.mjs';
 import {env as runtimeEnv} from '../runtime/env.mjs';
 import {derivedEvidence} from '../../.test-build/evidence.mjs';
+import {reviewShareSplits} from '../../.test-build/research.mjs';
 
 const asOf='2026-10-03T12:00:00Z';
 const source=(start='2026-01-01',end='2026-06-30')=>({source:'SEC fixture',url:'https://data.sec.gov/api/xbrl/companyfacts/CIK0000000001.json',periodStart:start,periodEnd:end,availableAt:'2026-08-01T00:00:00Z',retrievedAt:asOf,currency:'USD',rightsStatus:'redistribution-permitted',confidence:'high'});
-const base=()=>({symbol:'SYNTH',name:'Fixture',asOf,securityType:'common',price:10,marketCap:1000,revenue:100,fcf:20,netIncome:15,cash:100,debt:30,splitAdjusted:true,dilution:0,provenance:Object.fromEntries(['revenue','fcf','netIncome','dilution'].map(k=>[k,source()]).concat(['cash','debt'].map(k=>[k,source(undefined)])))});
+const base=()=>{
+ const raw={...source('2025-06-30','2026-06-30'),source:'SEC reported share ratio; corporate actions unverified'};
+ const yahoo={...source(undefined,'2026-10-02'),source:'Yahoo Finance chart API · split-adjusted daily history and split events',url:'https://query1.finance.yahoo.com/v8/finance/chart/SYNTH?events=div%2Csplits',availableAt:'2026-10-02T21:00:00Z'};
+ const snapshot={symbol:'SYNTH',name:'Fixture',asOf,securityType:'common',price:10,marketCap:1000,revenue:100,fcf:20,netIncome:15,cash:100,debt:30,splitAdjusted:false,shareCountRatio:1,dilution:0,provenance:{...Object.fromEntries(['revenue','fcf','netIncome'].map(k=>[k,source()]).concat(['cash','debt'].map(k=>[k,source(undefined)]))),shareCountRatio:raw,dilution:raw}};
+ return reviewShareSplits(snapshot,[],'2025-06-01','2026-10-02',yahoo);
+};
 const factor=(s,id)=>evaluateOpportunity(s).factors.find(x=>x.id===id);
 
 const valuationFixture=()=>{
- const s=base();s.issuerCommonListingCount=1;s.marketCap=100;
+ const s=base();s.cik=1;s.issuerCommonListingCount=1;s.marketCap=100;
  for(const key of ['price','marketCap'])s.provenance[key]={...source(),periodStart:undefined,periodEnd:'2026-10-02',availableAt:'2026-10-02T21:00:00Z'};
+ s.equityCapitalizationReview={economicCommonClassCount:1,totalCommonShares:10,source:{source:'Reviewed SEC filing equity capitalization',url:'https://www.sec.gov/Archives/edgar/data/1/000000000126000001/report.htm',accession:'0000000001-26-000001',contentHash:'a'.repeat(64),tag:'One economic common class; 10 total shares',periodEnd:'2026-09-30',availableAt:'2026-10-02T00:00:00Z',retrievedAt:asOf,rightsStatus:'redistribution-permitted',confidence:'high'}};
  const annual=[2023,2024,2025].map(year=>{const start=`${year}-01-01`,end=`${year}-12-31`;return {start,end,metrics:Object.fromEntries(Object.entries({revenue:100+(year-2023)*20,netIncome:20,operatingCashFlow:30,capitalExpenditure:5,stockBasedCompensation:5}).map(([key,value])=>[key,{value,unit:'USD',source:source(start,end)}]))};});
  s.opportunityResearch={earnings:{annual,quarterly:[],conflicts:[]},financialStrength:{industryModel:'industrial-operating-company'}};return s;
 };
 
+test('a single listed symbol never proves one economic share class',()=>{
+ const valid=valuationFixture();assert.equal(hasReviewedEquityCapitalization(valid),true);
+ const missing=structuredClone(valid);delete missing.equityCapitalizationReview;
+ assert.equal(hasReviewedEquityCapitalization(missing),false);
+ assert.equal(buildOpportunityThesis(missing).valuation.status,'unavailable');
+ for(const mutate of [
+  s=>s.equityCapitalizationReview.economicCommonClassCount=2,
+  s=>s.equityCapitalizationReview.totalCommonShares=9,
+  s=>s.equityCapitalizationReview.source.url='https://data.sec.gov/api/xbrl/companyfacts/CIK0000000001.json',
+  s=>s.equityCapitalizationReview.source.accession='0000000001-26-000002',
+  s=>s.equityCapitalizationReview.source.contentHash=undefined,
+  s=>s.equityCapitalizationReview.source.availableAt='2026-11-01T00:00:00Z',
+  s=>s.provenance.marketCap.periodEnd='2026-10-01',
+ ]){const s=valuationFixture();mutate(s);assert.equal(hasReviewedEquityCapitalization(s),false);assert.equal(buildOpportunityThesis(s).valuation.status,'unavailable');}
+ assert.equal(buildOpportunityThesis(valid).valuation.status,'available');
+});
+
 test('intrinsic sensitivities use owner cash flow and a conservative earnings cross-check',()=>{
  const s=valuationFixture(),thesis=buildOpportunityThesis(s);
  assert.equal(thesis.valuation.status,'available');assert.equal(thesis.valuation.normalizedCashflow,20);
+ assert(thesis.valuation.sources.some(source=>source.contentHash===s.equityCapitalizationReview.source.contentHash));
  assert.equal(thesis.valuation.scenarios.length,3);assert.equal(thesis.probability,null);assert.equal(thesis.sixMonthTarget,null);
  const [bear,base,bull]=thesis.valuation.scenarios;assert(bear.valuePerSecurity<=base.valuePerSecurity&&base.valuePerSecurity<=bull.valuePerSecurity);
  for(const item of thesis.valuation.scenarios){assert.equal(item.equityValue,Math.min(item.cashflowValue,item.earningsValue));assert.equal(item.upside,item.valuePerSecurity/s.price-1);assert.equal(item.discount,1-s.price/item.valuePerSecurity);}
  assert.notEqual(base.upside,base.discount);assert(intrinsicValuationGrade(thesis)>=0);
  const evaluation=evaluateOpportunity(s);assert.equal(evaluation.factors[0].calculation.rubricId,'valuation-model-v5-opportunity');assert(evaluation.factors[0].calculation.inputs.some(item=>item.name==='base:intrinsic estimate'));assert.equal(evaluation.thesis.action,'research-required');
+});
+
+test('intrinsic valuation recognizes a break-even bear case without changing factor weights',()=>{
+ const snapshot=valuationFixture(),thesis=buildOpportunityThesis(snapshot);
+ assert.equal(thesis.valuation.status,'available');
+ const grade=(bear,base)=>{
+  const scenario=structuredClone(thesis);
+  scenario.valuation.scenarios[0].upside=bear;
+  scenario.valuation.scenarios[1].upside=base;
+  return intrinsicValuationGrade(scenario);
+ };
+ assert.equal(grade(-.5,.5),2,'a 50% bear loss gets no protection credit');
+ assert.equal(grade(-.25,.5),5,'partial bear protection gets partial credit');
+ assert.equal(grade(0,0),0,'bear protection alone cannot make a zero-upside valuation');
+ assert.equal(grade(0,.01),.12,'near-zero base upside only earns near-zero credit');
+ assert.equal(grade(0,.25),3.5,'half the base-upside hurdle gives half the combined grade');
+ assert.equal(grade(0,.5),8,'a break-even bear case clears the conservative required return');
+ assert.equal(grade(.25,.5),8,'bear gains cannot exceed the fixed 60% component');
+ assert.equal(grade(0,1),10,'full factor grade is attainable with sourced scenario economics');
+ for(const bear of [-.5,-.25,0,.25]){
+  const results=[0,.01,.25,.5,1].map(base=>grade(bear,base));
+  assert(results.every((score,index)=>index===0||score>=results[index-1]),'more base upside cannot lower the grade');
+ }
+ for(const base of [0,.25,.5,1]){
+  const results=[-.5,-.25,0,.25].map(bear=>grade(bear,base));
+  assert(results.every((score,index)=>index===0||score>=results[index-1]),'better bear protection cannot lower the grade');
+ }
+ assert.equal(thesis.action,'candidate-review','the sourced fixture clears both intrinsic scenario thresholds');
+ assert.equal(intrinsicValuationGrade(thesis),10);
+ const evaluated=evaluateOpportunity(snapshot);
+ assert.equal(evaluated.factors[0].calculation.inputs.find(input=>input.name==='intrinsic-value-sensitivity:grade').value,10);
+ assert.equal(evaluated.thesis.action,'research-required','a strong valuation alone cannot bypass catalyst and financing review');
+ assert.deepEqual(OPPORTUNITY_SPEC.factors.map(f=>f.weight),[25,20,15,12,10,10,5,3]);
 });
 
 test('intrinsic model withholds unsupported financial, class, currency, time and sector inputs',()=>{
@@ -77,13 +135,24 @@ test('a profitable mismatched quarter cannot create a TTM margin or cash-convers
 test('contract liabilities are identified separately and cannot create positive catalyst points',()=>{
  const s={...base(),backlog:{amount:10000,expectedRecognitionBy:'2026-12-31'},provenance:{...base().provenance,backlog:{...source(undefined),tag:'ContractWithCustomerLiabilityCurrent'}}};
  assert.equal(commercialObservationKind(s),'contract-liability');assert.equal(factor(s,'catalysts').score,0);
- s.provenance.backlog.tag='RevenueRemainingPerformanceObligation';assert.ok(factor(s,'catalysts').score>0);
- delete s.backlog.expectedRecognitionBy;assert.equal(factor(s,'catalysts').score,0,'RPO without a conversion window is not a six-month catalyst');
+ s.provenance.backlog.tag='RevenueRemainingPerformanceObligation';assert.equal(factor(s,'catalysts').score,0);assert.equal(factor(s,'catalysts').modelInputCoveragePct,30,'RPO is a discovery input, not a reviewed future catalyst');
+ delete s.backlog.expectedRecognitionBy;assert.equal(factor(s,'catalysts').modelInputCoveragePct,0,'RPO without a conversion window is not a six-month discovery input');
 });
 
 test('unreviewed splits cannot earn alignment or dilution-protection points',()=>{
  const s=base();assert.ok(factor(s,'management').score>0);
  s.splitAdjusted=false;assert.equal(factor(s,'management').score,0);
+});
+
+test('malformed corporate-action dates cannot verify or alter a reported share ratio',()=>{
+ const s=base();s.splitAdjusted=false;s.shareCountRatio=1.2;s.dilution=.2;
+ const raw={...source('2025-06-30','2026-06-30'),source:'SEC reported share ratio; corporate actions unverified'};
+ const yahoo={...source(undefined,'2026-10-02'),source:'Yahoo Finance chart API · split-adjusted daily history and split events',url:'https://query1.finance.yahoo.com/v8/finance/chart/SYNTH?events=div%2Csplits'};
+ s.provenance.shareCountRatio=raw;s.provenance.dilution=raw;
+ const invalidEvent=reviewShareSplits(s,[{date:'2026-02-30',factor:4}],'2025-06-01','2026-10-02',yahoo);
+ assert.equal(invalidEvent.splitAdjusted,false);assert.equal(invalidEvent.shareCountRatio,1.2);
+ const invalidCoverage=reviewShareSplits(s,[],'2025-02-30','2026-10-02',yahoo);
+ assert.equal(invalidCoverage.splitAdjusted,false);assert.equal(invalidCoverage.shareCountRatio,1.2);
 });
 
 test('every security type retains eight bounded grades without inheriting common-share valuation',()=>{
@@ -117,6 +186,13 @@ test('aligned newer quarters replace stale annual fields and preserve complete d
  assert.equal(evidenceLeaves(aligned.provenance.revenue).length,4);assert.equal(evidenceLeaves(aligned.provenance.fcf).length,8);
  assert.deepEqual(alignSnapshotFinancials(aligned),aligned,'normalization is idempotent');assert.equal(s.revenue,999,'raw input is not mutated');
  s.opportunityResearch.earnings.quarterly[2].metrics.revenue.unit='EUR';assert.equal(alignSnapshotFinancials(s).revenue,999);
+});
+
+test('a short period mislabeled annual cannot replace compact annual financials',()=>{
+ const s=base();s.revenue=999;s.provenance.revenue=source('2024-01-01','2024-12-31');
+ const start='2026-01-01',end='2026-03-31';
+ s.opportunityResearch={earnings:{conflicts:[],annual:[{start,end,metrics:{revenue:{value:20,unit:'USD',source:source(start,end)},netIncome:{value:2,unit:'USD',source:source(start,end)}}}],quarterly:[]}};
+ const aligned=alignSnapshotFinancials(s);assert.equal(aligned.revenue,999);assert.equal(aligned.netIncome,15);
 });
 
 test('comparable peers require distinct issuers, fiscal windows and sufficient observations',()=>{
@@ -174,7 +250,7 @@ test('pricing ratios withhold incompatible currencies and invalid dependencies',
 
 
 test('stale technical assessments cannot suppress independently sourced current timing grades',()=>{
- const s=valuationFixture();s.ma30w=9;s.low52w=8;s.high52w=12;s.return12m=.2;for(const key of ['ma30w','low52w','high52w','return12m'])s.provenance[key]={...s.provenance.price};
+ const s=valuationFixture();s.ma30w=9;s.low52w=8;s.high52w=12;s.return12m=.2;for(const key of ['ma30w','low52w','high52w','return12m'])s.provenance[key]={...s.provenance.price,source:'Yahoo Finance chart API · split-adjusted daily history and split events'};
  const expected=evaluateOpportunity(s).factors.find(f=>f.id==='technicalTiming');assert(expected.score>0);
  const actual=evaluateOpportunityDossier(s,{asOf:s.asOf,technicalTimingScore:{asOf:'2026-09-30T12:00:00Z',score:9}}).factors.find(f=>f.id==='technicalTiming');assert.equal(actual.score,expected.score);assert.equal(actual.proxy,true);assert.equal(actual.complete,false);assert.deepEqual(actual.conflicts,[]);assert.match(actual.rationale,/timestamp does not match/);
  const conflict=evaluateOpportunityDossier({...s,sourceConflicts:['actual vendor-price contradiction']},{asOf:s.asOf,technicalTimingScore:{asOf:'2026-09-30T12:00:00Z',score:9}}).factors.find(f=>f.id==='technicalTiming');assert.equal(conflict.score,0);assert(conflict.conflicts.includes('actual vendor-price contradiction'));
@@ -186,14 +262,14 @@ test('typed source conflicts withhold only dependent model components while unkn
  s.backlog={kind:'remaining-performance-obligation',amount:100,expectedRecognitionBy:'2026-12-31',currency:'USD'};
  s.provenance.backlog={...source(),periodStart:undefined};
  s.ma30w=9;s.low52w=8;s.high52w=12;s.return12m=.2;
- for(const key of ['price','ma30w','low52w','high52w','return12m'])s.provenance[key]={...source(),periodStart:undefined,periodEnd:'2026-10-02',availableAt:'2026-10-02T21:00:00Z'};
+ for(const key of ['price','ma30w','low52w','high52w','return12m'])s.provenance[key]={...source(),...(key==='price'?{}:{source:'Yahoo Finance chart API · split-adjusted daily history and split events'}),periodStart:undefined,periodEnd:'2026-10-02',availableAt:'2026-10-02T21:00:00Z'};
  const clean=proxyOpportunityEvidence(s);
- assert(clean.catalysts.score>0);assert(clean.financialStrength.score>0);assert(clean.technicalTiming.score>0);
+ assert.equal(clean.catalysts.score,0);assert.equal(clean.catalysts.coveragePct,30);assert(clean.financialStrength.score>0);assert(clean.technicalTiming.score>0);
  const backlogConflict='backlog: 1 (frames) مقابل 2 (Company Facts) في 2026-06-30; same fiscal window/unit/scope; symmetric difference 50.000000% > 1%';
  const backlog={...s,sourceConflicts:[backlogConflict]};
  const scoped=proxyOpportunityEvidence(backlog);
  const backlogGrade=clean.catalysts.calculation.inputs.find(item=>item.name==='backlog:grade').value;
- assert.equal(scoped.catalysts.score,clean.catalysts.score-backlogGrade*.3,'only the backlog component loses its fixed-denominator points');
+ assert.equal(scoped.catalysts.score,0);assert.equal(backlogGrade,0);assert.equal(scoped.catalysts.coveragePct,clean.catalysts.coveragePct-30,'only the backlog discovery component loses input coverage');
  assert.equal(scoped.catalysts.calculation.inputs.find(item=>item.name==='backlog:grade').value,'withheld-conflict');
  assert.equal(scoped.financialStrength.score,clean.financialStrength.score);
  assert.equal(scoped.technicalTiming.score,clean.technicalTiming.score);

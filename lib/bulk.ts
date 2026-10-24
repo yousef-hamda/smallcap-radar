@@ -2,7 +2,7 @@ import type { Company } from './providers';
 import { NASDAQ_SCREENER, fetchJson } from './providers';
 import type { Provenance, Snapshot } from './engine';
 import bundledFrames from './sec-frames.generated.json';
-import {REVENUE_TAGS, US_GAAP_REVENUE_TAGS, observations, latestInstant, trailingAnnual, COST_OF_REVENUE_TAGS, BACKLOG_TAGS, CONTRACT_LIABILITY_TAGS, reportedBorrowings} from './sec';
+import {REVENUE_TAGS, US_GAAP_REVENUE_TAGS, observations, latestInstant, trailingAnnual, COST_OF_REVENUE_TAGS, BACKLOG_TAGS, CONTRACT_LIABILITY_TAGS, reportedBorrowings, validCalendarDate} from './sec';
 import {derivedEvidence,usableEvidence} from './evidence';
 import {SEC_FRAME_DATASET_COUNT} from './strategy-spec';
 import {applyFinancingRisk} from './financing-risk';
@@ -170,17 +170,27 @@ export async function fetchCompanyFactsFallback(candidateCiks: number[], asOf = 
   const errors: string[] = [];
   const failedCiks: number[] = [];
   const retryableFailedCiks: number[] = [];
+  const failures: { cik: number; message: string; retryable: boolean }[] = [];
   let success = 0, empty = 0, failed = 0;
-  const outcomes = await Promise.all([...new Set(candidateCiks.filter(cik=>Number.isSafeInteger(cik)&&cik>0))].map(async (cik) => {
-    const url = companyFactsUrl(cik);
-    try {
-      const payload = await fetchJson(url, 8_000, 6 * 60 * 60_000, 3);
-      if (!companyFactsIdentityMatches(cik, payload)) throw new Error('SEC Company Facts issuer identity mismatch');
-      return { cik, parsed: parseCompanyFacts(cik, payload, asOf), error: null };
-    } catch (error) {
-      return { cik, parsed: undefined, error: error instanceof Error ? error : Error('SEC Company Facts error') };
+  const ciks = [...new Set(candidateCiks.filter(cik=>Number.isSafeInteger(cik)&&cik>0))];
+  const outcomes: {cik:number;parsed:BulkFundamentals|undefined;error:Error|null}[] = [];
+  // A scan tick may advance multiple SEC rate-limit windows. Keep response
+  // memory and active HTTP requests bounded independently of its cursor size.
+  let next = 0;
+  const worker = async () => {
+    while (next < ciks.length) {
+      const cik = ciks[next++];
+      const url = companyFactsUrl(cik);
+      try {
+        const payload = await fetchJson(url, 8_000, 6 * 60 * 60_000, 3);
+        if (!companyFactsIdentityMatches(cik, payload)) throw new Error('SEC Company Facts issuer identity mismatch');
+        outcomes.push({ cik, parsed: parseCompanyFacts(cik, payload, asOf), error: null });
+      } catch (error) {
+        outcomes.push({ cik, parsed: undefined, error: error instanceof Error ? error : Error('SEC Company Facts error') });
+      }
     }
-  }));
+  };
+  await Promise.all(Array.from({length:Math.min(12,ciks.length)},worker));
   for (const outcome of outcomes) {
     if (outcome.error) {
       failed++;
@@ -189,7 +199,9 @@ export async function fetchCompanyFactsFallback(candidateCiks: number[], asOf = 
       // Authentication, permission, and missing-resource responses are stable
       // provider gaps. Retrying thousands of them only delays scoring. Network
       // failures, rate limits, and 5xx responses remain retryable.
-      if (!/\bHTTP (400|401|403|404|405|422)\b/.test(outcome.error.message)) retryableFailedCiks.push(outcome.cik);
+      const retryable = !/\bHTTP (400|401|403|404|405|422)\b/.test(outcome.error.message);
+      failures.push({ cik: outcome.cik, message: outcome.error.message, retryable });
+      if (retryable) retryableFailedCiks.push(outcome.cik);
       continue;
     }
     success++;
@@ -198,7 +210,7 @@ export async function fetchCompanyFactsFallback(candidateCiks: number[], asOf = 
     const merged = mergeCompanyFacts(current, outcome.parsed);
     if (JSON.stringify(merged) !== JSON.stringify(current || {})) { fundamentals.set(outcome.cik, merged); changed.add(outcome.cik); }
   }
-  return { fundamentals, changed: [...changed], requests: candidateCiks.length, success, empty, failed, failedCiks, retryableFailedCiks, errors: [...new Set(errors)].slice(0, 8) };
+  return { fundamentals, changed: [...changed], requests: ciks.length, success, empty, failed, failedCiks, retryableFailedCiks, failures, errors: [...new Set(errors)].slice(0, 8) };
 }
 
 export async function fetchBulkFundamentals(candidateCiks: number[], asOf = new Date(), page?:{offset:number;limit:number;initial?:Map<number,BulkFundamentals>}) {
@@ -242,7 +254,7 @@ export async function fetchBulkFundamentals(candidateCiks: number[], asOf = new 
       const base = config.taxonomy === 'dei' ? 'https://data.sec.gov/api/xbrl/frames/dei' : config.taxonomy === 'ifrs-full' ? 'https://data.sec.gov/api/xbrl/frames/ifrs-full' : FRAME_BASE;
       const url = `${base}/${config.tag}/${config.unit}/${config.period}.json`;
       const payload = await fetchJson(url, 3_000) as { data?: FrameFact[] };
-      return { config, rows: payload.data ?? [], url };
+      return { config, rows: payload.data ?? [], url, fetchedAt: new Date().toISOString() };
     }));
     for (const [localIndex,outcome] of outcomes.entries()) {
       const required=index+localIndex<requiredConfigs.length;
@@ -253,11 +265,13 @@ export async function fetchBulkFundamentals(candidateCiks: number[], asOf = new 
         continue;
       }
       if (required) success++; else optionalSuccess++;
-      const { config, rows, url } = outcome.value;
+      const { config, rows, url, fetchedAt } = outcome.value;
       for (const row of rows) {
         const cik = Number(row.cik);
-        if (!allowed.has(cik) || !Number.isFinite(row.val) || !row.end || !Number.isFinite(Date.parse(row.end)) || Date.parse(row.end)>asOf.getTime() || (row.filed&&Date.parse(row.filed+'T23:59:59Z')>asOf.getTime())) continue;
-        const stored: StoredFact = { ...row, tag: config.tag, priority: config.priority, url,unit:config.unit,observedAt:asOf.toISOString() };
+        if (!allowed.has(cik) || !Number.isFinite(row.val) || !validCalendarDate(row.end) || row.end>asOf.toISOString().slice(0,10)
+          || (row.start!=null&&(!validCalendarDate(row.start)||row.start>row.end))
+          || (row.filed!=null&&(!validCalendarDate(row.filed)||Date.parse(`${row.filed}T23:59:59Z`)>asOf.getTime()))) continue;
+        const stored: StoredFact = { ...row, tag: config.tag, priority: config.priority, url,unit:config.unit,observedAt:fetchedAt };
         const record: BulkFundamentals = {...fundamentals.get(cik)};
         const current = record[config.key];
         if (newer(stored, current)) {record[config.key] = stored;changed.add(cik);}
@@ -308,7 +322,7 @@ function frameProvenance(fact: StoredFact, retrievedAt: string): Provenance {
     // Frames rows do not publish the filing timestamp. The fact is known to be
     // available no later than this retrieval, so do not invent an earlier date.
     availableAt: fact.filed ? `${fact.filed}T23:59:59.000Z` : fact.observedAt??(fact.fallback?bundledFrames.generatedAt:retrievedAt),
-    retrievedAt:fact.observedAt??(fact.fallback?bundledFrames.generatedAt:retrievedAt),
+    retrievedAt:fact.fallback?retrievedAt:fact.observedAt??retrievedAt,
     currency: fact.currency??(fact.unit&&/^[A-Z]{3}$/.test(fact.unit)?fact.unit:'USD'),
     tag: fact.tag,
     confidence: fact.fallback ? 'low' : fact.kind === 'companyfacts' ? 'high' : 'medium',

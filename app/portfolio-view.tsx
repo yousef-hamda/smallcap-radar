@@ -24,23 +24,23 @@ type PortfolioData = {
     saleProceeds: number;
     fees: number;
     realizedPnl: number;
-    unrealizedPnl: number;
-    totalPnl: number;
+    unrealizedPnl: number | null;
+    totalPnl: number | null;
     totalReturnPct: number | null;
     dailyPnl: number;
     winners: number;
     losers: number;
     openPositions: number;
     missingQuoteCount: number;
-    diversificationScore: number;
-    effectiveHoldings: number;
+    diversificationScore: number | null;
+    effectiveHoldings: number | null;
     topWeight: number | null;
   };
   asOf: string;
 };
 
 type SearchResult = { symbol: string; name: string; nameAr?: string; exchange?: string; securityType?: string; price?: number | null; sector?: string; industry?: string };
-type HistoryData = { points: PortfolioPoint[]; unavailable: string[]; incompleteSymbols: string[]; sources: Array<{ symbol: string; source: string; availableAt: string }>; asOf: string; method?: string };
+type HistoryData = { points: PortfolioPoint[]; unavailable: string[]; staleSymbols?: string[]; incompleteSymbols: string[]; sources: Array<{ symbol: string; source: string; availableAt: string }>; asOf: string; method?: string };
 type FormState = { id?: string; symbol: string; side: 'buy' | 'sell'; quantity: string; price: string; fees: string; tradeDate: string; note: string };
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -52,6 +52,15 @@ const securityTypeLabel = (value?:string) => ({common:'سهم عادي',adr:'إ�
 const number = (value: number, digits = 4) => new Intl.NumberFormat('en-US', { maximumFractionDigits: digits }).format(value);
 const post = (method: 'POST' | 'PUT' | 'DELETE', body: unknown) => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 const performanceRanges = { '1M': 31, '3M': 93, '6M': 186, '1Y': 366, MAX: Infinity } as const;
+
+export function portfolioCsvCell(value: unknown) {
+  const text = String(value ?? '');
+  // Spreadsheet apps may execute formulas even when a CSV cell is quoted.
+  // Prefix formula-like text (including cells with leading whitespace) so
+  // notes and company metadata remain plain text when the file is opened.
+  const safeText = typeof value === 'string' && /^[\s\u0000-\u001f\ufeff]*[=+\-@]/u.test(text) ? `'${text}` : text;
+  return `"${safeText.replaceAll('"', '""')}"`;
+}
 
 function CompanyLogo({ symbol, size = 44, eager = false }: { symbol: string; size?: number; eager?: boolean }) {
   const [failedFor, setFailedFor] = useState<string | null>(null);
@@ -79,7 +88,11 @@ export function PerformanceChart({ history }: { history: HistoryData | null }) {
   const x = (index: number) => 18 + index / Math.max(1, validRows.length - 1) * 684;
   const y = (value: number) => 210 - (value - low + padding) / Math.max(.0001, high - low + padding * 2) * 180;
   const path = validRows.map((point, index) => `${index ? 'L' : 'M'}${x(index).toFixed(2)},${y(point.returnPct).toFixed(2)}`).join(' ');
-  const last = validRows.at(-1), selected = hovered == null ? last : validRows[hovered];
+  const last = validRows.at(-1);
+  // A refreshed history can contain fewer points while the pointer is still
+  // over the chart. Keep the selected index inside the new series.
+  const selectedIndex = hovered == null ? validRows.length - 1 : Math.max(0, Math.min(hovered, validRows.length - 1));
+  const selected = validRows[selectedIndex];
   const color = (last?.returnPct ?? 0) < 0 ? '#fb7185' : '#14d9a4';
   const gradientId = useId().replaceAll(':', '');
   return <section className="portfolio-panel performance-panel">
@@ -92,12 +105,14 @@ export function PerformanceChart({ history }: { history: HistoryData | null }) {
           <defs><linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity=".28"/><stop offset="100%" stopColor={color} stopOpacity="0"/></linearGradient></defs>
           <line x1="18" x2="702" y1={y(0)} y2={y(0)} stroke="#6b7280" strokeDasharray="5 5"/>
           <path d={`${path} L702,220 L18,220 Z`} fill={`url(#${gradientId})`}/><path d={path} fill="none" stroke={color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
-          <line x1={x(hovered ?? validRows.length - 1)} x2={x(hovered ?? validRows.length - 1)} y1="15" y2="220" stroke="#818cf8" strokeDasharray="3 4"/><circle cx={x(hovered ?? validRows.length - 1)} cy={y(selected!.returnPct)} r="5" fill={color}/>
+          <line x1={x(selectedIndex)} x2={x(selectedIndex)} y1="15" y2="220" stroke="#818cf8" strokeDasharray="3 4"/><circle cx={x(selectedIndex)} cy={y(selected.returnPct)} r="5" fill={color}/>
         </svg>
         <div className="chart-dates" dir="ltr"><span>{validRows[0].date}</span><span dir="rtl">أدنى {pct(low)} · أعلى {pct(high)}</span><span>{last!.date}</span></div>
       </>}
     </div>
     {!!history?.unavailable.length && <p className="portfolio-warning"><AlertTriangle size={16}/> التاريخ غير متاح حاليًا لـ {history.unavailable.join('، ')}؛ لم تُحوّل البيانات الناقصة إلى صفر.</p>}
+    {!!history?.staleSymbols?.length && <p className="portfolio-warning"><AlertTriangle size={16}/> تعذّر تحديث تاريخ {history.staleSymbols.join('، ')}؛ استُخدمت بيانات سابقة مؤرخة حتى يعود مصدر الأسعار.</p>}
+    {!!history?.incompleteSymbols?.length && <p className="portfolio-warning"><AlertTriangle size={16}/> تاريخ الأسعار غير مكتمل منذ أول صفقة لـ {history.incompleteSymbols.join('، ')}؛ قد لا يعرض الرسم أداء المحفظة الكامل.</p>}
   </section>;
 }
 
@@ -151,7 +166,7 @@ export function squarifiedTreemap(positions: PortfolioPosition[]): TreemapNode[]
 export function AllocationTreemap({ positions, onOpen }: { positions: PortfolioPosition[]; onOpen: (position: PortfolioPosition) => void }) {
   const nodes = useMemo(() => squarifiedTreemap(positions), [positions]);
   const density = (node: TreemapNode) => node.width >= 28 && node.height >= 22 ? 'large' : node.width >= 14 && node.height >= 10 ? 'medium' : node.width >= 6 && node.height >= 4 ? 'small' : 'micro';
-  return <section className="portfolio-panel allocation-panel"><div className="section-line"><div><h3>توزيع المحفظة</h3><p>حجم كل مستطيل يطابق وزن الشركة من القيمة الحالية، واللون يعكس التغير اليومي.</p></div><span>{positions.length} مراكز</span></div>
+  return <section className="portfolio-panel allocation-panel"><div className="section-line"><div><h3>توزيع المحفظة</h3><p>{positions.some(position=>position.marketValue==null)?'المخطط يعرض المراكز ذات الأسعار المتاحة فقط؛ الأوزان الكلية محجوبة لوجود مراكز بلا سعر.':'حجم كل مستطيل يطابق وزن الشركة من القيمة الحالية، واللون يعكس التغير اليومي.'}</p></div><span>{positions.length} مراكز</span></div>
     {nodes.length ? <><div className="portfolio-treemap" role="group" aria-label="خريطة توزيع مراكز المحفظة">{nodes.map(node => <button className="treemap-node" data-density={density(node)} key={node.symbol} style={{ left: `${node.x}%`, top: `${node.y}%`, width: `${node.width}%`, height: `${node.height}%`, '--node-color': node.color } as React.CSSProperties} onClick={() => onOpen(node)} aria-label={`${node.nameAr || node.name}، ${node.symbol}، وزن ${weightPct(node.weight)}، تغير يومي ${pct(dailyMovePct(node))}`} title={`${node.symbol} · ${node.nameAr || node.name} · ${weightPct(node.weight)} · ${usd(node.marketValue)} · ${pct(dailyMovePct(node))}`}>
       <span className="treemap-node-logo"><CompanyLogo symbol={node.symbol} size={44} eager/></span><span className="treemap-node-copy"><b dir="ltr">{node.symbol}</b><span dir="ltr">{pct(dailyMovePct(node))}</span><small dir="ltr">{weightPct(node.weight)}</small><em className="treemap-node-company" dir="auto">{node.nameAr || node.name}</em></span>
     </button>)}</div><div className="allocation-legend" role="list" aria-label="نسب شركات المحفظة">{nodes.map(node => <button role="listitem" key={node.symbol} onClick={() => onOpen(node)} aria-label={`فتح ${node.nameAr || node.name}، وزن ${weightPct(node.weight)}، تغير يومي ${pct(dailyMovePct(node))}`}><CompanyLogo symbol={node.symbol} size={36} eager/><span><b dir="ltr">{node.symbol}</b><small dir="auto">{node.nameAr || node.name}</small><small dir="ltr">{usd(node.marketValue)} · {pct(dailyMovePct(node))}</small></span><strong dir="ltr">{weightPct(node.weight)}</strong></button>)}</div></> : <div className="portfolio-chart-empty">لا يمكن رسم التوزيع حتى يتوفر سعر موثوق لمركز واحد على الأقل.</div>}
@@ -161,25 +176,41 @@ export function AllocationTreemap({ positions, onOpen }: { positions: PortfolioP
 export default function PortfolioView({ onOpenCompany, onCountChange }: { onOpenCompany: (snapshot: Snapshot) => void; onCountChange?: (count: number) => void }) {
   const [data, setData] = useState<PortfolioData | null>(null), [history, setHistory] = useState<HistoryData | null>(null);
   const [loading, setLoading] = useState(true), [historyLoading, setHistoryLoading] = useState(false), [busy, setBusy] = useState(false);
-  const [error, setError] = useState(''), [notice, setNotice] = useState('');
+  const [error, setError] = useState(''), [notice, setNotice] = useState(''), [dialogError, setDialogError] = useState(''), [dialogNotice, setDialogNotice] = useState('');
   const [query, setQuery] = useState(''), [results, setResults] = useState<SearchResult[]>([]), [searching, setSearching] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false), [detailLoading, setDetailLoading] = useState(false), [selected, setSelected] = useState<SearchResult | null>(null), [form, setForm] = useState<FormState>(emptyForm);
   const [deleteTransaction, setDeleteTransaction] = useState<PortfolioTransaction | null>(null);
   const companyRequest = useRef<AbortController | null>(null);
+  const portfolioRequest = useRef<AbortController | null>(null), historyRequest = useRef<AbortController | null>(null);
 
   const loadHistory = useCallback(async () => {
+    historyRequest.current?.abort();
+    const controller = new AbortController();
+    historyRequest.current = controller;
     setHistoryLoading(true);
-    try { setHistory(await apiJson<HistoryData>('/api/portfolio-history')); }
-    catch (error) { setError(error instanceof Error ? error.message : 'تعذّر تحميل تاريخ المحفظة.'); }
-    finally { setHistoryLoading(false); }
+    try { const value = await apiJson<HistoryData>('/api/portfolio-history', { signal: controller.signal }); if (!controller.signal.aborted) setHistory(value); }
+    catch (error) { if (!controller.signal.aborted) setError(error instanceof Error ? error.message : 'تعذّر تحميل تاريخ المحفظة.'); }
+    finally { if (!controller.signal.aborted) setHistoryLoading(false); }
   }, []);
   const refresh = useCallback(async (forceRefresh = false) => {
+    portfolioRequest.current?.abort();
+    const controller = new AbortController();
+    portfolioRequest.current = controller;
     setLoading(true);
-    try { const value = await apiJson<PortfolioData>(forceRefresh ? '/api/portfolio?refresh=1' : '/api/portfolio'); setData(value); onCountChange?.(value.positions.length); setError(''); if (value.transactions.length) void loadHistory(); else setHistory({ points: [], unavailable: [], incompleteSymbols: [], sources: [], asOf: value.asOf }); }
-    catch (error) { setError(error instanceof Error ? error.message : 'تعذّر تحميل المحفظة.'); }
-    finally { setLoading(false); }
+    try {
+      const value = await apiJson<PortfolioData>(forceRefresh ? '/api/portfolio?refresh=1' : '/api/portfolio', { signal: controller.signal });
+      if (controller.signal.aborted) return;
+      setData(value); onCountChange?.(value.positions.length); setError('');
+      if (value.transactions.length) void loadHistory();
+      else {
+        historyRequest.current?.abort(); historyRequest.current = null; setHistoryLoading(false);
+        setHistory({ points: [], unavailable: [], incompleteSymbols: [], sources: [], asOf: value.asOf });
+      }
+    }
+    catch (error) { if (!controller.signal.aborted) setError(error instanceof Error ? error.message : 'تعذّر تحميل المحفظة.'); }
+    finally { if (!controller.signal.aborted) setLoading(false); }
   }, [loadHistory, onCountChange]);
-  useEffect(() => { queueMicrotask(() => void refresh()); return () => companyRequest.current?.abort(); }, [refresh]);
+  useEffect(() => { queueMicrotask(() => void refresh()); return () => { companyRequest.current?.abort(); portfolioRequest.current?.abort(); historyRequest.current?.abort(); }; }, [refresh]);
   useEffect(() => {
     const hiddenAt = { value: null as number | null };
     const refreshWhenVisible = () => {
@@ -197,22 +228,22 @@ export default function PortfolioView({ onOpenCompany, onCountChange }: { onOpen
     if (query.trim().length < 1) return;
     const controller = new AbortController(), timer = window.setTimeout(() => {
       setSearching(true);
-      void apiJson<{ results: SearchResult[] }>(`/api/portfolio?q=${encodeURIComponent(query.trim())}`, { signal: controller.signal }).then(value => setResults(value.results)).catch(error => { if (!controller.signal.aborted) setError(error instanceof Error ? error.message : 'تعذّر البحث.'); }).finally(() => { if (!controller.signal.aborted) setSearching(false); });
+      void apiJson<{ results: SearchResult[] }>(`/api/portfolio?q=${encodeURIComponent(query.trim())}`, { signal: controller.signal }).then(value => setResults(value.results)).catch(error => { if (!controller.signal.aborted) { const message = error instanceof Error ? error.message : 'تعذّر البحث.'; if (dialogOpen) setDialogError(message); else setError(message); } }).finally(() => { if (!controller.signal.aborted) setSearching(false); });
     }, 250);
     return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [query]);
+  }, [query, dialogOpen]);
 
   async function chooseCompany(company: SearchResult) {
     companyRequest.current?.abort();
     const controller = new AbortController();
     companyRequest.current = controller;
-    setSelected(company); setForm({ ...emptyForm(), symbol: company.symbol, price: company.price ? String(company.price) : '' }); setDialogOpen(true); setDetailLoading(true); setQuery(''); setResults([]);
+    setSelected(company); setForm({ ...emptyForm(), symbol: company.symbol, price: company.price ? String(company.price) : '' }); setDialogError(''); setDialogNotice(''); setDialogOpen(true); setDetailLoading(true); setQuery(''); setResults([]); setSearching(false);
     try {
       const value = await apiJson<{ snapshot: Snapshot }>(`/api/company?symbol=${encodeURIComponent(company.symbol)}`, { signal: controller.signal });
       if (controller.signal.aborted) return;
       setSelected({ ...company, name: value.snapshot.name, nameAr: value.snapshot.nameAr, exchange: value.snapshot.exchange, sector: value.snapshot.sector, industry: value.snapshot.industry, price: value.snapshot.price });
       setForm(current => ({ ...current, price: current.price || (value.snapshot.price ? String(value.snapshot.price) : '') }));
-    } catch { if (!controller.signal.aborted) setNotice('سيُحفظ السهم من دليل السوق؛ تعذّر تحديث ملفه العميق الآن.'); }
+    } catch { if (!controller.signal.aborted) setDialogNotice('سيُحفظ السهم من دليل السوق؛ تعذّر تحديث ملفه العميق الآن.'); }
     finally { if (!controller.signal.aborted) setDetailLoading(false); }
   }
   function editTransaction(transaction: PortfolioTransaction) {
@@ -221,20 +252,20 @@ export default function PortfolioView({ onOpenCompany, onCountChange }: { onOpen
     setDialogOpen(true);
   }
   function openNewTransaction() {
-    setSelected(null); setForm(emptyForm()); setQuery(''); setResults([]); setSearching(false); setDialogOpen(true);
+    setSelected(null); setForm(emptyForm()); setDialogError(''); setDialogNotice(''); setQuery(''); setResults([]); setSearching(false); setDialogOpen(true);
   }
   async function saveTransaction(event: React.FormEvent) {
-    event.preventDefault(); setBusy(true); setError('');
+    event.preventDefault(); portfolioRequest.current?.abort(); portfolioRequest.current = null; setLoading(false); setBusy(true); setError(''); setDialogError('');
     try {
       const payload = { ...form, quantity: Number(form.quantity), price: Number(form.price), fees: Number(form.fees || 0) };
       const value = await apiJson<PortfolioData>('/api/portfolio', post(form.id ? 'PUT' : 'POST', payload));
       setData(value); onCountChange?.(value.positions.length); setDialogOpen(false); setForm(emptyForm()); setSelected(null); setNotice(form.id ? 'تم تعديل العملية وإعادة حساب المحفظة.' : 'تم حفظ العملية وإعادة حساب المحفظة.'); void loadHistory();
-    } catch (error) { setError(error instanceof Error ? error.message : 'تعذّر حفظ العملية.'); }
+    } catch (error) { const message = error instanceof Error ? error.message : 'تعذّر حفظ العملية.'; setDialogError(message); setError(message); }
     finally { setBusy(false); }
   }
   async function removeTransaction() {
     if (!deleteTransaction) return;
-    setBusy(true); setError('');
+    portfolioRequest.current?.abort(); portfolioRequest.current = null; setLoading(false); setBusy(true); setError('');
     try { const value = await apiJson<PortfolioData>('/api/portfolio', post('DELETE', { id: deleteTransaction.id })); setData(value); onCountChange?.(value.positions.length); setDeleteTransaction(null); setNotice('حُذفت العملية وأُعيد حساب السجل كاملًا.'); void loadHistory(); }
     catch (error) { setError(error instanceof Error ? error.message : 'تعذّر حذف العملية.'); }
     finally { setBusy(false); }
@@ -246,7 +277,7 @@ export default function PortfolioView({ onOpenCompany, onCountChange }: { onOpen
   function exportCsv() {
     if (!data) return;
     const rows = [['symbol', 'company', 'side', 'quantity', 'price', 'fees', 'trade_date', 'note'], ...[...data.transactions].reverse().map(transaction => [transaction.symbol, transaction.companyName, transaction.side, transaction.quantity, transaction.price, transaction.fees, transaction.tradeDate, transaction.note || ''])];
-    const csv = '\ufeff' + rows.map(row => row.map(value => `"${String(value).replaceAll('"', '""')}"`).join(',')).join('\n');
+    const csv = '\ufeff' + rows.map(row => row.map(portfolioCsvCell).join(',')).join('\n');
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })), anchor = document.createElement('a'); anchor.href = url; anchor.download = `portfolio-${today()}.csv`; anchor.click(); URL.revokeObjectURL(url);
   }
   const editedTransaction = form.id ? data?.transactions.find(transaction => transaction.id === form.id) : null;
@@ -262,24 +293,25 @@ export default function PortfolioView({ onOpenCompany, onCountChange }: { onOpen
   }).length ?? 0;
 
   if (loading && !data) return <div className="portfolio-loading" role="status"><BriefcaseBusiness/> جارٍ تحميل محفظتك المحفوظة…</div>;
+  if (!data) return <div className="portfolio-loading" role="alert"><BriefcaseBusiness/><span>{error || 'تعذّر تحميل محفظتك المحفوظة.'}</span><button className="portfolio-refresh" onClick={() => void refresh()}>إعادة المحاولة</button></div>;
   return <section className="portfolio-view" aria-label="محفظتي الاستثمارية">
     {(error || notice) && <div className={`message ${error ? 'error' : ''}`} role={error ? 'alert' : 'status'}><span>{error || notice}</span><button aria-label="إغلاق الرسالة" onClick={() => { setError(''); setNotice(''); }}><X size={16}/></button></div>}
     <div className="portfolio-hero"><div><span className="portfolio-kicker"><BriefcaseBusiness size={17}/> محفظتي</span><h2>متابعة قراراتك، لا أسعارك فقط</h2><p>سجّل الشراء والبيع، ثم راقب العائد والتوزيع والتركيز من بياناتك الحقيقية.</p></div><div className="portfolio-hero-actions"><button className="portfolio-refresh" onClick={() => void refresh(true)} disabled={loading} aria-label="تحديث أسعار المحفظة"><RefreshCw size={17} className={loading ? 'spin' : ''}/> {loading ? 'جارٍ التحديث…' : 'تحديث الأسعار'}</button><button className="portfolio-export" onClick={exportCsv} disabled={!data?.transactions.length}><Download size={17}/> تصدير CSV</button><button className="scan-button" onClick={openNewTransaction}><Plus size={17}/> إضافة عملية</button></div></div>
 
-    <div className="portfolio-search"><Search size={19}/><input value={query} onChange={event => { const value = event.target.value; setQuery(value); if (!value.trim()) { setResults([]); setSearching(false); } }} placeholder="ابحث عن الشركة أو رمز السهم لإضافة عملية" aria-label="ابحث عن سهم لإضافته إلى المحفظة"/><span>{searching ? 'جارٍ البحث…' : query && !results.length ? 'لا نتائج' : ''}</span>{!!results.length && <div className="portfolio-search-results">{results.map(company => <button key={company.symbol} onClick={() => void chooseCompany(company)}><CompanyLogo symbol={company.symbol}/><span><b dir="ltr">{company.symbol}</b><small dir="auto">{company.name}</small></span><em>{[company.exchange,securityTypeLabel(company.securityType)].filter(Boolean).join(' · ') || 'سوق أمريكي'}</em></button>)}</div>}</div>
+    <div className="portfolio-search"><Search size={19}/><input value={query} onChange={event => { const value = event.target.value; setQuery(value); setResults([]); setSearching(!!value.trim()); setDialogError(''); setDialogNotice(''); }} placeholder="ابحث عن الشركة أو رمز السهم لإضافة عملية" aria-label="ابحث عن سهم لإضافته إلى المحفظة"/><span>{searching ? 'جارٍ البحث…' : query && !results.length ? 'لا نتائج' : ''}</span>{!!results.length && <div className="portfolio-search-results">{results.map(company => <button key={company.symbol} onClick={() => void chooseCompany(company)}><CompanyLogo symbol={company.symbol}/><span><b dir="ltr">{company.symbol}</b><small dir="auto">{company.name}</small></span><em>{[company.exchange,securityTypeLabel(company.securityType)].filter(Boolean).join(' · ') || 'سوق أمريكي'}</em></button>)}</div>}</div>
 
     {!data?.transactions.length ? <div className="portfolio-empty"><div className="empty-portfolio-icon"><BriefcaseBusiness/></div><h3>محفظتك فارغة</h3><p>ابحث عن أول شركة، أدخل عدد الأسهم وسعر الشراء والتاريخ، وسنبدأ حساب الأداء والتوزيع دون أرقام افتراضية.</p><button className="scan-button" onClick={openNewTransaction}><Plus size={17}/> إضافة أول عملية</button></div> : <>
-      <div className="portfolio-metrics"><article><span>القيمة الحالية</span><strong dir="ltr">{usd(data.summary.marketValue)}</strong><small>{data.summary.missingQuoteCount ? `${data.summary.missingQuoteCount} مركز غير محسوب` : staleQuoteCount ? `${staleQuoteCount} سعر مؤرخ؛ راجع تاريخ السعر` : 'كل الأسعار حديثة'}</small></article><article className={data.summary.totalPnl >= 0 ? 'positive' : 'negative'}><span>الربح/الخسارة الكلية</span><strong dir="ltr">{usd(data.summary.totalPnl, true)}</strong><small dir="ltr">{pct(data.summary.totalReturnPct)}</small></article><article><span>غير المحقق</span><strong dir="ltr">{usd(data.summary.unrealizedPnl, true)}</strong><small>{data.summary.winners} رابحة · {data.summary.losers} خاسرة</small></article><article><span>المحقق من البيع</span><strong dir="ltr">{usd(data.summary.realizedPnl, true)}</strong><small>بعد العمولات المسجلة</small></article><article><span>تغير آخر جلسة</span><strong dir="ltr">{usd(data.summary.dailyPnl, true)}</strong><small>من المراكز ذات التغير المتاح</small></article></div>
+      <div className="portfolio-metrics"><article><span>القيمة الحالية</span><strong dir="ltr">{usd(data.summary.marketValue)}</strong><small>{data.summary.missingQuoteCount ? `${data.summary.missingQuoteCount} مركز غير محسوب` : staleQuoteCount ? `${staleQuoteCount} سعر مؤرخ؛ راجع تاريخ السعر` : 'كل الأسعار حديثة'}</small></article><article className={data.summary.totalPnl==null?'':data.summary.totalPnl>=0?'positive':'negative'}><span>الربح/الخسارة الكلية</span><strong dir="ltr">{usd(data.summary.totalPnl, true)}</strong><small>{data.summary.missingQuoteCount?'غير متاح لأن بعض المراكز بلا سعر حديث.':<>العائد البسيط من إجمالي تكلفة المشتريات: <b dir="ltr">{pct(data.summary.totalReturnPct)}</b></>}</small></article><article><span>غير المحقق</span><strong dir="ltr">{usd(data.summary.unrealizedPnl, true)}</strong><small>{data.summary.missingQuoteCount?'غير متاح؛ بعض المراكز بلا سعر حديث.':`${data.summary.winners} رابحة · ${data.summary.losers} خاسرة`}</small></article><article><span>المحقق من البيع</span><strong dir="ltr">{usd(data.summary.realizedPnl, true)}</strong><small>بعد العمولات المسجلة</small></article><article><span>تغير آخر جلسة</span><strong dir="ltr">{usd(data.summary.dailyPnl, true)}</strong><small>من المراكز ذات التغير المتاح</small></article></div>
       <PerformanceChart history={history}/>{historyLoading && <p className="muted">جارٍ تحديث التاريخ السعري للمحفظة…</p>}
-      <div className="portfolio-visual-grid"><AllocationTreemap positions={data.positions} onOpen={openPosition}/><section className="portfolio-panel portfolio-insights"><div className="section-line"><div><h3>صحة المحفظة</h3><p>مؤشرات تركّز وجودة مبنية على أوزان المراكز الحالية.</p></div><strong>{data.summary.diversificationScore.toFixed(0)}<small>/100</small></strong></div><div className="insight-scores"><div><span>عدد المراكز الفعّال</span><b dir="ltr">{data.summary.effectiveHoldings.toFixed(1)}</b></div><div><span>أكبر مركز</span><b dir="ltr">{pct(data.summary.topWeight)}</b></div></div><div className="portfolio-alerts">{data.alerts.map(alert => <p key={alert}><AlertTriangle size={16}/>{alert}</p>)}</div><div className="sector-bars">{data.sectors.slice(0, 5).map(sector => <div key={sector.name}><span>{sector.name}</span><div><i style={{ width: `${sector.weight * 100}%` }}/></div><b dir="ltr">{pct(sector.weight)}</b></div>)}</div></section></div>
+      <div className="portfolio-visual-grid"><AllocationTreemap positions={data.positions} onOpen={openPosition}/><section className="portfolio-panel portfolio-insights"><div className="section-line"><div><h3>صحة المحفظة</h3><p>{data.summary.missingQuoteCount?'لا يمكن حساب التركّز الكلي لغياب أسعار بعض المراكز؛ القطاعات المعروضة تخص المراكز ذات الأسعار المتاحة فقط.':'مؤشرات تركّز وجودة مبنية على أوزان المراكز الحالية.'}</p></div><strong>{data.summary.diversificationScore==null?'—':data.summary.diversificationScore.toFixed(0)}<small>{data.summary.diversificationScore==null?'':'/100'}</small></strong></div><div className="insight-scores"><div><span>عدد المراكز الفعّال</span><b dir="ltr">{data.summary.effectiveHoldings==null?'—':data.summary.effectiveHoldings.toFixed(1)}</b></div><div><span>أكبر مركز</span><b dir="ltr">{pct(data.summary.topWeight)}</b></div></div><div className="portfolio-alerts">{data.alerts.map(alert => <p key={alert}><AlertTriangle size={16}/>{alert}</p>)}</div><div className="sector-bars">{data.sectors.slice(0, 5).map(sector => <div key={sector.name}><span>{sector.name}</span><div><i style={{ width: `${sector.weight * 100}%` }}/></div><b dir="ltr">{pct(sector.weight)}</b></div>)}</div></section></div>
 
       <section className="portfolio-panel positions-panel"><div className="section-line"><div><h3>المراكز المفتوحة</h3><p>مرتبة حسب القيمة الحالية؛ اضغط على الشركة لفتح ملفها الكامل.</p></div><span>{data.positions.length} مراكز</span></div><div className="positions-list">{data.positions.map(position => { const daily = dailyMovePct(position, data.quotes[position.symbol]); return <button key={position.symbol} onClick={() => openPosition(position)}><CompanyLogo symbol={position.symbol}/><span className="position-name"><b dir="ltr">{position.symbol}</b><small dir="auto">{position.nameAr || position.name}</small></span><span className="position-quantity"><small>عدد الأسهم</small><b dir="ltr">{number(position.quantity)}</b></span><span className="position-average"><small>متوسط التكلفة</small><b dir="ltr">{usd(position.averageCost)}</b></span><span className="position-value"><small>القيمة</small><b dir="ltr">{usd(position.marketValue)}</b></span><span className={(position.unrealizedPnl ?? 0) >= 0 ? 'pass position-return' : 'fail position-return'}><small>العائد</small><b dir="ltr">{pct(position.unrealizedPct)}</b></span><span className={daily == null || daily >= 0 ? 'pass position-daily' : 'fail position-daily'}><small>تغير يومي</small><b dir="ltr">{pct(daily)}</b></span><span className="position-arrow">{(position.unrealizedPnl ?? 0) >= 0 ? <ArrowUpRight/> : <ArrowDownRight/>}</span></button>; })}</div></section>
 
       <section className="portfolio-panel transactions-panel"><div className="section-line"><div><h3>سجل العمليات</h3><p>كل تعديل يعيد بناء متوسط التكلفة والربح من أول عملية.</p></div><button className="text-button" onClick={openNewTransaction}><Plus size={16}/> عملية جديدة</button></div><div className="transactions-list">{data.transactions.map(transaction => <article key={transaction.id}><CompanyLogo symbol={transaction.symbol} size={38}/><div><b dir="ltr">{transaction.symbol}</b><small>{transaction.tradeDate}</small></div><span className={transaction.side === 'buy' ? 'buy-tag' : 'sell-tag'}>{transaction.side === 'buy' ? 'شراء' : 'بيع'}</span><div dir="ltr">{number(transaction.quantity)} × {usd(transaction.price)}</div><strong dir="ltr">{usd(transaction.quantity * transaction.price + (transaction.side === 'buy' ? transaction.fees : -transaction.fees))}</strong><div className="transaction-actions"><button onClick={() => editTransaction(transaction)} aria-label={`تعديل عملية ${transaction.symbol}`}><Pencil size={16}/></button><button onClick={() => setDeleteTransaction(transaction)} aria-label={`حذف عملية ${transaction.symbol}`}><Trash2 size={16}/></button></div></article>)}</div></section>
     </>}
 
-    <Dialog open={dialogOpen} onOpenChange={open => { setDialogOpen(open); if (!open) { companyRequest.current?.abort(); setDetailLoading(false); setSelected(null); setForm(emptyForm()); setQuery(''); setResults([]); setSearching(false); } }}><DialogContent className={`portfolio-dialog ${form.symbol ? 'has-form' : 'picker-dialog'}`} dir="rtl" showCloseButton={false}><DialogClose className="absolute top-4 left-4" aria-label="إغلاق نافذة العملية"><X size={20}/></DialogClose><DialogTitle>{form.id ? 'تعديل العملية' : form.symbol ? `إضافة ${form.side === 'buy' ? 'شراء' : 'بيع'}` : 'اختر الشركة'}</DialogTitle><DialogDescription>{form.symbol ? 'أدخل بيانات العملية كما تظهر في كشف الوسيط. الأرقام بالدولار الأمريكي.' : 'ابحث برمز السهم أو اسم الشركة، ثم اخترها من النتائج.'}</DialogDescription>
-      {!form.symbol ? <div className="dialog-search"><Search size={18}/><input autoFocus aria-label="ابحث عن شركة للعملية" value={query} onChange={event => { const value = event.target.value; setQuery(value); if (!value.trim()) { setResults([]); setSearching(false); } }} placeholder="مثال: SOFI أو Adobe"/>{!!results.length && <div className="portfolio-search-results in-dialog">{results.map(company => <button key={company.symbol} onClick={() => void chooseCompany(company)}><CompanyLogo symbol={company.symbol}/><span><b dir="ltr">{company.symbol}</b><small>{company.nameAr || company.name}</small></span></button>)}</div>}</div> : <form className="transaction-form" onSubmit={saveTransaction}><div className="transaction-company"><CompanyLogo symbol={form.symbol} size={52}/><div><b dir="ltr">{form.symbol}</b><p dir="auto">{selected?.nameAr || selected?.name || data?.quotes[form.symbol]?.nameAr || data?.quotes[form.symbol]?.name || form.symbol}</p><small>{detailLoading ? 'جارٍ تحديث بيانات الشركة…' : [selected?.exchange, selected?.sector].filter(Boolean).join(' · ')}</small></div></div><div className="side-toggle" role="group" aria-label="نوع العملية"><button type="button" aria-pressed={form.side === 'buy'} className={form.side === 'buy' ? 'active buy' : ''} onClick={() => setForm(value => ({ ...value, side: 'buy' }))}>شراء</button><button type="button" aria-pressed={form.side === 'sell'} className={form.side === 'sell' ? 'active sell' : ''} onClick={() => setForm(value => ({ ...value, side: 'sell' }))}>بيع</button></div>{form.side === 'sell' && <p className="available-shares">المتاح للبيع حاليًا: <b dir="ltr">{number(availableToSell)}</b> سهم</p>}<div className="form-grid"><label>عدد الأسهم<input required min="0.000001" step="any" inputMode="decimal" type="number" value={form.quantity} onChange={event => setForm(value => ({ ...value, quantity: event.target.value }))}/></label><label>السعر لكل سهم<input required min="0.000001" step="any" inputMode="decimal" type="number" value={form.price} onChange={event => setForm(value => ({ ...value, price: event.target.value }))}/></label><label>العمولة والرسوم<input min="0" step="any" inputMode="decimal" type="number" value={form.fees} onChange={event => setForm(value => ({ ...value, fees: event.target.value }))}/></label><label>تاريخ العملية<input required max={today()} type="date" value={form.tradeDate} onChange={event => setForm(value => ({ ...value, tradeDate: event.target.value }))}/></label></div><label>ملاحظة اختيارية<textarea maxLength={500} value={form.note} onChange={event => setForm(value => ({ ...value, note: event.target.value }))} placeholder="سبب الدخول، رقم الأمر، أو ملاحظة للمراجعة"/></label><div className="transaction-preview"><span>{form.side === 'buy' ? 'تكلفة العملية' : 'صافي البيع قبل حساب تكلفة المركز'}</span><b dir="ltr">{usd((Number(form.quantity) || 0) * (Number(form.price) || 0) + (form.side === 'buy' ? 1 : -1) * (Number(form.fees) || 0))}</b></div><button className="scan-button save-transaction" disabled={busy || !form.quantity || !form.price}>{busy ? 'جارٍ الحفظ…' : 'حفظ وإعادة الحساب'}</button></form>}
+    <Dialog open={dialogOpen} onOpenChange={open => { setDialogOpen(open); if (!open) { companyRequest.current?.abort(); setDetailLoading(false); setSelected(null); setForm(emptyForm()); setQuery(''); setResults([]); setSearching(false); setDialogError(''); setDialogNotice(''); } }}><DialogContent className={`portfolio-dialog ${form.symbol ? 'has-form' : 'picker-dialog'}`} dir="rtl" showCloseButton={false}><DialogClose className="absolute top-4 left-4" aria-label="إغلاق نافذة العملية"><X size={20}/></DialogClose><DialogTitle>{form.id ? 'تعديل العملية' : form.symbol ? `إضافة ${form.side === 'buy' ? 'شراء' : 'بيع'}` : 'اختر الشركة'}</DialogTitle><DialogDescription>{form.symbol ? 'أدخل بيانات العملية كما تظهر في كشف الوسيط. الأرقام بالدولار الأمريكي.' : 'ابحث برمز السهم أو اسم الشركة، ثم اخترها من النتائج.'}</DialogDescription>{dialogError&&<div className="message error" role="alert">{dialogError}</div>}{dialogNotice&&<div className="message" role="status">{dialogNotice}</div>}
+      {!form.symbol ? <div className="dialog-search"><Search size={18}/><input autoFocus aria-label="ابحث عن شركة للعملية" value={query} onChange={event => { const value = event.target.value; setQuery(value); setResults([]); setSearching(!!value.trim()); setDialogError(''); setDialogNotice(''); }} placeholder="مثال: SOFI أو Adobe"/>{!!results.length && <div className="portfolio-search-results in-dialog">{results.map(company => <button key={company.symbol} onClick={() => void chooseCompany(company)}><CompanyLogo symbol={company.symbol}/><span><b dir="ltr">{company.symbol}</b><small>{company.nameAr || company.name}</small></span></button>)}</div>}</div> : <form className="transaction-form" onSubmit={saveTransaction}><div className="transaction-company"><CompanyLogo symbol={form.symbol} size={52}/><div><b dir="ltr">{form.symbol}</b><p dir="auto">{selected?.nameAr || selected?.name || data?.quotes[form.symbol]?.nameAr || data?.quotes[form.symbol]?.name || form.symbol}</p><small>{detailLoading ? 'جارٍ تحديث بيانات الشركة…' : [selected?.exchange, selected?.sector].filter(Boolean).join(' · ')}</small></div></div><div className="side-toggle" role="group" aria-label="نوع العملية"><button type="button" aria-pressed={form.side === 'buy'} className={form.side === 'buy' ? 'active buy' : ''} onClick={() => setForm(value => ({ ...value, side: 'buy' }))}>شراء</button><button type="button" aria-pressed={form.side === 'sell'} className={form.side === 'sell' ? 'active sell' : ''} onClick={() => setForm(value => ({ ...value, side: 'sell' }))}>بيع</button></div>{form.side === 'sell' && <p className="available-shares">المتاح للبيع حاليًا: <b dir="ltr">{number(availableToSell)}</b> سهم</p>}<div className="form-grid"><label>عدد الأسهم<input required min="0.000001" step="any" inputMode="decimal" type="number" value={form.quantity} onChange={event => setForm(value => ({ ...value, quantity: event.target.value }))}/></label><label>السعر لكل سهم<input required min="0.000001" step="any" inputMode="decimal" type="number" value={form.price} onChange={event => setForm(value => ({ ...value, price: event.target.value }))}/></label><label>العمولة والرسوم<input min="0" step="any" inputMode="decimal" type="number" value={form.fees} onChange={event => setForm(value => ({ ...value, fees: event.target.value }))}/></label><label>تاريخ العملية<input required max={today()} type="date" value={form.tradeDate} onChange={event => setForm(value => ({ ...value, tradeDate: event.target.value }))}/></label></div><label>ملاحظة اختيارية<textarea maxLength={500} value={form.note} onChange={event => setForm(value => ({ ...value, note: event.target.value }))} placeholder="سبب الدخول، رقم الأمر، أو ملاحظة للمراجعة"/></label><div className="transaction-preview"><span>{form.side === 'buy' ? 'تكلفة العملية' : 'صافي البيع قبل حساب تكلفة المركز'}</span><b dir="ltr">{usd((Number(form.quantity) || 0) * (Number(form.price) || 0) + (form.side === 'buy' ? 1 : -1) * (Number(form.fees) || 0))}</b></div><button className="scan-button save-transaction" disabled={busy || !form.quantity || !form.price}>{busy ? 'جارٍ الحفظ…' : 'حفظ وإعادة الحساب'}</button></form>}
     </DialogContent></Dialog>
 
     <AlertDialog open={!!deleteTransaction} onOpenChange={open => { if (!open) setDeleteTransaction(null); }}><AlertDialogContent dir="rtl"><AlertDialogHeader><AlertDialogTitle>حذف عملية {deleteTransaction?.symbol}؟</AlertDialogTitle><AlertDialogDescription>سيُعاد حساب كل المراكز والأرباح من السجل المتبقي. لن يتم الحذف إذا أدى إلى بيع أسهم أكثر من الرصيد.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>إلغاء</AlertDialogCancel><AlertDialogAction onClick={() => void removeTransaction()} disabled={busy}>حذف العملية</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>

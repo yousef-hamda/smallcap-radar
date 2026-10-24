@@ -2,20 +2,63 @@ import {scanCapacityPaused} from './scan-capacity';
 import {reconcileAcquisitionDirectory} from './directory-reconcile';
 import {publishDirectoryRatings} from './directory-rating';
 import { currentHash, db, ensureSchema, insertSnapshot, log } from './storage';
-import { companySnapshot, consumeProviderIssues, enrichSnapshotsWithSecOpportunity, historicalMarketData, quickSymbols, universe,yahooBulkQuotes } from './providers';
+import { companySnapshot, consumeProviderIssues, enrichSnapshotsWithSecOpportunity, historicalMarketData, HistoricalSessionsUnavailableError, quickSymbols, universe,yahooBulkQuotes } from './providers';
 import { fetchBulkFundamentals, fetchCompanyFactsFallback, needsCompanyFacts, preliminarySnapshot, type BulkFundamentals } from './bulk';
-import { opportunityHistoryMetrics, completedSessionQuote, reviewShareSplits } from './research';
+import { opportunityHistoryMetrics, completedSessionQuote, reviewShareSplits, shareReviewHistoryDays } from './research';
 import { applyFinancingRisk } from './financing-risk';
+import {decodeHistoryCache,encodeHistoryCache} from './history-cache';
 
 const BATCH_SIZE = 1;
 const HISTORY_BATCH_SIZE = 18;
 const PROVIDER_CONCURRENCY = 6;
 const SCORE_BATCH_SIZE = 200;
-const COMPANY_FACTS_BATCH_SIZE = 12;
+// This stage was paying a full scheduler round trip for every 12 issuers.
+// Keep SEC fetch concurrency bounded in bulk.ts, while advancing a wider
+// durable cursor per tick to reduce scheduler/D1 overhead between fetch waves.
+const COMPANY_FACTS_BATCH_SIZE = 36;
 const OPPORTUNITY_BATCH_SIZE = 8;
+// The durable SEC request queue caps aggregate traffic at 8 requests/sec,
+// below SEC's 10 requests/sec fair-access ceiling. Use its full bounded batch
+// concurrently rather than waiting through two groups of four issuer lookups.
+const OPPORTUNITY_PROVIDER_CONCURRENCY = 8;
 export const SCAN_SOURCE_VERSION = 'Bulk Quotes/SEC Frames + Opportunity SEC v14';
 const UNIVERSE_PAGE=100;
 const universePageSize=(run:any)=>run.universe==='paged-v2'?UNIVERSE_PAGE:1000;
+function parseStoredBulkFundamentals(cik:number,payload:string):BulkFundamentals|null {
+  try {
+    const value=JSON.parse(payload);
+    if(!value||typeof value!=='object'||Array.isArray(value))return null;
+    for(const [key,fact] of Object.entries(value)){
+      if(key==='conflicts'||key==='warnings'){if(!Array.isArray(fact))return null;continue;}
+      if(!fact||typeof fact!=='object'||Number((fact as any).cik)!==cik||!Number.isFinite(Number((fact as any).val)))return null;
+    }
+    return value as BulkFundamentals;
+  }catch{return null;}
+}
+async function cachedMarketHistory(payload:string):Promise<Awaited<ReturnType<typeof historicalMarketData>>|null>{
+ try{
+  const value:any=await decodeHistoryCache(payload);
+  const validBar=(bar:any)=>{
+   const date=typeof bar?.date==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(bar.date)?new Date(`${bar.date}T00:00:00Z`):null;
+   const positive=(n:any)=>n==null||(typeof n==='number'&&Number.isFinite(n)&&n>0);
+   if(!date||!Number.isFinite(date.getTime())||date.toISOString().slice(0,10)!==bar.date||!Number.isFinite(bar.close)||bar.close<=0
+    ||!positive(bar.open)||!positive(bar.high)||!positive(bar.low)||(bar.volume!=null&&(!Number.isFinite(bar.volume)||bar.volume<0)))return false;
+   return (bar.high==null||bar.high>=Math.max(bar.close,bar.open??bar.close,bar.low??bar.close))
+    &&(bar.low==null||bar.low<=Math.min(bar.close,bar.open??bar.close,bar.high??bar.close));
+  };
+  if(!value||typeof value.source!=='string'||typeof value.url!=='string'||typeof value.retrievedAt!=='string'||typeof value.availableAt!=='string'
+    ||!Array.isArray(value.history)||!value.history.length
+    ||!value.history.every(validBar))return null;
+  return value;
+ }catch{return null;}
+}
+async function latestScanHistory(ticker:string){
+ const prefix=`scan-history:v3:${ticker}:`;
+ // `raw_cache.key` is the primary key. A LIKE prefix plus retrieved_at sort
+ // scans the multi-gigabyte cache; the bounded key range narrows the lookup
+ // through that index while preserving the existing retrieved_at ordering.
+ return db().prepare('SELECT payload FROM raw_cache WHERE key>=? AND key<? ORDER BY retrieved_at DESC LIMIT 1').bind(prefix,`${prefix}\uffff`).first() as Promise<any>;
+}
 async function saveUniverse(runId:string,companies:any[],kind='candidates',pageSize=UNIVERSE_PAGE){
  const statements=[];
  for(let offset=0;offset<companies.length;offset+=pageSize)statements.push(db().prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(`universe:${runId}:${kind}:${offset/pageSize}`,'scan directory checkpoint',new Date().toISOString(),JSON.stringify(companies.slice(offset,offset+pageSize))));
@@ -170,7 +213,9 @@ export async function processScanBatch(runId: string) {
     try {
       if(!companies.length&&run.total>0)throw Error('ملف CIK المرشحين مفقود؛ لا يمكن اعتبار SEC مكتملًا.');
       const previousRows=(await database.prepare('SELECT cik,payload FROM bulk_fundamentals WHERE run_id=?').bind(run.id).all()).results as any[];
-      const initial=new Map<number,BulkFundamentals>(previousRows.map(row=>[Number(row.cik),JSON.parse(row.payload)]));
+      const initial=new Map<number,BulkFundamentals>(),corruptCiks:number[]=[];
+      for(const row of previousRows){const cik=Number(row.cik),parsed=parseStoredBulkFundamentals(cik,row.payload);if(parsed)initial.set(cik,parsed);else corruptCiks.push(cik);}
+      if(corruptCiks.length){const deletes=corruptCiks.map(cik=>database.prepare('DELETE FROM bulk_fundamentals WHERE run_id=? AND cik=?').bind(run.id,cik));for(let index=0;index<deletes.length;index+=75)await database.batch(deletes.slice(index,index+75));await log(run.id,'sec_frames',`Discarded ${corruptCiks.length} malformed or CIK-mismatched saved issuer row(s); bounded Frames acquisition will rebuild them.`);}
       const bulk = await fetchBulkFundamentals(companies.map((company: any) => Number(company.cik)),new Date(),{offset:run.offset,limit:4,initial});
       const statements = bulk.changed.map(cik=>database.prepare('INSERT OR REPLACE INTO bulk_fundamentals(run_id,cik,payload) VALUES(?,?,?)').bind(run.id,cik,JSON.stringify(bulk.fundamentals.get(cik))));
       for (let index = 0; index < statements.length; index += 75) await database.batch(statements.slice(index, index + 75));
@@ -179,9 +224,15 @@ export async function processScanBatch(runId: string) {
       const effectiveSuccess = Number(run.sec_success||0)+bulk.success+bulk.optionalSuccess;
       const effectiveFailed = Number(run.sec_failed||0)+bulk.failed+bulk.optionalFailed;
       const error = effectiveFailed ? `SEC Frames: ${effectiveSuccess}/${effectiveRequests} طلبًا ناجحًا. ${bulk.errors.join('؛ ')||run.error||''}` : '';
-      const nextStage = bulk.done ? (run.total ? 5 : 9) : 4;
-      await database.prepare("UPDATE strategy_runs SET stage=?,offset=?,processed=0,sec_requests=?,sec_success=?,sec_failed=?,fundamental_coverage=?,error=?,updated_at=?,lease_until=0,retry_queue='[]' WHERE id=?").bind(nextStage,bulk.done?0:bulk.nextOffset,effectiveRequests, effectiveSuccess, effectiveFailed, bulk.fundamentals.size, error.slice(0,4000), new Date().toISOString(), run.id).run();
-      await log(run.id, 'sec_frames', `SEC Frames baseline ${effectiveSuccess}/${effectiveRequests}; optional IFRS ${bulk.optionalSuccess}/${bulk.optionalRequests}; coverage ${bulk.fundamentals.size}/${companies.length}; annual ${bulk.annual}; instant ${bulk.instant}; source ${bulk.fallbackUsed ? 'bundled official dated snapshot' : 'live API'}${bulk.done && run.total ? '؛ ستبدأ الآن استعادة Company Facts للحقول الناقصة' : ''}`);
+      const frameFailures=bulk.failed+bulk.optionalFailed;
+      const transientFrameFailure=bulk.errors.some(message=>!(/HTTP (?:400|401|403|404|405|410)\b/.test(message)));
+      const retryCount=Number(run.frames_retry_count||0);
+      const retryPage=frameFailures>0&&transientFrameFailure&&retryCount<2;
+      const nextStage=retryPage?4:bulk.done?(run.total?5:9):4;
+      const nextOffset=retryPage?Number(run.offset):bulk.done?0:bulk.nextOffset;
+      const nextRetryCount=retryPage?retryCount+1:0;
+      await database.prepare("UPDATE strategy_runs SET stage=?,offset=?,frames_retry_count=?,processed=0,sec_requests=?,sec_success=?,sec_failed=?,fundamental_coverage=?,error=?,updated_at=?,lease_until=0,retry_queue='[]' WHERE id=?").bind(nextStage,nextOffset,nextRetryCount,effectiveRequests,effectiveSuccess,effectiveFailed,bulk.fundamentals.size,error.slice(0,4000),new Date().toISOString(),run.id).run();
+      await log(run.id, 'sec_frames', `SEC Frames baseline ${effectiveSuccess}/${effectiveRequests}; optional IFRS ${bulk.optionalSuccess}/${bulk.optionalRequests}; coverage ${bulk.fundamentals.size}/${companies.length}; annual ${bulk.annual}; instant ${bulk.instant}; source ${bulk.fallbackUsed ? 'bundled official dated snapshot' : 'live API'}${retryPage?`; retrying failed frame page (${nextRetryCount}/2)`:bulk.done && run.total ? '؛ ستبدأ الآن استعادة Company Facts للحقول الناقصة' : ''}`);
       run = await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first();
       return { run: publicRun(run), done: false };
     } catch (error) {
@@ -197,33 +248,99 @@ export async function processScanBatch(runId: string) {
   }
 
   if (!isQuick && run.stage === 5) {
-    const rows = (await database.prepare('SELECT cik,payload FROM bulk_fundamentals WHERE run_id=?').bind(run.id).all()).results as any[];
-    const facts = new Map<number, BulkFundamentals>(rows.map((row) => [Number(row.cik), JSON.parse(row.payload)]));
-    const queue = JSON.parse(run.retry_queue || '[]');
+    const queuedCiks = new Set<number>();
+    const queue = JSON.parse(run.retry_queue || '[]').filter((job: any) => {
+      const cik = Number(job.company?.cik);
+      if (!Number.isSafeInteger(cik) || cik <= 0 || queuedCiks.has(cik)) return false;
+      queuedCiks.add(cik);
+      return true;
+    });
     const retrying = run.offset >= run.total;
-    const jobs = retrying ? queue.slice(0, COMPANY_FACTS_BATCH_SIZE) : companies.slice(run.offset, run.offset + COMPANY_FACTS_BATCH_SIZE).map((company: any) => ({ company, attempt: 0 }));
+    const cursorEnd = Math.min(run.total, run.offset + COMPANY_FACTS_BATCH_SIZE);
+    const listingJobs = retrying ? queue.slice(0, COMPANY_FACTS_BATCH_SIZE) : companies.slice(run.offset, cursorEnd).map((company: any) => ({ company, attempt: 0 }));
+    const jobs: any[] = [];
+    const batchJobCiks = new Set<number>();
+    for (const job of listingJobs) {
+      const cik = Number(job.company?.cik);
+      if (!Number.isSafeInteger(cik) || cik <= 0 || batchJobCiks.has(cik)) continue;
+      batchJobCiks.add(cik);
+      jobs.push(job);
+    }
     const remaining = retrying ? queue.slice(COMPANY_FACTS_BATCH_SIZE) : queue;
-    const candidates: number[] = jobs.map((job: any) => Number(job.company?.cik)).filter((cik: number): cik is number => Number.isInteger(cik) && cik > 0 && needsCompanyFacts(facts.get(cik))) as number[];
-    const fallback = candidates.length ? await fetchCompanyFactsFallback([...new Set(candidates)], new Date(), facts) : { fundamentals: facts, changed: [], requests: 0, success: 0, empty: 0, failed: 0, failedCiks: [], retryableFailedCiks: [], errors: [] };
+    const rawJobCiks: number[] = jobs.map((job: any) => Number(job.company?.cik)).filter((cik: number) => Number.isSafeInteger(cik) && cik > 0);
+    const jobCiks = [...new Set<number>(rawJobCiks)];
+    const [savedRows, outcomeRows, coverageRow] = await Promise.all([
+      jobCiks.length
+        ? database.prepare(`SELECT cik,payload FROM bulk_fundamentals WHERE run_id=? AND cik IN (${jobCiks.map(() => '?').join(',')})`).bind(run.id, ...jobCiks).all()
+        : Promise.resolve({ results: [] }),
+      jobCiks.length
+        ? database.prepare(`SELECT cik,state,attempt,last_error FROM company_facts_outcomes WHERE run_id=? AND cik IN (${jobCiks.map(() => '?').join(',')})`).bind(run.id, ...jobCiks).all()
+        : Promise.resolve({ results: [] }),
+      database.prepare('SELECT COUNT(*) AS count FROM bulk_fundamentals WHERE run_id=?').bind(run.id).first() as Promise<any>,
+    ]);
+    const facts = new Map<number, BulkFundamentals>(),corruptCiks:number[]=[];
+    for(const row of savedRows.results as any[]){const cik=Number(row.cik),parsed=parseStoredBulkFundamentals(cik,row.payload);if(parsed)facts.set(cik,parsed);else corruptCiks.push(cik);}
+    const outcomesByCik = new Map<number, any>((outcomeRows.results as any[]).map((row) => [Number(row.cik), row]));
+    // A retrying slice is removed from `remaining` while it is being processed,
+    // so only jobs outside that slice should suppress enqueueing a new retry.
+    // During cursor traversal every queued retry must still suppress a later
+    // duplicate listing from bypassing the queue.
+    const queuedRetryCiks = new Set((retrying ? remaining : queue).map((job: any) => Number(job.company?.cik)).filter((cik: number) => Number.isSafeInteger(cik) && cik > 0));
+    if(corruptCiks.length){
+      await database.batch(corruptCiks.flatMap(cik=>[
+        database.prepare('DELETE FROM bulk_fundamentals WHERE run_id=? AND cik=?').bind(run.id,cik),
+        database.prepare('DELETE FROM company_facts_outcomes WHERE run_id=? AND cik=?').bind(run.id,cik),
+      ]));
+      for(const cik of corruptCiks)outcomesByCik.delete(cik);
+      await log(run.id,'sec_companyfacts',`Discarded ${corruptCiks.length} malformed or CIK-mismatched saved issuer row(s); refetching those CIKs.`);
+    }
+    const candidates: number[] = jobCiks.filter((cik: number) => needsCompanyFacts(facts.get(cik)) && (retrying ? (!outcomesByCik.has(cik) || outcomesByCik.get(cik)?.state === 'retryable_failure') : (!outcomesByCik.has(cik) && !queuedRetryCiks.has(cik))));
+    const fallback = candidates.length ? await fetchCompanyFactsFallback([...new Set(candidates)], new Date(), facts) : { fundamentals: facts, changed: [], requests: 0, success: 0, empty: 0, failed: 0, failedCiks: [], retryableFailedCiks: [], failures: [], errors: [] };
     const retryableFailedSet = new Set(fallback.retryableFailedCiks);
+    const candidateSet = new Set(candidates);
+    const retryAttempts = new Map<number, number>();
     for (const job of jobs) {
       const cik = Number(job.company?.cik);
-      if (retryableFailedSet.has(cik) && job.attempt < 2) remaining.push({ ...job, attempt: job.attempt + 1 });
+      if (candidateSet.has(cik)) retryAttempts.set(cik, Number(job.attempt || 0));
+      if (retryableFailedSet.has(cik) && job.attempt < 2 && !queuedRetryCiks.has(cik)) {
+        remaining.push({ ...job, attempt: job.attempt + 1 });
+        queuedRetryCiks.add(cik);
+      }
     }
     const statements = fallback.changed.map((cik) => database.prepare('INSERT OR REPLACE INTO bulk_fundamentals(run_id,cik,payload) VALUES(?,?,?)').bind(run.id, cik, JSON.stringify(fallback.fundamentals.get(cik))));
+    const failuresByCik = new Map(fallback.failures.map((failure) => [failure.cik,failure]));
+    for (const cik of candidates) {
+      const attempt = retryAttempts.get(cik) ?? 0;
+      const fact = fallback.fundamentals.get(cik);
+      const failure = failuresByCik.get(cik);
+      const state = failure
+        ? retryableFailedSet.has(cik) ? (attempt < 2 ? 'retryable_failure' : 'retry_exhausted') : 'permanent_failure'
+        : !fact ? 'empty' : needsCompanyFacts(fact) ? 'incomplete' : 'complete';
+      const error = failure?.message.slice(0, 1000) ?? null;
+      statements.push(database.prepare('INSERT INTO company_facts_outcomes(run_id,cik,state,attempt,last_error,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(run_id,cik) DO UPDATE SET state=excluded.state,attempt=excluded.attempt,last_error=excluded.last_error,updated_at=excluded.updated_at').bind(run.id,cik,state,attempt,error,new Date().toISOString()));
+    }
     for (let index = 0; index < statements.length; index += 75) await database.batch(statements.slice(index, index + 75));
-    const nextOffset = retrying ? run.offset : run.offset + jobs.length;
+    const nextOffset = retrying ? run.offset : cursorEnd;
     const done = nextOffset >= run.total && remaining.length === 0;
     const nextError = fallback.failed ? `SEC Company Facts: ${fallback.success}/${fallback.requests} طلبًا ناجحًا${fallback.empty ? `، ${fallback.empty} دون حقائق معيارية قابلة للاستخدام` : ''}. ${fallback.errors.join('؛ ')||run.error||''}` : run.error;
-    await database.prepare("UPDATE strategy_runs SET stage=?,offset=?,processed=0,sec_requests=?,sec_success=?,sec_failed=?,fundamental_coverage=?,error=?,updated_at=?,lease_until=0,retry_queue=? WHERE id=?").bind(done?9:5,done?0:nextOffset,Number(run.sec_requests||0)+fallback.requests,Number(run.sec_success||0)+fallback.success,Number(run.sec_failed||0)+fallback.failed,fallback.fundamentals.size,(nextError||'').slice(0,4000),new Date().toISOString(),JSON.stringify(remaining),run.id).run();
-    await log(run.id, 'sec_companyfacts', `استعادة Company Facts: ${fallback.success}/${fallback.requests} طلبًا؛ ${fallback.empty} بلا حقائق معيارية؛ ${fallback.failed} فشل؛ تغطية الحقول ${fallback.fundamentals.size}/${run.total}${done ? '؛ اكتملت مرحلة الاستعادة' : ''}`);
+    const coverage = Math.max(0,Number(coverageRow?.count ?? 0)-corruptCiks.length) + fallback.changed.filter((cik) => !facts.has(cik)).length;
+    await database.prepare("UPDATE strategy_runs SET stage=?,offset=?,processed=0,sec_requests=?,sec_success=?,sec_failed=?,fundamental_coverage=?,error=?,updated_at=?,lease_until=0,retry_queue=? WHERE id=?").bind(done?9:5,done?0:nextOffset,Number(run.sec_requests||0)+fallback.requests,Number(run.sec_success||0)+fallback.success,Number(run.sec_failed||0)+fallback.failed,coverage,(nextError||'').slice(0,4000),new Date().toISOString(),JSON.stringify(remaining),run.id).run();
+    await log(run.id, 'sec_companyfacts', `استعادة Company Facts: ${fallback.success}/${fallback.requests} طلبًا؛ ${fallback.empty} بلا حقائق معيارية؛ ${fallback.failed} فشل؛ تغطية حقائق المُصدرين ${coverage}/${run.total}${done ? '؛ اكتملت مرحلة الاستعادة' : ''}`);
     run = await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first();
     return { run: publicRun(run), done: false };
   }
 
   if (!isQuick && run.stage === 9) {
     const rows = (await database.prepare('SELECT cik,payload FROM bulk_fundamentals WHERE run_id=?').bind(run.id).all()).results as any[];
-    const facts = new Map<number, BulkFundamentals>(rows.map((row) => [Number(row.cik), JSON.parse(row.payload)]));
+    const facts = new Map<number, BulkFundamentals>(),corruptCiks:number[]=[];
+    for(const row of rows){const cik=Number(row.cik),parsed=parseStoredBulkFundamentals(cik,row.payload);if(parsed)facts.set(cik,parsed);else corruptCiks.push(cik);}
+    if(corruptCiks.length){
+      const deletes=corruptCiks.map(cik=>database.prepare('DELETE FROM bulk_fundamentals WHERE run_id=? AND cik=?').bind(run.id,cik));for(let index=0;index<deletes.length;index+=75)await database.batch(deletes.slice(index,index+75));
+      const message=`Discarded ${corruptCiks.length} malformed or CIK-mismatched saved issuer row(s) during scoring; those issuers are scored with missing-data coverage.`;
+      await database.prepare("UPDATE strategy_runs SET failed=failed+?,error=?,updated_at=? WHERE id=?").bind(corruptCiks.length,[run.error,message].filter(Boolean).join(' ').slice(0,4000),new Date().toISOString(),run.id).run();
+      await log(run.id,'sec_frames',message);
+      run.failed=Number(run.failed||0)+corruptCiks.length;
+    }
     const entries = companies.slice(run.offset, run.offset + SCORE_BATCH_SIZE);
     const now = new Date().toISOString();
     const snapshots:{company:any;snapshot:ReturnType<typeof preliminarySnapshot>}[]=entries.map((company:any)=>({company,snapshot:preliminarySnapshot(company,facts.get(Number(company.cik)),now)}));
@@ -263,9 +380,10 @@ export async function processScanBatch(runId: string) {
     try {
       const cachedBenchmark=await database.prepare('SELECT retrieved_at,payload FROM raw_cache WHERE key=?').bind(benchmarkKey).first() as any;
       benchmark=cachedBenchmark&&Date.now()-Date.parse(cachedBenchmark.retrieved_at)<24*60*60_000
-        ?JSON.parse(cachedBenchmark.payload)
+        ?await cachedMarketHistory(cachedBenchmark.payload)
         :await historicalMarketData('SPY',now,550);
-      if(benchmark&&(!cachedBenchmark||cachedBenchmark.retrieved_at!==benchmark.retrievedAt))await database.prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(benchmarkKey,benchmark.source,benchmark.retrievedAt,JSON.stringify(benchmark)).run();
+      if(!benchmark)benchmark=await historicalMarketData('SPY',now,550);
+      if(benchmark&&(!cachedBenchmark||cachedBenchmark.retrieved_at!==benchmark.retrievedAt))await database.prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(benchmarkKey,benchmark.source,benchmark.retrievedAt,await encodeHistoryCache(benchmark)).run();
     } catch(error) { await log(run.id,'history',`SPY benchmark history unavailable for this run: ${error instanceof Error?error.message:'provider request failed'}`); }
     const writes: any[] = [];
     const rows=entries.length?(await database.prepare(`SELECT symbol,payload FROM fundamental_snapshots WHERE run_id=? AND symbol IN (${entries.map(()=>'?').join(',')})`).bind(run.id,...entries.map((c:any)=>c.ticker)).all()).results:[];
@@ -273,15 +391,26 @@ export async function processScanBatch(runId: string) {
     const outcomes:any[]=[];
     for(let start=0;start<entries.length;start+=PROVIDER_CONCURRENCY)outcomes.push(...await Promise.all(entries.slice(start,start+PROVIDER_CONCURRENCY).map(async (company: any) => {
       const row = bySymbol.get(company.ticker);
-      if (!row) {await log(run.id,'history',`${company.ticker}: snapshot missing`);return {company,failed:true};}
+      if (!row) {await log(run.id,'history',`${company.ticker}: snapshot missing`);return {company,failed:true,retryable:false};}
       let snapshot = JSON.parse(row.payload);
       if (!historyCandidate(snapshot)) return { snapshot, company, skipped: true };
       snapshot.dataIssues=(snapshot.dataIssues??[]).filter((issue:string)=>!issue.startsWith('تعذّر تحميل تاريخ'));
       const cacheKey=`scan-history:v3:${company.ticker}:${now.slice(0,10)}`;
+      let retryable=true;
       try {
         const cached=await database.prepare('SELECT retrieved_at,payload FROM raw_cache WHERE key=?').bind(cacheKey).first() as any;
-        const historical:Awaited<ReturnType<typeof historicalMarketData>>=cached&&Date.parse(now)-Date.parse(cached.retrieved_at)<24*60*60_000?JSON.parse(cached.payload):await historicalMarketData(company.ticker, now, 550);
-        if(!cached||cached.retrieved_at!==historical.retrievedAt)await database.prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(cacheKey,historical.source,historical.retrievedAt,JSON.stringify(historical)).run();
+        const lookbackDays=shareReviewHistoryDays(snapshot,now);
+        const cachedHistory=cached&&Date.parse(now)-Date.parse(cached.retrieved_at)<24*60*60_000?await cachedMarketHistory(cached.payload):null;
+        const reusable=cachedHistory&&(lookbackDays===550||(cachedHistory.requestedLookbackDays??550)>=lookbackDays);
+        const historical:Awaited<ReturnType<typeof historicalMarketData>>=reusable?cachedHistory:await historicalMarketData(company.ticker,now,lookbackDays);
+        if(!reusable){
+          // Stage 11 needs only recent bars. Keep the full split-event response
+          // and its original coverage date, but avoid storing years of extra
+          // daily rows on the constrained SQLite volume.
+          const compactHistory=lookbackDays>550?historical.history.filter(bar=>Date.parse(bar.date)>=Date.parse(now)-550*86_400_000):historical.history;
+          const compact={...historical,history:compactHistory,splitReviewCoverageStart:historical.history[0]?.date,requestedLookbackDays:lookbackDays};
+          await database.prepare('INSERT OR REPLACE INTO raw_cache(key,source,retrieved_at,payload) VALUES(?,?,?,?)').bind(cacheKey,historical.source,historical.retrievedAt,await encodeHistoryCache(compact)).run();
+        }
         const history = historical.history.filter((bar): bar is typeof bar & { close: number } => Number.isFinite(bar.close));
         const metrics = opportunityHistoryMetrics(history, now);
         // The historical observations were retrieved after the bulk row was
@@ -290,6 +419,11 @@ export async function processScanBatch(runId: string) {
         snapshot.asOf = now;
         const last = history.at(-1);
         const historyEvidence={source:historical.source,url:historical.url,retrievedAt:historical.retrievedAt,availableAt:historical.availableAt,periodEnd:last?.date??now.slice(0,10),...(historical.meta?.currency?{currency:String(historical.meta.currency)}:{}),confidence:'medium' as const,rightsStatus:'unknown' as const};
+        const splitAdjustedHistory=historyEvidence.source.startsWith('Yahoo Finance chart API · split-adjusted daily history');
+        for (const key of ['return12m','low52w','high52w','ma30w'] as const) {
+          snapshot[key] = null;
+          delete snapshot.provenance[key];
+        }
         const session=completedSessionQuote(history,now);
         if(session){
           snapshot.price=session.price;
@@ -297,25 +431,30 @@ export async function processScanBatch(runId: string) {
           snapshot.provenance.price={...historyEvidence,periodEnd:session.periodEnd,tag:'last completed session close'};
           snapshot.provenance.dailyChange={...historyEvidence,periodEnd:session.periodEnd,tag:'last completed close / previous completed close - 1'};
         }
-        snapshot=reviewShareSplits(snapshot,historical.splits,history[0]?.date??'',last?.date??'',historyEvidence);
+        snapshot=reviewShareSplits(snapshot,historical.splits,historical.splitReviewCoverageStart??history[0]?.date??'',last?.date??'',historyEvidence);
         snapshot=applyFinancingRisk(snapshot);
-        if (metrics.return12m != null) {
-          snapshot.return12m = metrics.return12m;
-          snapshot.provenance.return12m = { ...historyEvidence,tag:'12-month return' };
-        }
-        if (metrics.low52w != null) {
-          snapshot.low52w = metrics.low52w;
-          snapshot.provenance.low52w = { ...historyEvidence,tag:'52-week low' };
-        }
-        const yearBars = history.filter(bar => Date.parse(bar.date) >= Date.parse(now) - 365 * 86_400_000);
-        if (yearBars.length >= 240) {
-          snapshot.high52w = Math.max(...yearBars.map(bar => bar.high ?? bar.close));
-          snapshot.provenance.high52w = { ...historyEvidence,tag:'52-week high' };
-        }
-        if (metrics.ma30w != null) {
-          snapshot.ma30w = metrics.ma30w;
-          snapshot.provenance.ma30w = { ...historyEvidence,tag:'30 completed weekly closes' };
+        if (splitAdjustedHistory) {
+          if (metrics.return12m != null) {
+            snapshot.return12m = metrics.return12m;
+            snapshot.provenance.return12m = { ...historyEvidence,tag:'12-month return' };
+          }
+          if (metrics.low52w != null) {
+            snapshot.low52w = metrics.low52w;
+            snapshot.provenance.low52w = { ...historyEvidence,tag:'52-week low' };
+          }
+          const yearBars = history.filter(bar => Date.parse(bar.date) >= Date.parse(now) - 365 * 86_400_000);
+          if (yearBars.length >= 240) {
+            snapshot.high52w = Math.max(...yearBars.map(bar => bar.high ?? bar.close));
+            snapshot.provenance.high52w = { ...historyEvidence,tag:'52-week high' };
+          }
+          if (metrics.ma30w != null) {
+            snapshot.ma30w = metrics.ma30w;
+            snapshot.provenance.ma30w = { ...historyEvidence,tag:'30 completed weekly closes' };
+          }
         } else {
+          snapshot.dataIssues = [...(snapshot.dataIssues ?? []), 'لم تُحتسب مؤشرات التاريخ السنوي لأن مصدر التاريخ لا يثبت ضبط الانقسامات.'];
+        }
+        if (splitAdjustedHistory && metrics.ma30w == null) {
           snapshot.dataIssues = [...(snapshot.dataIssues ?? []), 'لم تتوفر 30 أسبوعاً متواصلاً صالحاً لحساب MA30W.'];
         }
         const dollarVolumes = history.slice(-20).map(bar => Number.isFinite(bar.volume) && bar.volume! >= 0 ? bar.close * bar.volume! : Number.NaN).filter(Number.isFinite).sort((a, b) => a - b);
@@ -329,11 +468,12 @@ export async function processScanBatch(runId: string) {
         // Keep the durable screening row compact. Full bars remain available
         // through /api/company and are fetched on demand for the chart.
       } catch (error) {
+        retryable=!(error instanceof HistoricalSessionsUnavailableError);
         snapshot.dataIssues = [...(snapshot.dataIssues ?? []), `تعذّر تحميل تاريخ الارتداد: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`];
         await log(run.id,'history',`${company.ticker}: ${snapshot.dataIssues.at(-1)}`);
       }
       const failed=snapshot.dataIssues?.some((issue: string) => issue.startsWith('تعذّر تحميل تاريخ')) === true;
-      return { snapshot, company, failed, cacheKey: failed ? undefined : cacheKey };
+      return { snapshot, company, failed, retryable, cacheKey: failed ? undefined : cacheKey };
     })));
     const historyFailed = outcomes.filter(outcome => outcome?.failed).length;
     for (const [index,outcome] of outcomes.entries()) {
@@ -346,7 +486,7 @@ export async function processScanBatch(runId: string) {
         const prefix=`scan-history:v3:${outcome.company.ticker}:`;
         writes.push(database.prepare('DELETE FROM raw_cache WHERE key>=? AND key<? AND key<>?').bind(prefix,`${prefix}\uffff`,outcome.cacheKey));
       }
-      if(outcome.failed&&jobs[index].attempt<2)remaining.push({...jobs[index],attempt:jobs[index].attempt+1});
+      if(outcome.failed&&outcome.retryable!==false&&jobs[index].attempt<2)remaining.push({...jobs[index],attempt:jobs[index].attempt+1});
     }
     const offset = retrying?run.offset:run.offset + entries.length;
     const done = offset >= run.total && remaining.length===0;
@@ -398,14 +538,14 @@ export async function processScanBatch(runId: string) {
     const bySymbol = new Map<string,any>(rows.map((row:any)=>[row.symbol,row]));
     const marketBySymbol=new Map<string,Awaited<ReturnType<typeof historicalMarketData>>>();
     for(const ticker of tickers){
-      const cached=await database.prepare("SELECT payload FROM raw_cache WHERE key LIKE ? ORDER BY retrieved_at DESC LIMIT 1").bind(`scan-history:v3:${ticker}:%`).first() as any;
-      if(cached){try{marketBySymbol.set(ticker,JSON.parse(cached.payload));}catch{/* malformed market cache stays unavailable */}}
+      const cached=await latestScanHistory(ticker);
+      if(cached){const history=await cachedMarketHistory(cached.payload);if(history)marketBySymbol.set(ticker,history);}
     }
     let benchmarkResearch:Awaited<ReturnType<typeof historicalMarketData>>|null=null;
-    const benchmarkRow=await database.prepare("SELECT payload FROM raw_cache WHERE key LIKE 'scan-history:v3:SPY:%' ORDER BY retrieved_at DESC LIMIT 1").first() as any;
-    if(benchmarkRow){try{benchmarkResearch=JSON.parse(benchmarkRow.payload);}catch{/* malformed market cache stays unavailable */}}
+    const benchmarkRow=await latestScanHistory('SPY');
+    if(benchmarkRow)benchmarkResearch=await cachedMarketHistory(benchmarkRow.payload);
     const outcomes:any[]=[];
-    for(let start=0;start<jobs.length;start+=4)outcomes.push(...await Promise.all(jobs.slice(start,start+4).map(async(job:any)=>{
+    for(let start=0;start<jobs.length;start+=OPPORTUNITY_PROVIDER_CONCURRENCY)outcomes.push(...await Promise.all(jobs.slice(start,start+OPPORTUNITY_PROVIDER_CONCURRENCY).map(async(job:any)=>{
       const issuerTickers=job.company.tickers ?? [job.company.ticker];
       const missing=issuerTickers.filter((ticker:string)=>!bySymbol.has(ticker));
       const snapshots=issuerTickers.map((ticker:string)=>bySymbol.get(ticker)).filter(Boolean).map((row:any)=>JSON.parse(row.payload));
@@ -416,27 +556,27 @@ export async function processScanBatch(runId: string) {
     const writes:any[]=[];let requests=0,success=0,failed=0,terminalFailed=0;
     for(const outcome of outcomes){
       requests+=Number.isFinite(outcome.result?.requests)?Math.max(0,Number(outcome.result.requests)):1;
+      let outcomeFailed=false;
       if(outcome.snapshots?.length){
         // Keep a malformed/mismatched-issuer payload in the saved research
         // record for diagnosis, but never count it as a successful SEC fetch.
         // Empty standard-taxonomy coverage is a valid response and is tracked
         // as retrieval success while the factor itself remains unscored.
         if(outcome.result?.providerStatus==='retrieved'||outcome.result?.providerStatus==='empty')success++;
-        else {failed++;terminalFailed++;}
+        else {failed++;outcomeFailed=true;}
         for(const snapshot of outcome.snapshots)writes.push(insertSnapshot(run.id,snapshot));
-      }else {failed++;terminalFailed++;}
+      }else {failed++;outcomeFailed=true;}
       const retryable=outcome.result?.retryable===true||outcome.retryable===true;
       const error=outcome.result?.error||outcome.error;
       if(retryable&&outcome.job.attempt<2)remaining.push({...outcome.job,attempt:outcome.job.attempt+1});
-      else if(retryable&&outcome.job.attempt>=2)terminalFailed++;
+      else if(outcomeFailed)terminalFailed++;
       if(error)await log(run.id,'opportunity-sec',`${outcome.job.company.ticker}: ${error}`);
     }
     const offset=retrying?run.offset:run.offset+jobs.length;
     const done=offset>=run.total&&remaining.length===0;
-    const exhausted=outcomes.filter(outcome=>(outcome.result?.retryable===true||outcome.retryable===true)&&outcome.job.attempt>=2).length;
-    const totalFailed=Number(run.failed||0)+exhausted;
-    const nextError=done?(totalFailed?`تعذّر تحميل التاريخ لبعض الشركات (${totalFailed}).`:terminalFailed?`تعذّر استكمال بيانات SEC لبعض الشركات (${terminalFailed})؛ راجع تغطية كل شركة.`:null):run.error;
-    writes.push(database.prepare('UPDATE strategy_runs SET offset=?,processed=?,stage=?,status=?,failed=?,sec_requests=COALESCE(sec_requests,0)+?,sec_success=COALESCE(sec_success,0)+?,sec_failed=COALESCE(sec_failed,0)+?,error=?,updated_at=?,lease_until=0,retry_queue=? WHERE id=?').bind(offset,offset,done?13:11,done?(totalFailed||terminalFailed?'partial':'complete'):'running',totalFailed,requests,success,failed,nextError,new Date().toISOString(),JSON.stringify(remaining),run.id));
+    const totalFailed=Number(run.failed||0)+terminalFailed;
+    const nextError=done?(totalFailed?`تعذّر استكمال بعض بيانات SEC/المسح (${totalFailed})؛ راجع تغطية الشركات والمزودات.`:null):run.error;
+    writes.push(database.prepare('UPDATE strategy_runs SET offset=?,processed=?,stage=?,status=?,failed=?,sec_requests=COALESCE(sec_requests,0)+?,sec_success=COALESCE(sec_success,0)+?,sec_failed=COALESCE(sec_failed,0)+?,error=?,updated_at=?,lease_until=0,retry_queue=? WHERE id=?').bind(offset,offset,done?13:11,done?(totalFailed?'partial':'complete'):'running',totalFailed,requests,success,failed,nextError,new Date().toISOString(),JSON.stringify(remaining),run.id));
     await database.batch(writes);
     run=await database.prepare('SELECT * FROM strategy_runs WHERE id=?').bind(run.id).first();
     return {run:publicRun(run),done};

@@ -5,6 +5,7 @@ import { resolveVisitor, type VisitorIdentity } from '@/lib/visitor';
 import { searchListedCompanies } from '@/lib/providers';
 import { canonicalPortfolioAsset, invalidatePortfolioCache, readPortfolio, readPortfolioTransactions } from '@/lib/portfolio-storage';
 import { validateLedger, type PortfolioSide, type PortfolioTransaction } from '@/lib/portfolio';
+import { enforceRequestLimit } from '@/lib/request-rate-limit';
 
 const inputSchema = z.object({
   id: z.string().uuid().optional(),
@@ -18,27 +19,39 @@ const inputSchema = z.object({
 }).strict();
 
 const MAX_TRANSACTIONS = 5_000;
+const MAX_ANONYMOUS_TRANSACTIONS = 100_000;
+async function limitPortfolioWrite(request:Request){
+  await enforceRequestLimit(request,'portfolio-write',30,60_000);
+  await enforceRequestLimit(request,'portfolio-write-global',1_000,60_000,Date.now(),'global');
+}
 
 async function portfolioRevision(owner: string) {
-  await db().prepare('INSERT OR IGNORE INTO portfolio_revisions(owner,revision) VALUES(?,0)').bind(owner).run();
   return Number((await db().prepare('SELECT revision FROM portfolio_revisions WHERE owner=?').bind(owner).first() as any)?.revision ?? 0);
 }
 
 const changes=(result:any)=>Number(result?.meta?.changes||0);
-async function commitAtRevision(owner:string,revision:number,mutation:any){
+async function commitAtRevision(owner:string,revision:number,mutation:any,deleteEmptyRevision=false){
   // D1 batches are transactional. The mutation is guarded by the revision it
   // was validated against, preventing two concurrent sells from both passing
   // the balance check and creating a negative position.
-  const [changed,bumped]=await db().batch([
+  const statements=[
+    db().prepare('INSERT OR IGNORE INTO portfolio_revisions(owner,revision) VALUES(?,?)').bind(owner,revision),
     mutation,
     db().prepare('UPDATE portfolio_revisions SET revision=revision+1 WHERE owner=? AND revision=?').bind(owner,revision),
-  ]);
+  ];
+  if(deleteEmptyRevision)statements.push(db().prepare('DELETE FROM portfolio_revisions WHERE owner=? AND revision=? AND NOT EXISTS(SELECT 1 FROM portfolio_transactions WHERE owner=?)').bind(owner,revision+1,owner));
+  const [,changed,bumped]=await db().batch(statements);
   return changes(changed)===1&&changes(bumped)===1;
 }
 
 function assertDate(date: string) {
-  const parsed = Date.parse(`${date}T12:00:00Z`);
-  if (!Number.isFinite(parsed)) throw Object.assign(Error('تاريخ العملية غير صالح.'), { status: 400 });
+  // Date.parse normalizes impossible calendar dates (for example, February 31)
+  // into a date in the following month. Validate the calendar components
+  // before comparing the date against supported bounds.
+  const parsed = new Date(`${date}T12:00:00.000Z`);
+  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date) {
+    throw Object.assign(Error('تاريخ العملية غير صالح.'), { status: 400 });
+  }
   if (date > new Date().toISOString().slice(0, 10)) throw Object.assign(Error('لا يمكن حفظ عملية بتاريخ مستقبلي.'), { status: 400 });
   if (date < '1970-01-01') throw Object.assign(Error('تاريخ العملية أقدم من النطاق المدعوم.'), { status: 400 });
 }
@@ -63,11 +76,15 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    sameOrigin(request); await ensureSchema();
+    sameOrigin(request);await limitPortfolioWrite(request);await ensureSchema();
     const parsed = inputSchema.safeParse(await readBody(request,20_000));
     if (!parsed.success) return json({ error: 'تحقق من الرمز، نوع العملية، العدد، السعر والتاريخ.' }, 400);
     assertDate(parsed.data.tradeDate);
     const identity = await resolveVisitor(request), revision=await portfolioRevision(identity.owner), current=await readPortfolioTransactions(identity.owner);
+    if(identity.owner.startsWith('visitor:')){
+      const total=Number((await db().prepare("SELECT COUNT(*) AS count FROM portfolio_transactions WHERE owner>='visitor:' AND owner<'visitor;'").first() as any)?.count??0);
+      if(total>=MAX_ANONYMOUS_TRANSACTIONS)return json({error:'بلغت المحافظ المجهولة حد التخزين؛ أنشئ حسابًا للمتابعة.'},503);
+    }
     if(current.length>=MAX_TRANSACTIONS)return json({error:`بلغت المحفظة حد ${MAX_TRANSACTIONS.toLocaleString('en-US')} عملية.`},422);
     const asset = await canonicalPortfolioAsset(parsed.data.symbol);
     if (!asset) return json({ error: 'الشركة غير موجودة في دليل الأسهم الأمريكية.' }, 404);
@@ -85,7 +102,7 @@ export async function POST(request: Request) {
 
 export async function PUT(request: Request) {
   try {
-    sameOrigin(request); await ensureSchema();
+    sameOrigin(request);await limitPortfolioWrite(request);await ensureSchema();
     const parsed = inputSchema.required({ id: true }).safeParse(await readBody(request,20_000));
     if (!parsed.success) return json({ error: 'بيانات تعديل العملية غير صالحة.' }, 400);
     assertDate(parsed.data.tradeDate);
@@ -109,7 +126,7 @@ export async function PUT(request: Request) {
 
 export async function DELETE(request: Request) {
   try {
-    sameOrigin(request); await ensureSchema();
+    sameOrigin(request);await limitPortfolioWrite(request);await ensureSchema();
     const payload = await readBody(request,20_000), id = typeof payload?.id === 'string' ? payload.id : '';
     if (!z.string().uuid().safeParse(id).success) return json({ error: 'معرّف العملية غير صالح.' }, 400);
     const identity = await resolveVisitor(request),revision=await portfolioRevision(identity.owner);
@@ -118,7 +135,7 @@ export async function DELETE(request: Request) {
     const remaining = current.filter(transaction => transaction.id !== id);
     try { validateLedger(remaining); }
     catch { return json({ error: 'لا يمكن حذف هذه العملية لأنها ستجعل عملية بيع لاحقة بلا رصيد كافٍ.' }, 409); }
-    const saved=await commitAtRevision(identity.owner,revision,db().prepare('DELETE FROM portfolio_transactions WHERE id=? AND owner=? AND EXISTS(SELECT 1 FROM portfolio_revisions WHERE owner=? AND revision=?)').bind(id, identity.owner,identity.owner,revision));
+    const saved=await commitAtRevision(identity.owner,revision,db().prepare('DELETE FROM portfolio_transactions WHERE id=? AND owner=? AND EXISTS(SELECT 1 FROM portfolio_revisions WHERE owner=? AND revision=?)').bind(id, identity.owner,identity.owner,revision),true);
     if(!saved)return json({error:'تغيّرت المحفظة أثناء الحذف؛ حدّث الصفحة وأعد المحاولة.'},409);
     invalidatePortfolioCache(identity.owner);
     return await respond(request, identity);
