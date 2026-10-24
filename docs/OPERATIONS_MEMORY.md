@@ -1,6 +1,16 @@
 # Operations memory — Railway
 
-## October 17 resize, deployment, and live acceptance (current)
+## October 24 production status (current)
+
+Read-only Railway verification on 2026-10-24 reports production environment `e026cb98-b30b-4760-ab2e-b3fd2ca79d46` healthy with no staged/applying work. App service `smallcap-radar` (`69f028ad-2bd4-4e69-b5c1-277603fa5615`) is `SUCCESS`, latest deployment `befb13d5-628e-4cb9-ac30-b29a8e9eefaf` created 2026-10-23 20:03:25 UTC. `smallcap-radar-volume` (`4a168789-d55f-4353-80a8-100024603c7d`) is 20,000 MB at `/app/data` in `us-west2`. Postgres (`5d89cd5a-a9bd-4bcd-b678-596b45ba5d88`) is `SUCCESS` with its separate 5,000 MB volume.
+
+The live status route returned HTTP 200 in 0.67s. Scan `4298c024-90a5-4aa9-8154-9be5082ddc0f` is terminal `partial` (stage 13, processed 5,948; failed 654; universe total 7,542; retries 0; updated 2026-10-24 01:42:49 UTC). Reported coverage: 6,382 quote rows, 5,357 fundamental rows, 11,557 SEC successes, 356 SEC failures. Do not restart/reset it as part of routine checks or describe its result as source-complete.
+
+Deploy logs sampled 2026-10-24 06:21–07:31 UTC show scheduled idle maintenance calls returning HTTP 200 in 0.09–2.66s with `archived=0`, `compacted=0`, `cleaned=0`, `diagnosticsPruned=0`, `more=false`. This is a healthy sampled idle path after the bounded repair, not a latency distribution or proof about active maintenance workload. No production settings, deployments, database, or volume were mutated in this checkpoint.
+
+Outstanding account-level security work: use Railway's supported Database View controls to rotate the Postgres credential after reviewing its consumers, then inspect Railway audit/activity logs. These controls were not available through the connected Railway tools used for this read-only check. Keep the existing October 17 resize/deployment notes below as history; their volume sizes and scan status are superseded by this current section.
+
+## October 17 resize, deployment, and live acceptance (historical; superseded October 24)
 
 Owner approved the Railway volume increase and production rollout. The 10 GB `smallcap-radar-volume` (`4a168789-d55f-4353-80a8-100024603c7d`) mounted at `/app/data` is READY; latest `railway status --json` reports `sizeMB=10000` and `currentSizeMB=4733.427712`. The separate Postgres volume remains at 5,000 MB and was not resized. A new manual snapshot was created before release: `b48002ba-6f5e-4b96-befc-ab0f2c62286f`, label `Pre-candidate rollout 2026-10-17`. The Railway auto-resize snapshot also remains available. Do not create further backups without need or change the volume size again; the owner prioritizes cost control.
 

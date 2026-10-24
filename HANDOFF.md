@@ -1,12 +1,20 @@
 # Handoff — Small-Cap Radar
 
-## Current verified state — 2026-10-23
+## Current verified state — 2026-10-24
 
 This section is authoritative. Every checkpoint below it is historical and must not be used to infer current branch, deployment, scan, or acceptance status.
 
 The initial bullets preserve the state before the October 22 deep-audit release. The `October 22 deep audit remediation continuation` and the October 23 continuation below supersede their deployment, scan, and security status.
 
-### October 23 extended scoring and data-pipeline audit — deployed and verified
+### October 24 reconnect and close checkpoint
+
+- Railway production (`small-cap`, environment `e026cb98-b30b-4760-ab2e-b3fd2ca79d46`) is healthy with no pending work. App deployment `befb13d5-628e-4cb9-ac30-b29a8e9eefaf` (`SUCCESS`) runs commit `5bfeba7` on `codex/opportunity-algorithm-20261012`. App and Postgres report `SUCCESS`; the app's 20 GB `/app/data` volume and separate 5 GB Postgres volume remain attached.
+- `/api/radar?status=1` returned HTTP 200 in 0.67s. Current scan `4298c024-90a5-4aa9-8154-9be5082ddc0f` is **terminal partial**, not active: stage 13, processed 5,948, failed 654, universe total 7,542, retry queue 0, last update `2026-10-24T01:42:49.490Z`. It reports 6,382 quote rows, 5,357 fundamental rows, 11,557 SEC successes and 356 SEC failures. Do not say scan/source acquisition is complete.
+- Sampled scheduler logs from 06:21–07:31 UTC show idle maintenance calls returning 200 in 0.09–2.66 seconds, all maintenance counters zero and `more=false`. This validates the sampled idle path only.
+- No production mutations were made during this check. Local repository was clean before this documentation update. Local gates for the deployed code were previously recorded as passing: typecheck, lint, 280 engine tests, 121 runtime/API tests, 21 research tests, production build, 92 repository/UI tests and `git diff --check`.
+- Main engineering audit and residual limitations are below and in [the project audit](docs/PROJECT_AUDIT_2026_10_22.md). Remaining external follow-ups: point-in-time/delisted data and forward outcomes for predictive validation, broader verified data coverage, and Railway-supported Postgres credential rotation plus account audit/activity review.
+
+### October 23 extended scoring and data-pipeline audit — deployed and verified (historical checkpoint)
 
 - Independent reviews found edge cases in RSI, split-sensitive technical inputs, insider-purchase materiality, malformed price bars, SEC Frames dates/timestamps, stale scheduler projections, report aggregate readiness, missing-quote portfolio totals, anonymous portfolio storage limits, and diagnostic-log retention. The changes are recorded in [the project audit](docs/PROJECT_AUDIT_2026_10_22.md#october-23-deep-audit-continuation--scoring-ingestion-api-and-portfolio).
 - Opportunity spec is now `1.5.6-market-signal-edge-cases`. RSI treats a flat series as neutral; unsupported split-sensitive fallback history and unscaled insider purchases earn no proxy points. Missing quotes make full portfolio P/L and concentration unavailable. Pending report aggregates are explicitly shown as preparing.

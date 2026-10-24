@@ -1,6 +1,16 @@
 # Project memory — Small-Cap Radar
 
-## October 17 production continuation (current)
+## October 24 production continuation (current)
+
+The current code release remains commit `5bfeba7` on branch `codex/opportunity-algorithm-20261012`, deployed to Railway as `befb13d5-628e-4cb9-ac30-b29a8e9eefaf` (`SUCCESS`). Railway's production environment has no staged or applying work. Both `smallcap-radar` and `Postgres` report `SUCCESS`; the app's 20 GB `smallcap-radar-volume` remains mounted at `/app/data`, and Postgres has its separate 5 GB volume.
+
+Fresh production verification on 2026-10-24: `/api/radar?status=1` returned HTTP 200 in 0.67s. Scan `4298c024-90a5-4aa9-8154-9be5082ddc0f` is **partial/terminal**, not active: stage 13, `processed=5948`, `failed=654`, `universe_total=7542`, `retryPending=0`, last updated `2026-10-24T01:42:49.490Z`. Coverage fields report 6,382 quote rows, 5,357 fundamental rows, 11,557 SEC successes and 356 SEC failures. Do not call the run complete or source-complete; the terminal partial state explicitly retains failed coverage.
+
+Railway scheduler logs sampled 2026-10-24 06:21–07:31 UTC show idle maintenance returning 200, with each sampled request completing in 0.09–2.66 seconds and counters at zero (`more=false`). This supports the bounded no-work path remaining healthy; it is not a broad latency guarantee. The detailed release, audit findings, verified gates and remaining validation limits are in [HANDOFF.md](../HANDOFF.md), [operations memory](OPERATIONS_MEMORY.md), and the [project audit](PROJECT_AUDIT_2026_10_22.md).
+
+Known follow-ups: predictive performance still lacks point-in-time/delisted inputs and forward outcomes; source/data completeness is limited; supported Postgres credential rotation and Railway account audit/activity review remain outstanding. No Railway deployment or production data was changed during this checkpoint.
+
+## October 17 production continuation (historical; superseded October 24)
 
 The owner upgraded Railway and approved the capacity-backed rollout. Production first ran candidate commit `b5df97e` (`Improve fetch reliability and SEC filing discovery`), deployment `03a07ddd-5e07-470a-b51a-ff9393b86881`, reported SUCCESS. Performance follow-up commit `6c8ebc5` (`Use indexed history cache lookups during SEC scan`) is deployed as `5739afe4-0ab6-4451-9fee-386960f4193f`; commit `8887e0e` (`Use full bounded concurrency for SEC enrichment`) is deployed as `2faedcf4-d1f6-4b91-8213-032994509c7c`. Both reported SUCCESS. The `smallcap-radar-volume` at `/app/data` is READY at 10,000 MB; Railway's latest metrics showed about 5,450 MB in use. The separate 5,000 MB Postgres volume remains unchanged. The fresh manual pre-rollout backup is `b48002ba-6f5e-4b96-befc-ab0f2c62286f` (`Pre-candidate rollout 2026-10-17`).
 
